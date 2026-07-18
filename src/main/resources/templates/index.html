@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>校园生活提醒助手</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; min-height: 100vh; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center; }
+        .tabs { display: flex; justify-content: center; background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .tab { padding: 15px 30px; cursor: pointer; transition: background 0.3s; border-bottom: 3px solid transparent; }
+        .tab.active { background: #f0f4ff; border-bottom-color: #667eea; color: #667eea; }
+        .tab:hover { background: #f5f7fa; }
+        .content { max-width: 800px; margin: 30px auto; padding: 0 20px; }
+        .card { background: white; border-radius: 12px; padding: 25px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+        h2 { color: #333; margin-bottom: 20px; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 8px; color: #555; font-weight: 500; }
+        input, textarea, select { width: 100%; padding: 10px 14px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; }
+        input:focus, textarea:focus, select:focus { outline: none; border-color: #667eea; }
+        button { padding: 12px 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
+        button:hover { opacity: 0.9; }
+        .reminder-list { list-style: none; }
+        .reminder-item { padding: 15px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; }
+        .reminder-item:last-child { border-bottom: none; }
+        .reminder-title { font-weight: 600; color: #333; }
+        .reminder-time { color: #666; font-size: 14px; }
+        .reminder-actions button { padding: 6px 12px; font-size: 12px; margin-left: 5px; }
+        .btn-danger { background: #e74c3c; }
+        .btn-success { background: #27ae60; }
+        .chat-input { display: flex; gap: 10px; }
+        .chat-input input { flex: 1; }
+        .chat-history { max-height: 300px; overflow-y: auto; }
+        .chat-message { padding: 10px; margin-bottom: 10px; border-radius: 8px; }
+        .chat-message.user { background: #667eea; color: white; text-align: right; }
+        .chat-message.bot { background: #f0f4ff; color: #333; }
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+        .calendar-day { padding: 15px; text-align: center; border-radius: 8px; cursor: pointer; transition: background 0.3s; }
+        .calendar-day:hover { background: #f0f4ff; }
+        .calendar-day.today { background: #667eea; color: white; }
+        .calendar-day.has-reminder { border: 2px solid #667eea; }
+        .hidden { display: none; }
+        .error { color: #e74c3c; font-size: 14px; margin-top: 5px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>校园生活提醒助手</h1>
+        <p>智能提醒，轻松生活</p>
+    </div>
+
+    <div class="tabs">
+        <div class="tab active" onclick="switchTab('reminders')">我的提醒</div>
+        <div class="tab" onclick="switchTab('chat')">智能对话</div>
+        <div class="tab" onclick="switchTab('calendar')">日历视图</div>
+    </div>
+
+    <div class="content">
+        <!-- 我的提醒 -->
+        <div id="tab-reminders" class="card">
+            <h2>添加提醒</h2>
+            <form id="addForm">
+                <div class="form-group">
+                    <label>事项名称</label>
+                    <input type="text" id="title" placeholder="请输入提醒事项">
+                </div>
+                <div class="form-group">
+                    <label>提醒时间</label>
+                    <input type="datetime-local" id="remindTime">
+                </div>
+                <div class="form-group">
+                    <label>地点</label>
+                    <input type="text" id="location" placeholder="可选">
+                </div>
+                <div class="form-group">
+                    <label>优先级</label>
+                    <select id="priority">
+                        <option value="LOW">低</option>
+                        <option value="NORMAL" selected>普通</option>
+                        <option value="HIGH">高</option>
+                    </select>
+                </div>
+                <button type="submit">添加提醒</button>
+            </form>
+
+            <h2 style="margin-top: 30px;">待办列表</h2>
+            <ul id="reminderList" class="reminder-list"></ul>
+        </div>
+
+        <!-- 智能对话 -->
+        <div id="tab-chat" class="card hidden">
+            <div class="chat-history" id="chatHistory"></div>
+            <div class="chat-input">
+                <input type="text" id="chatInput" placeholder="输入提醒，如：明天下午3点还书">
+                <button onclick="sendMessage()">发送</button>
+            </div>
+        </div>
+
+        <!-- 日历视图 -->
+        <div id="tab-calendar" class="card hidden">
+            <h2>日历</h2>
+            <div id="calendarNav" style="display: flex; justify-content: space-between; margin-bottom: 20px;">
+                <button onclick="changeMonth(-1)">上一月</button>
+                <span id="currentMonth" style="font-weight: 600;"></span>
+                <button onclick="changeMonth(1)">下一月</button>
+            </div>
+            <div class="calendar-grid">
+                <div style="font-weight: 600;">日</div>
+                <div style="font-weight: 600;">一</div>
+                <div style="font-weight: 600;">二</div>
+                <div style="font-weight: 600;">三</div>
+                <div style="font-weight: 600;">四</div>
+                <div style="font-weight: 600;">五</div>
+                <div style="font-weight: 600;">六</div>
+            </div>
+            <div id="calendarDays" class="calendar-grid"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentTab = 'reminders';
+        let currentUserId = 1;
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            
+            document.querySelectorAll('.card').forEach(c => c.classList.add('hidden'));
+            document.getElementById('tab-' + tab).classList.remove('hidden');
+            
+            currentTab = tab;
+            
+            if (tab === 'reminders') loadReminders();
+            if (tab === 'calendar') renderCalendar();
+        }
+
+        async function loadReminders() {
+            try {
+                const response = await fetch(`/api/reminders?userId=${currentUserId}`);
+                const reminders = await response.json();
+                
+                const list = document.getElementById('reminderList');
+                list.innerHTML = '';
+                
+                reminders.forEach(r => {
+                    const li = document.createElement('li');
+                    li.className = 'reminder-item';
+                    li.innerHTML = `
+                        <div>
+                            <div class="reminder-title">${r.title}</div>
+                            <div class="reminder-time">${r.remindTime} ${r.location ? '· ' + r.location : ''}</div>
+                        </div>
+                        <div class="reminder-actions">
+                            <button class="btn-success" onclick="confirmReminder(${r.id})">确认</button>
+                            <button class="btn-danger" onclick="cancelReminder(${r.id})">取消</button>
+                        </div>
+                    `;
+                    list.appendChild(li);
+                });
+            } catch (e) { console.error(e); }
+        }
+
+        document.getElementById('addForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const data = {
+                userId: currentUserId,
+                title: document.getElementById('title').value,
+                remindTime: document.getElementById('remindTime').value,
+                location: document.getElementById('location').value,
+                priority: document.getElementById('priority').value
+            };
+            
+            try {
+                await fetch('/api/reminders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                document.getElementById('addForm').reset();
+                loadReminders();
+            } catch (e) { console.error(e); }
+        });
+
+        async function confirmReminder(id) {
+            await fetch(`/api/reminders/${id}/confirm?userId=${currentUserId}`, { method: 'POST' });
+            loadReminders();
+        }
+
+        async function cancelReminder(id) {
+            await fetch(`/api/reminders/${id}?userId=${currentUserId}`, { method: 'DELETE' });
+            loadReminders();
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const text = input.value.trim();
+            if (!text) return;
+            
+            addMessage('user', text);
+            input.value = '';
+            
+            try {
+                const response = await fetch('/api/reminders/parse', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ input: text })
+                });
+                
+                const result = await response.json();
+                addMessage('bot', `解析结果：\n标题：${result.title}\n时间：${result.remindTime}\n意图：${result.intentType}`);
+                
+                if (result.remindTime) {
+                    document.getElementById('title').value = result.title;
+                    document.getElementById('remindTime').value = result.remindTime.replace(' ', 'T');
+                    if (result.location) document.getElementById('location').value = result.location;
+                    if (result.priority) document.getElementById('priority').value = result.priority;
+                    
+                    setTimeout(() => switchTab('reminders'), 500);
+                }
+            } catch (e) { addMessage('bot', '解析失败，请重试'); }
+        }
+
+        function addMessage(role, text) {
+            const history = document.getElementById('chatHistory');
+            const msg = document.createElement('div');
+            msg.className = `chat-message ${role}`;
+            msg.textContent = text;
+            history.appendChild(msg);
+            history.scrollTop = history.scrollHeight;
+        }
+
+        let calendarDate = new Date();
+
+        function renderCalendar() {
+            const year = calendarDate.getFullYear();
+            const month = calendarDate.getMonth();
+            
+            document.getElementById('currentMonth').textContent = `${year}年${month + 1}月`;
+            
+            const firstDay = new Date(year, month, 1);
+            const lastDay = new Date(year, month + 1, 0);
+            
+            const days = [];
+            for (let i = 0; i < firstDay.getDay(); i++) days.push(null);
+            for (let i = 1; i <= lastDay.getDate(); i++) days.push(i);
+            
+            const container = document.getElementById('calendarDays');
+            container.innerHTML = '';
+            
+            days.forEach(day => {
+                const div = document.createElement('div');
+                div.className = 'calendar-day';
+                if (day === null) div.style.opacity = '0';
+                else {
+                    div.textContent = day;
+                    if (isToday(year, month, day)) div.classList.add('today');
+                }
+                container.appendChild(div);
+            });
+        }
+
+        function isToday(year, month, day) {
+            const today = new Date();
+            return today.getFullYear() === year && today.getMonth() === month && today.getDate() === day;
+        }
+
+        function changeMonth(delta) {
+            calendarDate.setMonth(calendarDate.getMonth() + delta);
+            renderCalendar();
+        }
+
+        renderCalendar();
+    </script>
+</body>
+</html>

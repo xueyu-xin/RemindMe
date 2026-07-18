@@ -1,0 +1,102 @@
+package com.dormrepair.remindme.controller;
+
+import com.dormrepair.remindme.dto.request.ReminderCreateRequest;
+import com.dormrepair.remindme.dto.request.ReminderUpdateRequest;
+import com.dormrepair.remindme.dto.response.ConflictResponse;
+import com.dormrepair.remindme.dto.response.ReminderResponse;
+import com.dormrepair.remindme.service.LLMService;
+import com.dormrepair.remindme.service.ReminderService;
+import jakarta.validation.Valid;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 提醒API接口控制器
+ */
+@Slf4j
+@RestController
+@RequestMapping("/api/reminders")
+@RequiredArgsConstructor
+public class ReminderController {
+
+    private final ReminderService reminderService;
+    private final LLMService llmService;
+
+    @PostMapping
+    public ResponseEntity<ReminderResponse> createReminder(@Valid @RequestBody ReminderCreateRequest request) {
+        ReminderResponse response = reminderService.createReminder(request);
+        return ResponseEntity.ok(response);
+    }
+
+    @GetMapping
+    public ResponseEntity<List<ReminderResponse>> getReminders(@RequestParam Long userId) {
+        List<ReminderResponse> reminders = reminderService.getRemindersByUser(userId);
+        return ResponseEntity.ok(reminders);
+    }
+
+    @GetMapping("/pending")
+    public ResponseEntity<List<ReminderResponse>> getPendingReminders(@RequestParam Long userId) {
+        List<ReminderResponse> reminders = reminderService.getPendingReminders(userId);
+        return ResponseEntity.ok(reminders);
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<ReminderResponse> updateReminder(
+            @PathVariable Long id,
+            @Valid @RequestBody ReminderUpdateRequest request,
+            @RequestParam Long userId) {
+        ReminderResponse response = reminderService.updateReminder(id, request, userId);
+        return ResponseEntity.ok(response);
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Map<String, Object>> cancelReminder(
+            @PathVariable Long id,
+            @RequestParam Long userId) {
+        reminderService.cancelReminder(id, userId);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("success", true);
+        response.put("message", "提醒已取消");
+
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/check-conflict")
+    public ResponseEntity<ConflictResponse> checkConflict(
+            @RequestParam Long userId,
+            @RequestParam LocalDateTime remindTime) {
+        ConflictResponse response = reminderService.checkConflict(userId, remindTime);
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/parse")
+    public ResponseEntity<Map<String, Object>> parseReminder(@RequestBody Map<String, String> request) {
+        String userInput = request.get("input");
+        LLMService.ParsedResult result = llmService.parseReminder(userInput);
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("title", result.title());
+        response.put("remindTime", result.remindTime());
+        response.put("intentType", result.intentType());
+        response.put("location", result.location());
+        response.put("priority", result.priority());
+
+        return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/{id}/confirm")
+    public ResponseEntity<ReminderResponse> confirmReminder(
+            @PathVariable Long id,
+            @RequestParam Long userId) {
+        ReminderResponse response = reminderService.confirmReminder(id, userId);
+        return ResponseEntity.ok(response);
+    }
+}

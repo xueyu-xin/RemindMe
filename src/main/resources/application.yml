@@ -1,0 +1,66 @@
+server:
+  port: 8083
+
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3307/reminder?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
+    username: root
+    password: password
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000
+
+  jpa:
+    database-platform: org.hibernate.dialect.MySQL8Dialect
+    hibernate:
+      ddl-auto: validate
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        use_sql_comments: true
+        jdbc:
+          batch_size: 20
+
+  jackson:
+    time-zone: Asia/Shanghai
+    date-format: yyyy-MM-dd HH:mm:ss
+
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 10MB
+
+  thymeleaf:
+    cache: false
+    encoding: UTF-8
+    mode: HTML
+
+  ai:
+    openai:
+      api-key: ${DEEPSEEK_API_KEY:your-deepseek-api-key}
+      base-url: https://api.deepseek.com/v1
+      chat:
+        options:
+          model: deepseek-chat
+          temperature: 0.3
+          max-tokens: 1024
+
+jwt:
+  secret: ${JWT_SECRET:your-jwt-secret-key-at-least-256-bits-long}
+  expiration: 604800000
+
+weather:
+  api:
+    key: ${WEATHER_API_KEY:your-weather-api-key}
+    url: https://devapi.qweather.com/v7/weather/now
+
+sms:
+  api-key: ${SMS_API_KEY:your-sms-api-key}
+
+logging:
+  level:
+    com.dormrepair.remindme: DEBUG
+    org.hibernate.SQL: DEBUG
