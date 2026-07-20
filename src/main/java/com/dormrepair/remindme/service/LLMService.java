@@ -29,15 +29,17 @@ public class LLMService {
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     public ParsedResult parseReminder(String userInput) {
+        log.info("开始解析用户输入: {}", userInput);
         String prompt = buildPrompt(userInput);
 
         try {
+            log.info("构建Prompt完成，开始调用LLM...");
             UserMessage userMessage = new UserMessage(prompt);
             Prompt promptObj = new Prompt(userMessage);
 
             String content = chatModel.call(promptObj).getResult().getOutput().getText();
 
-            log.debug("LLM响应: {}", content);
+            log.info("LLM调用成功，响应内容: {}", content);
 
             JsonNode root = objectMapper.readTree(content);
 
@@ -50,7 +52,8 @@ public class LLMService {
                     .build();
 
         } catch (Exception e) {
-            log.error("LLM解析失败: ", e);
+            log.error("LLM解析失败，错误类型: {}, 错误信息: {}", e.getClass().getName(), e.getMessage());
+            log.error("完整异常堆栈:", e);
             return ParsedResult.builder()
                     .title(userInput)
                     .intentType("UNKNOWN")
@@ -59,8 +62,11 @@ public class LLMService {
     }
 
     private String buildPrompt(String userInput) {
+        String currentDate = LocalDateTime.now().format(FORMATTER);
         return """
             你是一个智能提醒助手。请解析用户的输入，提取提醒信息。
+            
+            当前时间：%s
             
             要求：
             1. 返回严格的JSON格式
@@ -81,10 +87,10 @@ public class LLMService {
             - 如果无法解析时间，返回null
             
             示例输入："明天下午3点还书"
-            示例输出：{"title":"还书","remindTime":"2026-07-19 15:00:00","intentType":"REMINDER","location":null,"priority":"NORMAL"}
+            示例输出：{"title":"还书","remindTime":"%s","intentType":"REMINDER","location":null,"priority":"NORMAL"}
             
             用户输入: %s
-            """.formatted(userInput);
+            """.formatted(currentDate, currentDate, userInput);
     }
 
     private LocalDateTime parseDateTime(String dateTimeStr) {

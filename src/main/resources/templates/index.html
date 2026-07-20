@@ -117,6 +117,88 @@
         .nav-label { font-size: 11px; font-weight: 500; }
         
         .error { color: #e74c3c; font-size: 14px; margin-top: 5px; }
+        
+        .confirmation-card {
+            background: #fff;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            border-left: 4px solid #667eea;
+            animation: slideIn 0.3s ease;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .confirmation-card .card-title {
+            font-size: 16px;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .confirmation-card .card-info {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 15px;
+        }
+        .confirmation-card .info-item {
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+        }
+        .confirmation-card .info-label {
+            width: 60px;
+            color: #888;
+            flex-shrink: 0;
+        }
+        .confirmation-card .info-value {
+            color: #333;
+            font-weight: 500;
+        }
+        .confirmation-card .card-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .confirmation-card .action-btn {
+            flex: 1;
+            padding: 10px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .confirmation-card .action-btn.primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .confirmation-card .action-btn.warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+        }
+        .confirmation-card .action-btn.danger {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .confirmation-card .action-btn:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+        .confirmation-card .card-timer {
+            margin-top: 10px;
+            text-align: center;
+            font-size: 12px;
+            color: #999;
+        }
+        .confirmation-card .card-timer.warning {
+            color: #e74c3c;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body>
@@ -130,6 +212,7 @@
                 <div class="prompt-bar">
                     <span id="promptText">你可以这样问我：明天下午3点提醒我还书</span>
                 </div>
+                <div id="confirmationContainer"></div>
                 <div class="chat-history" id="chatHistory"></div>
                 <div class="chat-input">
                     <input type="text" id="chatInput" placeholder="输入提醒，如：明天下午3点还书">
@@ -288,17 +371,160 @@
         </div>
     </nav>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
     <script>
         let currentUserId = parseInt(localStorage.getItem('userId')) || 1;
         var currentYear = new Date().getFullYear();
         var currentMonth = new Date().getMonth() + 1;
         var selectedDate = new Date().toISOString().slice(0, 10);
 
+        var stompClient = null;
+        var currentConfirmationSessionId = null;
+
+        function connectWebSocket() {
+            var socket = new SockJS('/ws');
+            stompClient = Stomp.over(socket);
+            stompClient.connect({}, function(frame) {
+                console.log('WebSocket连接成功: ' + frame);
+                stompClient.subscribe('/user/topic/confirmations', function(message) {
+                    var card = JSON.parse(message.body);
+                    showConfirmationCard(card);
+                });
+            }, function(error) {
+                console.error('WebSocket连接失败:', error);
+                setTimeout(connectWebSocket, 5000);
+            });
+        }
+
+        function showConfirmationCard(card) {
+            var container = document.getElementById('confirmationContainer');
+            
+            if (card.type === 'success') {
+                addMessage('bot', card.message);
+                container.innerHTML = '';
+                currentConfirmationSessionId = null;
+                return;
+            }
+            
+            if (card.type === 'cancelled') {
+                addMessage('bot', card.message);
+                container.innerHTML = '';
+                currentConfirmationSessionId = null;
+                return;
+            }
+            
+            if (card.type === 'timeout') {
+                addMessage('bot', card.message);
+                container.innerHTML = '';
+                currentConfirmationSessionId = null;
+                return;
+            }
+            
+            if (card.type === 'confirmation_card') {
+                currentConfirmationSessionId = card.data.sessionId;
+                var expiresAt = new Date(card.expiresAt);
+                
+                var html = '<div class="confirmation-card" id="confirmationCard">';
+                html += '<div class="card-title">' + card.message + '</div>';
+                html += '<div class="card-info">';
+                html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + card.data.title + '</span></div>';
+                html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + card.data.remindTime + '</span></div>';
+                if (card.data.location) {
+                    html += '<div class="info-item"><span class="info-label">地点</span><span class="info-value">' + card.data.location + '</span></div>';
+                }
+                html += '<div class="info-item"><span class="info-label">优先级</span><span class="info-value">' + card.data.priority + '</span></div>';
+                html += '</div>';
+                html += '<div class="card-actions">';
+                card.actions.forEach(function(action) {
+                    html += '<button class="action-btn ' + action.style + '" onclick="handleConfirmationAction(\'' + action.id + '\', \'' + card.data.sessionId + '\')">' + action.label + '</button>';
+                });
+                html += '</div>';
+                html += '<div class="card-timer" id="timerText">⏰ ' + card.timeout + '秒后自动取消</div>';
+                html += '</div>';
+                
+                container.innerHTML = html;
+                
+                startTimer(expiresAt);
+            }
+        }
+
+        var timerInterval = null;
+        function startTimer(expiresAt) {
+            if (timerInterval) clearInterval(timerInterval);
+            
+            timerInterval = setInterval(function() {
+                var now = new Date();
+                var remaining = Math.ceil((expiresAt - now) / 1000);
+                
+                var timerText = document.getElementById('timerText');
+                if (timerText) {
+                    if (remaining <= 0) {
+                        timerText.textContent = '⏰ 确认已超时';
+                        timerText.classList.add('warning');
+                        clearInterval(timerInterval);
+                    } else {
+                        timerText.textContent = '⏰ ' + remaining + '秒后自动取消';
+                        if (remaining <= 10) {
+                            timerText.classList.add('warning');
+                        }
+                    }
+                }
+            }, 1000);
+        }
+
+        async function handleConfirmationAction(action, sessionId) {
+            if (timerInterval) clearInterval(timerInterval);
+            
+            var headers = { 'Content-Type': 'application/json' };
+            var token = localStorage.getItem('token');
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+            
+            try {
+                if (action === 'confirm') {
+                    const response = await fetch('/api/confirmations/' + sessionId + '/confirm?userId=' + currentUserId, {
+                        method: 'POST',
+                        headers: headers
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        addMessage('bot', result.message);
+                        document.getElementById('confirmationContainer').innerHTML = '';
+                        currentConfirmationSessionId = null;
+                    } else {
+                        addMessage('bot', '❌ ' + result.message);
+                    }
+                } else if (action === 'cancel') {
+                    const response = await fetch('/api/confirmations/' + sessionId + '/cancel?userId=' + currentUserId, {
+                        method: 'POST',
+                        headers: headers
+                    });
+                    const result = await response.json();
+                    if (result.success) {
+                        addMessage('bot', result.message);
+                        document.getElementById('confirmationContainer').innerHTML = '';
+                        currentConfirmationSessionId = null;
+                    } else {
+                        addMessage('bot', '❌ ' + result.message);
+                    }
+                } else if (action === 'edit') {
+                    document.getElementById('confirmationContainer').innerHTML = '';
+                    addMessage('bot', '✏️ 请重新输入提醒内容：');
+                    document.getElementById('chatInput').focus();
+                }
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误，请重试');
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
             var defaultTab = 'chat';
             switchTab(defaultTab);
             rotatePrompt();
             setInterval(rotatePrompt, 3000);
+            connectWebSocket();
         });
 
         var prompts = [
@@ -428,7 +654,9 @@
                 
                 const result = await response.json();
 
-                if (result.title) {
+                if (result.needConfirmation) {
+                    addMessage('bot', '📋 请确认提醒信息：\n标题：' + result.data.title + '\n时间：' + result.data.remindTime);
+                } else if (result.title) {
                     var msg = '✅ 已解析：' + result.title;
                     if (result.remindTime) {
                         msg += '\n时间：' + result.remindTime;
@@ -538,11 +766,17 @@
                 .then(function(res) { return res.json(); })
                 .then(function(data) {
                     var reminderDates = {};
-                    if (data.data && data.data.days) {
-                        data.data.days.forEach(function(day) {
+                    if (data && data.days) {
+                        data.days.forEach(function(day) {
                             if (day.hasReminder) {
-                                var dateStr = day.date || (currentYear + '-' + String(currentMonth).padStart(2, '0') + '-' + String(day.day).padStart(2, '0'));
-                                if (!dateStr.includes('-')) {
+                                var dayDate = day.date;
+                                var dateStr;
+                                if (dayDate instanceof Date) {
+                                    var d = new Date(dayDate);
+                                    dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+                                } else if (typeof dayDate === 'string') {
+                                    dateStr = dayDate;
+                                } else {
                                     dateStr = currentYear + '-' + String(currentMonth).padStart(2, '0') + '-' + String(day.day).padStart(2, '0');
                                 }
                                 reminderDates[dateStr] = true;
@@ -617,7 +851,7 @@
             var container = document.getElementById('calendarDays');
             container.innerHTML = '';
 
-            var weekRange = getWeekDateRange(currentYear, currentMonth, currentWeekOffset);
+            var weekRange = getTodayWeekRange(currentWeekOffset);
             
             var mondayYear = weekRange.monday.getFullYear();
             var mondayMonth = weekRange.monday.getMonth() + 1;
@@ -677,16 +911,32 @@
         }
 
         function getWeekDateRange(year, month, offset) {
-            if (!year || !month || isNaN(year) || isNaN(month)) {
-                var now = new Date();
-                year = now.getFullYear();
-                month = now.getMonth() + 1;
+            var now = new Date();
+            var referenceDate;
+            
+            if (year && month && !isNaN(year) && !isNaN(month)) {
+                referenceDate = new Date(year, month - 1, 1);
+            } else {
+                referenceDate = new Date();
             }
-            var date = new Date(year, month - 1, 1);
-            var dayOfWeek = date.getDay();
-            var monday = new Date(date);
+            
+            var dayOfWeek = referenceDate.getDay();
+            var monday = new Date(referenceDate);
             if (dayOfWeek !== 1) {
-                monday.setDate(date.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+                monday.setDate(referenceDate.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+            }
+            monday.setDate(monday.getDate() + offset * 7);
+            var sunday = new Date(monday);
+            sunday.setDate(monday.getDate() + 6);
+            return { monday: monday, sunday: sunday };
+        }
+
+        function getTodayWeekRange(offset) {
+            var now = new Date();
+            var dayOfWeek = now.getDay();
+            var monday = new Date(now);
+            if (dayOfWeek !== 1) {
+                monday.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
             }
             monday.setDate(monday.getDate() + offset * 7);
             var sunday = new Date(monday);
@@ -717,12 +967,17 @@
                 .then(function(res) { return res.json(); })
                 .then(function(data) {
                     var allReminders = [];
-                    if (data.data && data.data.days) {
-                        data.data.days.forEach(function(day) {
+                    if (data && data.days) {
+                        data.days.forEach(function(day) {
                             if (day.reminders) {
                                 day.reminders.forEach(function(r) {
-                                    r.dateStr = day.date || (currentYear + '-' + String(currentMonth).padStart(2, '0') + '-' + String(day.day).padStart(2, '0'));
-                                    if (!r.dateStr.includes('-')) {
+                                    var dayDate = day.date;
+                                    if (dayDate instanceof Date) {
+                                        var d = new Date(dayDate);
+                                        r.dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+                                    } else if (typeof dayDate === 'string') {
+                                        r.dateStr = dayDate;
+                                    } else {
                                         r.dateStr = currentYear + '-' + String(currentMonth).padStart(2, '0') + '-' + String(day.day).padStart(2, '0');
                                     }
                                     allReminders.push(r);
@@ -734,7 +989,7 @@
                     renderScheduleList(allReminders);
                 });
             } else {
-                var weekRange = getWeekDateRange(currentYear, currentMonth, currentWeekOffset);
+                var weekRange = getTodayWeekRange(currentWeekOffset);
                 
                 var mondayYear = weekRange.monday.getFullYear();
                 var mondayMonth = weekRange.monday.getMonth() + 1;
@@ -776,9 +1031,17 @@
                             })
                             .then(function(res) { return res.json(); })
                             .then(function(data) {
-                                if (data.data && data.data.days && data.data.days[0] && data.data.days[0].reminders) {
-                                    data.data.days[0].reminders.forEach(function(r) {
-                                        r.dateStr = data.data.days[0].date || date;
+                                if (data && data.days && data.days[0] && data.days[0].reminders) {
+                                    data.days[0].reminders.forEach(function(r) {
+                                        var dayDate = data.days[0].date;
+                                        if (dayDate instanceof Date) {
+                                            var d = new Date(dayDate);
+                                            r.dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+                                        } else if (typeof dayDate === 'string') {
+                                            r.dateStr = dayDate;
+                                        } else {
+                                            r.dateStr = date;
+                                        }
                                         allReminders.push(r);
                                     });
                                 }

@@ -13,9 +13,9 @@ spring:
       connection-timeout: 30000
 
   jpa:
-    database-platform: org.hibernate.dialect.MySQL8Dialect
+    database-platform: org.hibernate.dialect.MySQLDialect
     hibernate:
-      ddl-auto: validate
+      ddl-auto: update
     show-sql: true
     properties:
       hibernate:
@@ -41,10 +41,10 @@ spring:
   ai:
     openai:
       api-key: ${DEEPSEEK_API_KEY:your-deepseek-api-key}
-      base-url: https://api.deepseek.com/v1
+      base-url: https://api.deepseek.com
       chat:
         options:
-          model: deepseek-chat
+          model: deepseek-v4-flash
           temperature: 0.3
           max-tokens: 1024
 
