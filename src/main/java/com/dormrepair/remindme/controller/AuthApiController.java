@@ -2,6 +2,7 @@ package com.dormrepair.remindme.controller;
 
 import com.dormrepair.remindme.dto.request.LoginRequest;
 import com.dormrepair.remindme.dto.request.RegisterRequest;
+import com.dormrepair.remindme.dto.request.SendCodeRequest;
 import com.dormrepair.remindme.dto.response.LoginResponse;
 import com.dormrepair.remindme.entity.User;
 import com.dormrepair.remindme.service.UserService;
@@ -51,7 +52,8 @@ public class AuthApiController {
     }
 
     @PostMapping("/send-code")
-    public ResponseEntity<Map<String, Object>> sendCode(@RequestParam String phone) {
+    public ResponseEntity<Map<String, Object>> sendCode(@Valid @RequestBody SendCodeRequest request) {
+        String phone = request.getPhone();
         String code = verificationCodeService.sendCode(phone);
 
         Map<String, Object> response = new HashMap<>();

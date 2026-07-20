@@ -39,5 +39,8 @@ public class CalendarResponse {
         private String title;
         private String remindTime;
         private String priority;
+        private String status;
+        private String confirmStatus;
+        private String location;
     }
 }

@@ -23,6 +23,7 @@ public class WeatherService {
     private final WeatherConfig weatherConfig;
     private final RestTemplate restTemplate = new RestTemplate();
 
+    @SuppressWarnings("unchecked")
     public Map<String, Object> getWeather(String city) {
         try {
             String url = weatherConfig.getUrl() + "?key=" + weatherConfig.getKey() + "&location=" + city;
@@ -58,6 +59,7 @@ public class WeatherService {
         return mock;
     }
 
+    @SuppressWarnings("unchecked")
     private String generateAdvice(Map<String, Object> weather) {
         Map<String, Object> now = (Map<String, Object>) weather.get("now");
         String text = (String) now.get("text");
@@ -87,6 +89,7 @@ public class WeatherService {
         return advice.toString();
     }
 
+    @SuppressWarnings("unchecked")
     private boolean hasAlert(Map<String, Object> weather) {
         Map<String, Object> now = (Map<String, Object>) weather.get("now");
         String text = (String) now.get("text");

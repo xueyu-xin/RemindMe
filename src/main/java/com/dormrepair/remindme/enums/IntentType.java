@@ -37,4 +37,12 @@ public enum IntentType {
         }
         return null;
     }
+
+    public static IntentType fromString(String name) {
+        try {
+            return valueOf(name);
+        } catch (IllegalArgumentException e) {
+            return UNKNOWN;
+        }
+    }
 }

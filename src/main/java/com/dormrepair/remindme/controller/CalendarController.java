@@ -122,6 +122,10 @@ public class CalendarController {
                 .filter(r -> r.getRemindTime().isAfter(dayStart) && r.getRemindTime().isBefore(dayEnd))
                 .collect(Collectors.toList());
 
+        boolean hasPendingReminder = dayReminders.stream()
+                .anyMatch(r -> r.getStatus().name().equals("PENDING") 
+                           && r.getConfirmStatus().name().equals("PENDING"));
+
         String periodStatus = null;
         if (user != null && user.getGender().name().equals("FEMALE")) {
             PeriodStatusResponse status = periodService.calculatePeriodStatus(user);
@@ -133,13 +137,16 @@ public class CalendarController {
                         r.getId(),
                         r.getTitle(),
                         r.getRemindTime().toString(),
-                        r.getPriority().name()
+                        r.getPriority().name(),
+                        r.getStatus().name(),
+                        r.getConfirmStatus().name(),
+                        r.getLocation()
                 ))
                 .collect(Collectors.toList());
 
         return new CalendarResponse.DayItem(
                 date,
-                !dayReminders.isEmpty(),
+                hasPendingReminder,
                 dayReminders.size(),
                 periodStatus,
                 reminderItems

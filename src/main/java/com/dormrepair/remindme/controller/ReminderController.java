@@ -4,6 +4,8 @@ import com.dormrepair.remindme.dto.request.ReminderCreateRequest;
 import com.dormrepair.remindme.dto.request.ReminderUpdateRequest;
 import com.dormrepair.remindme.dto.response.ConflictResponse;
 import com.dormrepair.remindme.dto.response.ReminderResponse;
+import com.dormrepair.remindme.enums.IntentType;
+import com.dormrepair.remindme.service.DialogStatsService;
 import com.dormrepair.remindme.service.LLMService;
 import com.dormrepair.remindme.service.ReminderService;
 import jakarta.validation.Valid;
@@ -28,6 +30,7 @@ public class ReminderController {
 
     private final ReminderService reminderService;
     private final LLMService llmService;
+    private final DialogStatsService dialogStatsService;
 
     @PostMapping
     public ResponseEntity<ReminderResponse> createReminder(@Valid @RequestBody ReminderCreateRequest request) {
@@ -80,7 +83,14 @@ public class ReminderController {
     @PostMapping("/parse")
     public ResponseEntity<Map<String, Object>> parseReminder(@RequestBody Map<String, String> request) {
         String userInput = request.get("input");
+        Long userId = request.containsKey("userId") ? Long.parseLong(request.get("userId")) : null;
+        
         LLMService.ParsedResult result = llmService.parseReminder(userInput);
+
+        if (userId != null) {
+            IntentType intentType = IntentType.fromString(result.intentType());
+            dialogStatsService.recordDialog(userId, userInput, intentType);
+        }
 
         Map<String, Object> response = new HashMap<>();
         response.put("title", result.title());

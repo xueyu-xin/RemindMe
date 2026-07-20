@@ -7,132 +7,343 @@
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; min-height: 100vh; }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; text-align: center; }
-        .tabs { display: flex; justify-content: center; background: white; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .tab { padding: 15px 30px; cursor: pointer; transition: background 0.3s; border-bottom: 3px solid transparent; }
-        .tab.active { background: #f0f4ff; border-bottom-color: #667eea; color: #667eea; }
-        .tab:hover { background: #f5f7fa; }
-        .content { max-width: 800px; margin: 30px auto; padding: 0 20px; }
+        
+        .app-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 18px 20px; text-align: center; font-size: 18px; font-weight: 600; position: fixed; top: 0; left: 0; right: 0; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        
+        .content-area { max-width: 800px; margin: 0 auto; padding: 70px 20px 80px; min-height: 100vh; }
+        
         .card { background: white; border-radius: 12px; padding: 25px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-        h2 { color: #333; margin-bottom: 20px; }
+        h2 { color: #333; margin-bottom: 20px; font-size: 18px; }
+        
         .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 8px; color: #555; font-weight: 500; }
-        input, textarea, select { width: 100%; padding: 10px 14px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; }
+        label { display: block; margin-bottom: 8px; color: #555; font-weight: 500; font-size: 14px; }
+        input, textarea, select { width: 100%; padding: 12px 14px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; }
         input:focus, textarea:focus, select:focus { outline: none; border-color: #667eea; }
+        
         button { padding: 12px 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
         button:hover { opacity: 0.9; }
+        
         .reminder-list { list-style: none; }
         .reminder-item { padding: 15px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; }
         .reminder-item:last-child { border-bottom: none; }
-        .reminder-title { font-weight: 600; color: #333; }
-        .reminder-time { color: #666; font-size: 14px; }
+        .reminder-title { font-weight: 600; color: #333; font-size: 15px; }
+        .reminder-time { color: #666; font-size: 13px; margin-top: 4px; }
         .reminder-actions button { padding: 6px 12px; font-size: 12px; margin-left: 5px; }
         .btn-danger { background: #e74c3c; }
         .btn-success { background: #27ae60; }
+        
         .chat-input { display: flex; gap: 10px; }
         .chat-input input { flex: 1; }
-        .chat-history { max-height: 300px; overflow-y: auto; }
-        .chat-message { padding: 10px; margin-bottom: 10px; border-radius: 8px; }
-        .chat-message.user { background: #667eea; color: white; text-align: right; }
-        .chat-message.bot { background: #f0f4ff; color: #333; }
-        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
-        .calendar-day { padding: 15px; text-align: center; border-radius: 8px; cursor: pointer; transition: background 0.3s; }
-        .calendar-day:hover { background: #f0f4ff; }
-        .calendar-day.today { background: #667eea; color: white; }
-        .calendar-day.has-reminder { border: 2px solid #667eea; }
-        .hidden { display: none; }
+        .chat-history { max-height: 400px; overflow-y: auto; margin-bottom: 15px; padding-right: 10px; }
+        .chat-message { padding: 12px 16px; margin-bottom: 10px; border-radius: 12px; font-size: 14px; line-height: 1.5; word-break: break-all; }
+        .chat-message.user { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: right; border-bottom-right-radius: 2px; }
+        .chat-message.bot { background: #f0f4ff; color: #333; border-bottom-left-radius: 2px; }
+        
+        .prompt-bar { background: #f8f9fa; padding: 10px 15px; border-radius: 8px; margin-bottom: 15px; text-align: center; color: #666; font-size: 13px; }
+        
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; padding: 8px 12px; }
+        .weekday { text-align: center; font-weight: bold; color: #666; padding: 8px 0; font-size: 13px; }
+        .day { text-align: center; padding: 10px 0; border-radius: 8px; cursor: pointer; position: relative; min-height: 44px; }
+        .day:hover { background: #f0f0f0; }
+        .day.today { background: #e3f0ff; font-weight: bold; }
+        .day.selected { background: #4A90D9; color: #fff; }
+        .day.has-reminder .red-dot { display: block; }
+        .red-dot { display: none; width: 6px; height: 6px; background: #ff4444; border-radius: 50%; margin: 2px auto 0; }
+        .day-number { display: block; }
+        .calendar-header { display: flex; justify-content: space-between; align-items: center; padding: 16px; }
+        .calendar-header h3 { margin: 0; font-size: 16px; color: #333; }
+        .mode-switch { display: flex; gap: 8px; }
+        .mode-btn { padding: 8px 16px; border: 2px solid #4A90D9; background: #fff; color: #4A90D9; border-radius: 20px; cursor: pointer; font-size: 13px; font-weight: 500; }
+        .mode-btn.active { background: #4A90D9; color: #fff; border-color: #4A90D9; }
+        .mode-btn:hover { background: #e3f0ff; }
+        .calendar-nav { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; }
+        .calendar-nav button { background: #fff; border: 2px solid #4A90D9; color: #4A90D9; font-size: 18px; cursor: pointer; padding: 6px 14px; border-radius: 8px; }
+        .calendar-nav button:hover { background: #4A90D9; color: #fff; }
+        #calendarTitle { font-size: 15px; font-weight: 600; color: #333; }
+        #scheduleList { padding: 12px 16px; border-top: 1px solid #eee; }
+        .schedule-header { display: flex; align-items: center; gap: 4px; margin-bottom: 12px; }
+        #scheduleTitle { font-size: 14px; color: #666; }
+        #scheduleCount { font-size: 14px; color: #999; }
+        #scheduleItems { min-height: 80px; }
+        .schedule-item { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; }
+        .schedule-item:last-child { border-bottom: none; }
+        .schedule-time { font-weight: 600; color: #4A90D9; width: 56px; flex-shrink: 0; }
+        .schedule-title { flex: 1; color: #333; }
+        .schedule-location { color: #999; font-size: 12px; margin-top: 2px; }
+        .schedule-tag { font-size: 12px; padding: 2px 6px; border-radius: 4px; margin-left: 4px; }
+        .schedule-tag.pending { background: #f5f5f5; color: #333; }
+        .schedule-tag.cancelled { background: #f0f0f0; color: #999; }
+        .empty-schedule { text-align: center; color: #999; padding: 20px 0; font-size: 14px; }
+        
+        .profile-card { text-align: center; padding: 20px; }
+        .avatar-circle { width: 80px; height: 80px; border-radius: 50%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; display: flex; align-items: center; justify-content: center; font-size: 32px; margin: 0 auto 12px; }
+        .user-name { font-size: 18px; font-weight: 600; color: #333; }
+        .user-phone { font-size: 14px; color: #999; margin-top: 4px; }
+        
+        .settings-group { margin-top: 16px; }
+        .settings-title { font-size: 14px; font-weight: 600; color: #666; padding: 12px 16px; border-bottom: 1px solid #f0f0f0; }
+        .settings-item { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; cursor: pointer; border-bottom: 1px solid #f5f5f5; }
+        .settings-item:hover { background: #fafafa; }
+        .settings-label { font-size: 15px; color: #333; }
+        .settings-value { font-size: 15px; color: #999; display: flex; align-items: center; gap: 8px; }
+        .settings-arrow { color: #ccc; font-size: 14px; }
+        
+        .toggle-switch { position: relative; width: 48px; height: 26px; background: #ddd; border-radius: 13px; cursor: pointer; }
+        .toggle-switch.active { background: #4A90D9; }
+        .toggle-knob { position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; background: white; border-radius: 50%; transition: left 0.3s; }
+        .toggle-switch.active .toggle-knob { left: 24px; }
+        
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
+        .modal-overlay.show { display: flex; }
+        .modal-content { background: white; border-radius: 12px; padding: 24px; width: 90%; max-width: 320px; }
+        .modal-title { font-size: 18px; font-weight: 600; color: #333; margin-bottom: 20px; }
+        .modal-input { width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 15px; margin-bottom: 12px; }
+        .modal-input:focus { outline: none; border-color: #667eea; }
+        .modal-options { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+        .modal-option { padding: 8px 16px; border: 1px solid #ddd; border-radius: 20px; cursor: pointer; font-size: 14px; }
+        .modal-option.active { background: #667eea; color: white; border-color: #667eea; }
+        .modal-buttons { display: flex; gap: 10px; }
+        .modal-btn { flex: 1; padding: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }
+        .modal-btn.cancel { background: #f0f0f0; color: #666; }
+        .modal-btn.confirm { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+        
+        .tab-page { display: none; }
+        .tab-page.active { display: block; }
+        
+        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #ffffff; border-top: 1px solid #e5e5e5; display: flex; justify-content: space-around; align-items: center; height: 60px; z-index: 999; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
+        .nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 8px 20px; cursor: pointer; transition: all 0.3s; color: #999; }
+        .nav-item.active { color: #667eea; }
+        .nav-icon { font-size: 20px; margin-bottom: 2px; }
+        .nav-label { font-size: 11px; font-weight: 500; }
+        
         .error { color: #e74c3c; font-size: 14px; margin-top: 5px; }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>校园生活提醒助手</h1>
-        <p>智能提醒，轻松生活</p>
-    </div>
+    <header class="app-header">
+        <span id="headerTitle">💬 生活提醒助手</span>
+    </header>
 
-    <div class="tabs">
-        <div class="tab active" onclick="switchTab('reminders')">我的提醒</div>
-        <div class="tab" onclick="switchTab('chat')">智能对话</div>
-        <div class="tab" onclick="switchTab('calendar')">日历视图</div>
-    </div>
-
-    <div class="content">
-        <!-- 我的提醒 -->
-        <div id="tab-reminders" class="card">
-            <h2>添加提醒</h2>
-            <form id="addForm">
-                <div class="form-group">
-                    <label>事项名称</label>
-                    <input type="text" id="title" placeholder="请输入提醒事项">
+    <main class="content-area">
+        <div id="page-chat" class="tab-page active">
+            <div class="card">
+                <div class="prompt-bar">
+                    <span id="promptText">你可以这样问我：明天下午3点提醒我还书</span>
                 </div>
-                <div class="form-group">
-                    <label>提醒时间</label>
-                    <input type="datetime-local" id="remindTime">
+                <div class="chat-history" id="chatHistory"></div>
+                <div class="chat-input">
+                    <input type="text" id="chatInput" placeholder="输入提醒，如：明天下午3点还书">
+                    <button onclick="sendMessage()">发送</button>
                 </div>
-                <div class="form-group">
-                    <label>地点</label>
-                    <input type="text" id="location" placeholder="可选">
-                </div>
-                <div class="form-group">
-                    <label>优先级</label>
-                    <select id="priority">
-                        <option value="LOW">低</option>
-                        <option value="NORMAL" selected>普通</option>
-                        <option value="HIGH">高</option>
-                    </select>
-                </div>
-                <button type="submit">添加提醒</button>
-            </form>
-
-            <h2 style="margin-top: 30px;">待办列表</h2>
-            <ul id="reminderList" class="reminder-list"></ul>
-        </div>
-
-        <!-- 智能对话 -->
-        <div id="tab-chat" class="card hidden">
-            <div class="chat-history" id="chatHistory"></div>
-            <div class="chat-input">
-                <input type="text" id="chatInput" placeholder="输入提醒，如：明天下午3点还书">
-                <button onclick="sendMessage()">发送</button>
             </div>
         </div>
 
-        <!-- 日历视图 -->
-        <div id="tab-calendar" class="card hidden">
-            <h2>日历</h2>
-            <div id="calendarNav" style="display: flex; justify-content: space-between; margin-bottom: 20px;">
-                <button onclick="changeMonth(-1)">上一月</button>
-                <span id="currentMonth" style="font-weight: 600;"></span>
-                <button onclick="changeMonth(1)">下一月</button>
+        <div id="page-calendar" class="tab-page">
+            <div class="card">
+                <div class="calendar-header">
+                    <h3>📅 日程日历</h3>
+                    <div class="mode-switch">
+                        <button class="mode-btn active" data-mode="month">📆 月查询</button>
+                        <button class="mode-btn" data-mode="week">📋 周查询</button>
+                    </div>
+                </div>
+                <div class="calendar-nav">
+                    <button id="prevBtn">‹</button>
+                    <span id="calendarTitle">2026年7月</span>
+                    <button id="nextBtn">›</button>
+                </div>
+                <div class="calendar-grid">
+                    <div class="weekday">日</div>
+                    <div class="weekday">一</div>
+                    <div class="weekday">二</div>
+                    <div class="weekday">三</div>
+                    <div class="weekday">四</div>
+                    <div class="weekday">五</div>
+                    <div class="weekday">六</div>
+                </div>
+                <div id="calendarDays" class="calendar-grid"></div>
+                <div id="scheduleList">
+                    <div class="schedule-header">
+                        <span id="scheduleTitle">2026年7月 的日程</span>
+                        <span id="scheduleCount">（共 0 项）</span>
+                    </div>
+                    <div id="scheduleItems"></div>
+                </div>
             </div>
-            <div class="calendar-grid">
-                <div style="font-weight: 600;">日</div>
-                <div style="font-weight: 600;">一</div>
-                <div style="font-weight: 600;">二</div>
-                <div style="font-weight: 600;">三</div>
-                <div style="font-weight: 600;">四</div>
-                <div style="font-weight: 600;">五</div>
-                <div style="font-weight: 600;">六</div>
-            </div>
-            <div id="calendarDays" class="calendar-grid"></div>
         </div>
-    </div>
+
+        <div id="page-profile" class="tab-page">
+            <div class="card">
+                <div class="profile-card">
+                    <div class="avatar-circle">👤</div>
+                    <div class="user-name" id="profileNickname">用户</div>
+                    <div class="user-phone" id="profilePhone">138****8888</div>
+                </div>
+
+                <div class="settings-group">
+                    <div class="settings-title">个人设置</div>
+                    <div class="settings-item" onclick="showEditModal('nickname', '昵称')">
+                        <span class="settings-label">昵称</span>
+                        <span class="settings-value">
+                            <span id="valueNickname">用户</span>
+                            <span class="settings-arrow">›</span>
+                        </span>
+                    </div>
+                    <div class="settings-item" onclick="showGenderModal()">
+                        <span class="settings-label">性别</span>
+                        <span class="settings-value">
+                            <span id="valueGender">不公开</span>
+                            <span class="settings-arrow">›</span>
+                        </span>
+                    </div>
+                    <div class="settings-item" onclick="showEditModal('city', '默认城市')">
+                        <span class="settings-label">默认城市</span>
+                        <span class="settings-value">
+                            <span id="valueCity">广州</span>
+                            <span class="settings-arrow">›</span>
+                        </span>
+                    </div>
+                    <div class="settings-item" onclick="showAdvanceModal()">
+                        <span class="settings-label">默认提前量</span>
+                        <span class="settings-value">
+                            <span id="valueAdvance">10分钟</span>
+                            <span class="settings-arrow">›</span>
+                        </span>
+                    </div>
+                </div>
+
+                <div class="settings-group" id="periodSettings" style="display:none;">
+                    <div class="settings-title">女性健康</div>
+                    <div class="settings-item" onclick="showEditModal('cycleDays', '月经周期')">
+                        <span class="settings-label">月经周期</span>
+                        <span class="settings-value">
+                            <span id="valueCycle">28天</span>
+                            <span class="settings-arrow">›</span>
+                        </span>
+                    </div>
+                    <div class="settings-item">
+                        <span class="settings-label">开启经期提醒</span>
+                        <span class="settings-value">
+                            <div class="toggle-switch" id="togglePeriodReminder" onclick="togglePeriodReminder()">
+                                <div class="toggle-knob"></div>
+                            </div>
+                        </span>
+                    </div>
+                    <div class="settings-item">
+                        <span class="settings-label">下次预计</span>
+                        <span class="settings-value" id="valueNextPeriod">--</span>
+                    </div>
+                    <div class="settings-item">
+                        <span class="settings-label">当前状态</span>
+                        <span class="settings-value" id="valuePeriodStatus">--</span>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <div class="settings-title">系统</div>
+                    <div class="settings-item" onclick="logout()">
+                        <span class="settings-label" style="color:#e74c3c;">退出登录</span>
+                        <span class="settings-value"></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="modalOverlay" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-title" id="modalTitle">编辑</div>
+                <input type="text" class="modal-input" id="modalInput" placeholder="">
+                <div class="modal-options" id="modalOptions"></div>
+                <div class="modal-buttons">
+                    <button class="modal-btn cancel" onclick="hideModal()">取消</button>
+                    <button class="modal-btn confirm" onclick="confirmModal()">确认</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="logoutModal" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-title">确认退出</div>
+                <div style="color:#666; margin-bottom:20px;">确定要退出登录吗？</div>
+                <div class="modal-buttons">
+                    <button class="modal-btn cancel" onclick="hideLogoutModal()">取消</button>
+                    <button class="modal-btn confirm" style="background:#e74c3c;" onclick="confirmLogout()">退出</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <nav class="bottom-nav">
+        <div class="nav-item active" data-tab="chat" onclick="switchTab('chat')">
+            <span class="nav-icon">💬</span>
+            <span class="nav-label">对话</span>
+        </div>
+        <div class="nav-item" data-tab="calendar" onclick="switchTab('calendar')">
+            <span class="nav-icon">📅</span>
+            <span class="nav-label">日历</span>
+        </div>
+        <div class="nav-item" data-tab="profile" onclick="switchTab('profile')">
+            <span class="nav-icon">👤</span>
+            <span class="nav-label">我的</span>
+        </div>
+    </nav>
 
     <script>
-        let currentTab = 'reminders';
-        let currentUserId = 1;
+        let currentUserId = parseInt(localStorage.getItem('userId')) || 1;
+        var currentYear = new Date().getFullYear();
+        var currentMonth = new Date().getMonth() + 1;
+        var selectedDate = new Date().toISOString().slice(0, 10);
 
-        function switchTab(tab) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            event.target.classList.add('active');
-            
-            document.querySelectorAll('.card').forEach(c => c.classList.add('hidden'));
-            document.getElementById('tab-' + tab).classList.remove('hidden');
-            
-            currentTab = tab;
-            
-            if (tab === 'reminders') loadReminders();
-            if (tab === 'calendar') renderCalendar();
+        document.addEventListener('DOMContentLoaded', function() {
+            var defaultTab = 'chat';
+            switchTab(defaultTab);
+            rotatePrompt();
+            setInterval(rotatePrompt, 3000);
+        });
+
+        var prompts = [
+            '你可以这样问我：明天下午3点提醒我还书',
+            '早上好！今天有什么需要提醒的吗？',
+            '今天有雨，出门记得带伞 ☔',
+            '设置个提醒吧，我来帮你记住！'
+        ];
+        var promptIndex = 0;
+        function rotatePrompt() {
+            var el = document.getElementById('promptText');
+            if (el) {
+                el.textContent = prompts[promptIndex % prompts.length];
+                promptIndex++;
+            }
+        }
+
+        function switchTab(tabName) {
+            document.querySelectorAll('.nav-item').forEach(function(item) {
+                item.classList.remove('active');
+                if (item.dataset.tab === tabName) {
+                    item.classList.add('active');
+                }
+            });
+
+            document.querySelectorAll('.tab-page').forEach(function(page) {
+                page.style.display = 'none';
+            });
+            var targetPage = document.getElementById('page-' + tabName);
+            if (targetPage) {
+                targetPage.style.display = 'block';
+            }
+
+            var titles = {
+                'chat': '💬 生活提醒助手',
+                'calendar': '📅 日历',
+                'profile': '👤 我的'
+            };
+            document.getElementById('headerTitle').textContent = titles[tabName] || '生活提醒助手';
+
+            if (tabName === 'profile') loadProfile();
+            if (tabName === 'calendar') {
+                bindCalendarListeners();
+                renderCalendar();
+            }
         }
 
         async function loadReminders() {
@@ -195,32 +406,85 @@
         }
 
         async function sendMessage() {
-            const input = document.getElementById('chatInput');
-            const text = input.value.trim();
+            var input = document.getElementById('chatInput');
+            var text = input.value.trim();
             if (!text) return;
-            
+
             addMessage('user', text);
             input.value = '';
-            
+
             try {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) {
+                    headers['Authorization'] = 'Bearer ' + token;
+                }
+
                 const response = await fetch('/api/reminders/parse', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ input: text })
+                    headers: headers,
+                    body: JSON.stringify({ input: text, userId: currentUserId })
                 });
                 
                 const result = await response.json();
-                addMessage('bot', `解析结果：\n标题：${result.title}\n时间：${result.remindTime}\n意图：${result.intentType}`);
-                
-                if (result.remindTime) {
-                    document.getElementById('title').value = result.title;
-                    document.getElementById('remindTime').value = result.remindTime.replace(' ', 'T');
-                    if (result.location) document.getElementById('location').value = result.location;
-                    if (result.priority) document.getElementById('priority').value = result.priority;
-                    
-                    setTimeout(() => switchTab('reminders'), 500);
+
+                if (result.title) {
+                    var msg = '✅ 已解析：' + result.title;
+                    if (result.remindTime) {
+                        msg += '\n时间：' + result.remindTime;
+                    } else {
+                        msg += '\n（⚠️ 未识别到时间，请手动指定）';
+                    }
+                    if (result.location) {
+                        msg += '\n地点：' + result.location;
+                    }
+                    if (result.intentType) {
+                        msg += '\n意图：' + result.intentType;
+                    }
+                    addMessage('bot', msg);
+
+                    if (result.remindTime) {
+                        createReminder(result.title, result.remindTime, result.location, result.priority);
+                    }
+                } else {
+                    addMessage('bot', '❌ ' + (result.message || '解析失败，请重试'));
                 }
-            } catch (e) { addMessage('bot', '解析失败，请重试'); }
+            } catch (e) { 
+                addMessage('bot', '❌ 网络错误，请重试'); 
+            }
+        }
+
+        async function createReminder(title, remindTime, location, priority) {
+            try {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) {
+                    headers['Authorization'] = 'Bearer ' + token;
+                }
+
+                const response = await fetch('/api/reminders', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        userId: currentUserId,
+                        title: title,
+                        remindTime: remindTime,
+                        location: location || '',
+                        priority: priority || 'NORMAL',
+                        advanceMinutes: 10
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.id) {
+                    addMessage('bot', '📌 提醒已设置成功！');
+                } else {
+                    addMessage('bot', '⚠️ 设置失败：' + (data.message || '请重试'));
+                }
+            } catch (e) {
+                addMessage('bot', '⚠️ 设置失败：网络错误');
+            }
         }
 
         function addMessage(role, text) {
@@ -232,47 +496,592 @@
             history.scrollTop = history.scrollHeight;
         }
 
-        let calendarDate = new Date();
+        var viewMode = 'month';
+        var currentWeekOffset = 0;
+        var allScheduleData = [];
+
+        function getTodayStr() {
+            var now = new Date();
+            var y = now.getFullYear();
+            var m = String(now.getMonth() + 1).padStart(2, '0');
+            var d = String(now.getDate()).padStart(2, '0');
+            return y + '-' + m + '-' + d;
+        }
+
+        function isValidDate(dateStr) {
+            if (!dateStr || dateStr === 'null' || dateStr === 'undefined') return false;
+            var date = new Date(dateStr);
+            return !isNaN(date.getTime());
+        }
 
         function renderCalendar() {
-            const year = calendarDate.getFullYear();
-            const month = calendarDate.getMonth();
-            
-            document.getElementById('currentMonth').textContent = `${year}年${month + 1}月`;
-            
-            const firstDay = new Date(year, month, 1);
-            const lastDay = new Date(year, month + 1, 0);
-            
-            const days = [];
-            for (let i = 0; i < firstDay.getDay(); i++) days.push(null);
-            for (let i = 1; i <= lastDay.getDate(); i++) days.push(i);
-            
-            const container = document.getElementById('calendarDays');
+            var today = new Date().toISOString().slice(0, 10);
+            var userId = localStorage.getItem('userId');
+            if (!userId) {
+                window.location.href = '/login';
+                return;
+            }
+
+            if (!currentYear || !currentMonth || isNaN(currentYear) || isNaN(currentMonth)) {
+                var now = new Date();
+                currentYear = now.getFullYear();
+                currentMonth = now.getMonth() + 1;
+            }
+
+            if (viewMode === 'month') {
+                var firstDay = new Date(currentYear, currentMonth - 1, 1).getDay();
+                var daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
+
+                fetch('/api/calendar/month?userId=' + userId + '&year=' + currentYear + '&month=' + currentMonth, {
+                    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+                })
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    var reminderDates = {};
+                    if (data.data && data.data.days) {
+                        data.data.days.forEach(function(day) {
+                            if (day.hasReminder) {
+                                var dateStr = day.date || (currentYear + '-' + String(currentMonth).padStart(2, '0') + '-' + String(day.day).padStart(2, '0'));
+                                if (!dateStr.includes('-')) {
+                                    dateStr = currentYear + '-' + String(currentMonth).padStart(2, '0') + '-' + String(day.day).padStart(2, '0');
+                                }
+                                reminderDates[dateStr] = true;
+                            }
+                        });
+                    }
+                    buildCalendarGrid(currentYear, currentMonth, firstDay, daysInMonth, today, reminderDates);
+                    loadScheduleList();
+                })
+                .catch(function() {
+                    buildCalendarGrid(currentYear, currentMonth, firstDay, daysInMonth, today, {});
+                    loadScheduleList();
+                });
+            } else {
+                buildWeekGrid(today);
+                loadScheduleList();
+            }
+        }
+
+        function buildCalendarGrid(year, month, firstDay, daysInMonth, today, reminderDates) {
+            var container = document.getElementById('calendarDays');
             container.innerHTML = '';
-            
-            days.forEach(day => {
-                const div = document.createElement('div');
-                div.className = 'calendar-day';
-                if (day === null) div.style.opacity = '0';
-                else {
-                    div.textContent = day;
-                    if (isToday(year, month, day)) div.classList.add('today');
+
+            for (var i = 0; i < firstDay; i++) {
+                var empty = document.createElement('div');
+                empty.className = 'day empty';
+                container.appendChild(empty);
+            }
+
+            for (var d = 1; d <= daysInMonth; d++) {
+                var dayDiv = document.createElement('div');
+                var dateStr = year + '-' + String(month).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+                dayDiv.className = 'day';
+                if (dateStr === today) { dayDiv.classList.add('today'); }
+                if (dateStr === selectedDate) { dayDiv.classList.add('selected'); }
+                if (reminderDates[dateStr]) { dayDiv.classList.add('has-reminder'); }
+
+                var num = document.createElement('span');
+                num.className = 'day-number';
+                num.textContent = d;
+                dayDiv.appendChild(num);
+
+                if (reminderDates[dateStr]) {
+                    var dot = document.createElement('span');
+                    dot.className = 'red-dot';
+                    dayDiv.appendChild(dot);
                 }
-                container.appendChild(div);
+
+                dayDiv.addEventListener('click', (function(date) {
+                    return function() {
+                        var validDate = date;
+                        if (!isValidDate(date)) {
+                            validDate = getTodayStr();
+                        }
+                        if (selectedDate === validDate) {
+                            selectedDate = null;
+                            document.querySelectorAll('.day').forEach(function(el) { el.classList.remove('selected'); });
+                        } else {
+                            selectedDate = validDate;
+                            document.querySelectorAll('.day').forEach(function(el) { el.classList.remove('selected'); });
+                            this.classList.add('selected');
+                        }
+                        loadScheduleList();
+                    };
+                })(dateStr));
+
+                container.appendChild(dayDiv);
+            }
+        }
+
+        function buildWeekGrid(today) {
+            var container = document.getElementById('calendarDays');
+            container.innerHTML = '';
+
+            var weekRange = getWeekDateRange(currentYear, currentMonth, currentWeekOffset);
+            
+            var mondayYear = weekRange.monday.getFullYear();
+            var mondayMonth = weekRange.monday.getMonth() + 1;
+            var mondayDay = weekRange.monday.getDate();
+
+            if (isNaN(mondayYear) || isNaN(mondayMonth) || isNaN(mondayDay)) {
+                var now = new Date();
+                mondayYear = now.getFullYear();
+                mondayMonth = now.getMonth() + 1;
+                mondayDay = now.getDate();
+            }
+
+            var currentDate = new Date(mondayYear, mondayMonth - 1, mondayDay);
+
+            var userId = localStorage.getItem('userId');
+            var reminderDates = {};
+
+            for (var i = 0; i < 7; i++) {
+                var dYear = currentDate.getFullYear();
+                var dMonth = currentDate.getMonth() + 1;
+                var dDay = currentDate.getDate();
+                var dateStr = dYear + '-' + 
+                    String(dMonth).padStart(2, '0') + '-' + 
+                    String(dDay).padStart(2, '0');
+
+                var dayDiv = document.createElement('div');
+                dayDiv.className = 'day';
+                if (dateStr === today) { dayDiv.classList.add('today'); }
+                if (dateStr === selectedDate) { dayDiv.classList.add('selected'); }
+
+                var num = document.createElement('span');
+                num.className = 'day-number';
+                num.textContent = currentDate.getDate();
+                dayDiv.appendChild(num);
+
+                dayDiv.addEventListener('click', (function(date) {
+                    return function() {
+                        var validDate = date;
+                        if (!isValidDate(date)) {
+                            validDate = getTodayStr();
+                        }
+                        if (selectedDate === validDate) {
+                            selectedDate = null;
+                            document.querySelectorAll('.day').forEach(function(el) { el.classList.remove('selected'); });
+                        } else {
+                            selectedDate = validDate;
+                            document.querySelectorAll('.day').forEach(function(el) { el.classList.remove('selected'); });
+                            this.classList.add('selected');
+                        }
+                        loadScheduleList();
+                    };
+                })(dateStr));
+
+                container.appendChild(dayDiv);
+                currentDate.setDate(currentDate.getDate() + 1);
+            }
+        }
+
+        function getWeekDateRange(year, month, offset) {
+            if (!year || !month || isNaN(year) || isNaN(month)) {
+                var now = new Date();
+                year = now.getFullYear();
+                month = now.getMonth() + 1;
+            }
+            var date = new Date(year, month - 1, 1);
+            var dayOfWeek = date.getDay();
+            var monday = new Date(date);
+            if (dayOfWeek !== 1) {
+                monday.setDate(date.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+            }
+            monday.setDate(monday.getDate() + offset * 7);
+            var sunday = new Date(monday);
+            sunday.setDate(monday.getDate() + 6);
+            return { monday: monday, sunday: sunday };
+        }
+
+        function loadScheduleList() {
+            var userId = localStorage.getItem('userId');
+            if (!userId) {
+                window.location.href = '/login';
+                return;
+            }
+
+            if (!currentYear || !currentMonth || isNaN(currentYear) || isNaN(currentMonth)) {
+                var now = new Date();
+                currentYear = now.getFullYear();
+                currentMonth = now.getMonth() + 1;
+            }
+
+            if (viewMode === 'month') {
+                document.getElementById('calendarTitle').textContent = currentYear + '年' + currentMonth + '月';
+                document.getElementById('scheduleTitle').textContent = currentYear + '年' + currentMonth + '月 的日程';
+                
+                fetch('/api/calendar/month?userId=' + userId + '&year=' + currentYear + '&month=' + currentMonth, {
+                    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+                })
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                    var allReminders = [];
+                    if (data.data && data.data.days) {
+                        data.data.days.forEach(function(day) {
+                            if (day.reminders) {
+                                day.reminders.forEach(function(r) {
+                                    r.dateStr = day.date || (currentYear + '-' + String(currentMonth).padStart(2, '0') + '-' + String(day.day).padStart(2, '0'));
+                                    if (!r.dateStr.includes('-')) {
+                                        r.dateStr = currentYear + '-' + String(currentMonth).padStart(2, '0') + '-' + String(day.day).padStart(2, '0');
+                                    }
+                                    allReminders.push(r);
+                                });
+                            }
+                        });
+                    }
+                    allScheduleData = allReminders;
+                    renderScheduleList(allReminders);
+                });
+            } else {
+                var weekRange = getWeekDateRange(currentYear, currentMonth, currentWeekOffset);
+                
+                var mondayYear = weekRange.monday.getFullYear();
+                var mondayMonth = weekRange.monday.getMonth() + 1;
+                var mondayDay = weekRange.monday.getDate();
+                var sundayYear = weekRange.sunday.getFullYear();
+                var sundayMonth = weekRange.sunday.getMonth() + 1;
+                var sundayDay = weekRange.sunday.getDate();
+
+                if (isNaN(mondayYear) || isNaN(mondayMonth) || isNaN(mondayDay)) {
+                    var now = new Date();
+                    mondayYear = now.getFullYear();
+                    mondayMonth = now.getMonth() + 1;
+                    mondayDay = now.getDate();
+                    sundayYear = mondayYear;
+                    sundayMonth = mondayMonth;
+                    sundayDay = mondayDay + 6;
+                }
+
+                var mondayStr = mondayYear + '-' + String(mondayMonth).padStart(2, '0') + '-' + String(mondayDay).padStart(2, '0');
+                var sundayStr = sundayYear + '-' + String(sundayMonth).padStart(2, '0') + '-' + String(sundayDay).padStart(2, '0');
+                
+                document.getElementById('calendarTitle').textContent = mondayStr + ' ~ ' + sundayStr;
+                document.getElementById('scheduleTitle').textContent = '本周日程';
+
+                var allReminders = [];
+                var fetchPromises = [];
+                
+                var tempDate = new Date(mondayYear, mondayMonth - 1, mondayDay);
+                
+                for (var i = 0; i < 7; i++) {
+                    var dYear = tempDate.getFullYear();
+                    var dMonth = tempDate.getMonth() + 1;
+                    var dDay = tempDate.getDate();
+                    var dateStr = dYear + '-' + String(dMonth).padStart(2, '0') + '-' + String(dDay).padStart(2, '0');
+                    (function(date) {
+                        fetchPromises.push(
+                            fetch('/api/calendar/day?userId=' + userId + '&date=' + date, {
+                                headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+                            })
+                            .then(function(res) { return res.json(); })
+                            .then(function(data) {
+                                if (data.data && data.data.days && data.data.days[0] && data.data.days[0].reminders) {
+                                    data.data.days[0].reminders.forEach(function(r) {
+                                        r.dateStr = data.data.days[0].date || date;
+                                        allReminders.push(r);
+                                    });
+                                }
+                            })
+                        );
+                    })(dateStr);
+                    tempDate.setDate(tempDate.getDate() + 1);
+                }
+
+                Promise.all(fetchPromises).then(function() {
+                    allScheduleData = allReminders;
+                    renderScheduleList(allReminders);
+                });
+            }
+        }
+
+        function renderScheduleList(reminders) {
+            var items = document.getElementById('scheduleItems');
+            var count = document.getElementById('scheduleCount');
+            var title = document.getElementById('scheduleTitle');
+
+            if (!isValidDate(selectedDate)) {
+                selectedDate = getTodayStr();
+            }
+
+            var filtered = reminders;
+            if (selectedDate) {
+                filtered = reminders.filter(function(r) { return r.dateStr === selectedDate; });
+                title.textContent = selectedDate + ' 的日程';
+            } else if (viewMode === 'month') {
+                title.textContent = currentYear + '年' + currentMonth + '月 的日程';
+            } else {
+                title.textContent = '本周日程';
+            }
+
+            filtered.sort(function(a, b) { return (a.remindTime || '').localeCompare(b.remindTime || ''); });
+
+            count.textContent = '（共 ' + filtered.length + ' 项）';
+
+            if (filtered.length === 0) {
+                items.innerHTML = '<div class="empty-schedule">该时段暂无日程安排</div>';
+                return;
+            }
+
+            items.innerHTML = '';
+            filtered.forEach(function(r) {
+                var item = document.createElement('div');
+                item.className = 'schedule-item';
+
+                var timeStr = r.remindTime ? r.remindTime.slice(11, 16) : '';
+                var tag = '';
+                
+                if (r.status === 'CANCELLED') {
+                    tag = '<span class="schedule-tag cancelled">✖ 已取消</span>';
+                } else if (r.confirmStatus === 'PENDING') {
+                    tag = '<span class="schedule-tag pending">⏳ 待确认</span>';
+                }
+
+                var locationHtml = r.location ? '<div class="schedule-location">📍 ' + r.location + '</div>' : '';
+
+                item.innerHTML = '<div class="schedule-time">' + timeStr + '</div>' +
+                                '<div class="schedule-title">' + r.title + tag + locationHtml + '</div>';
+                items.appendChild(item);
             });
         }
 
-        function isToday(year, month, day) {
-            const today = new Date();
-            return today.getFullYear() === year && today.getMonth() === month && today.getDate() === day;
-        }
-
-        function changeMonth(delta) {
-            calendarDate.setMonth(calendarDate.getMonth() + delta);
+        function switchMode(mode, btn) {
+            viewMode = mode;
+            currentWeekOffset = 0;
+            document.querySelectorAll('.mode-btn').forEach(function(b) { b.classList.remove('active'); });
+            if (btn) btn.classList.add('active');
             renderCalendar();
         }
 
-        renderCalendar();
+        function prevPeriod() {
+            if (viewMode === 'month') {
+                if (currentMonth === 1) { currentMonth = 12; currentYear--; }
+                else { currentMonth--; }
+            } else {
+                currentWeekOffset--;
+            }
+            renderCalendar();
+        }
+
+        function nextPeriod() {
+            if (viewMode === 'month') {
+                if (currentMonth === 12) { currentMonth = 1; currentYear++; }
+                else { currentMonth++; }
+            } else {
+                currentWeekOffset++;
+            }
+            renderCalendar();
+        }
+
+        function bindCalendarListeners() {
+            document.querySelectorAll('.mode-btn').forEach(function(btn) {
+                btn.onclick = function() { switchMode(this.getAttribute('data-mode'), this); };
+            });
+            document.getElementById('prevBtn').onclick = prevPeriod;
+            document.getElementById('nextBtn').onclick = nextPeriod;
+        }
+
+        var currentEditField = '';
+        var currentEditType = '';
+
+        function loadProfile() {
+            var userId = localStorage.getItem('userId');
+            if (!userId) return;
+
+            fetch('/api/user/' + userId, {
+                headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                document.getElementById('profileNickname').textContent = data.nickname || '用户';
+                document.getElementById('valueNickname').textContent = data.nickname || '用户';
+                document.getElementById('profilePhone').textContent = data.phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2');
+
+                var genderMap = { 'MALE': '男', 'FEMALE': '女', 'PRIVATE': '不公开' };
+                document.getElementById('valueGender').textContent = genderMap[data.gender] || '不公开';
+
+                document.getElementById('valueCity').textContent = data.city || '广州';
+                document.getElementById('valueAdvance').textContent = (data.defaultAdvanceMinutes || 10) + '分钟';
+
+                if (data.gender === 'FEMALE') {
+                    document.getElementById('periodSettings').style.display = 'block';
+                    document.getElementById('valueCycle').textContent = (data.cycleDays || 28) + '天';
+
+                    var toggle = document.getElementById('togglePeriodReminder');
+                    if (data.enablePeriodReminder) {
+                        toggle.classList.add('active');
+                    }
+
+                    loadPeriodStatus(userId);
+                }
+            });
+        }
+
+        function loadPeriodStatus(userId) {
+            fetch('/api/calendar/period-status?userId=' + userId, {
+                headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                if (data.nextPeriodDate) {
+                    document.getElementById('valueNextPeriod').textContent = data.nextPeriodDate;
+                }
+                if (data.status) {
+                    document.getElementById('valuePeriodStatus').textContent = data.status;
+                }
+            });
+        }
+
+        function showEditModal(field, title) {
+            currentEditField = field;
+            currentEditType = 'input';
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalInput').style.display = 'block';
+            document.getElementById('modalOptions').style.display = 'none';
+
+            var value = '';
+            if (field === 'nickname') value = document.getElementById('valueNickname').textContent;
+            else if (field === 'city') value = document.getElementById('valueCity').textContent;
+            else if (field === 'cycleDays') value = document.getElementById('valueCycle').textContent.replace('天', '');
+
+            document.getElementById('modalInput').value = value;
+            document.getElementById('modalOverlay').classList.add('show');
+            document.getElementById('modalInput').focus();
+        }
+
+        function showGenderModal() {
+            currentEditField = 'gender';
+            currentEditType = 'options';
+            document.getElementById('modalTitle').textContent = '性别';
+            document.getElementById('modalInput').style.display = 'none';
+            document.getElementById('modalOptions').style.display = 'flex';
+
+            var currentValue = document.getElementById('valueGender').textContent;
+            var options = [
+                { value: 'MALE', label: '男' },
+                { value: 'FEMALE', label: '女' },
+                { value: 'PRIVATE', label: '不公开' }
+            ];
+
+            var html = '';
+            options.forEach(function(opt) {
+                var active = (opt.label === currentValue) ? ' active' : '';
+                html += '<div class="modal-option' + active + '" data-value="' + opt.value + '" onclick="selectOption(this)">' + opt.label + '</div>';
+            });
+            document.getElementById('modalOptions').innerHTML = html;
+            document.getElementById('modalOverlay').classList.add('show');
+        }
+
+        function showAdvanceModal() {
+            currentEditField = 'defaultAdvanceMinutes';
+            currentEditType = 'options';
+            document.getElementById('modalTitle').textContent = '默认提前量';
+            document.getElementById('modalInput').style.display = 'none';
+            document.getElementById('modalOptions').style.display = 'flex';
+
+            var currentValue = parseInt(document.getElementById('valueAdvance').textContent);
+            var options = [5, 10, 15, 30, 60];
+
+            var html = '';
+            options.forEach(function(opt) {
+                var active = (opt === currentValue) ? ' active' : '';
+                html += '<div class="modal-option' + active + '" data-value="' + opt + '" onclick="selectOption(this)">' + opt + '分钟</div>';
+            });
+            document.getElementById('modalOptions').innerHTML = html;
+            document.getElementById('modalOverlay').classList.add('show');
+        }
+
+        function selectOption(el) {
+            document.querySelectorAll('.modal-option').forEach(function(e) { e.classList.remove('active'); });
+            el.classList.add('active');
+        }
+
+        function hideModal() {
+            document.getElementById('modalOverlay').classList.remove('show');
+        }
+
+        function confirmModal() {
+            var token = localStorage.getItem('token');
+            var userId = localStorage.getItem('userId');
+            var value = '';
+
+            if (currentEditType === 'input') {
+                value = document.getElementById('modalInput').value.trim();
+                if (!value) return;
+            } else {
+                var selected = document.querySelector('.modal-option.active');
+                if (!selected) return;
+                value = selected.getAttribute('data-value');
+            }
+
+            var updateData = {};
+            updateData[currentEditField] = value;
+
+            fetch('/api/user/' + userId, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
+                },
+                body: JSON.stringify(updateData)
+            })
+            .then(function() {
+                updateProfileDisplay(currentEditField, value);
+                hideModal();
+            });
+        }
+
+        function updateProfileDisplay(field, value) {
+            if (field === 'nickname') {
+                document.getElementById('profileNickname').textContent = value;
+                document.getElementById('valueNickname').textContent = value;
+            } else if (field === 'gender') {
+                var genderMap = { 'MALE': '男', 'FEMALE': '女', 'PRIVATE': '不公开' };
+                document.getElementById('valueGender').textContent = genderMap[value] || '不公开';
+                if (value === 'FEMALE') {
+                    document.getElementById('periodSettings').style.display = 'block';
+                } else {
+                    document.getElementById('periodSettings').style.display = 'none';
+                }
+            } else if (field === 'city') {
+                document.getElementById('valueCity').textContent = value;
+            } else if (field === 'defaultAdvanceMinutes') {
+                document.getElementById('valueAdvance').textContent = value + '分钟';
+            } else if (field === 'cycleDays') {
+                document.getElementById('valueCycle').textContent = value + '天';
+            }
+        }
+
+        function togglePeriodReminder() {
+            var toggle = document.getElementById('togglePeriodReminder');
+            var enabled = !toggle.classList.contains('active');
+            toggle.classList.toggle('active', enabled);
+
+            var token = localStorage.getItem('token');
+            var userId = localStorage.getItem('userId');
+
+            fetch('/api/user/' + userId, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + token
+                },
+                body: JSON.stringify({ enablePeriodReminder: enabled })
+            });
+        }
+
+        function logout() {
+            document.getElementById('logoutModal').classList.add('show');
+        }
+
+        function hideLogoutModal() {
+            document.getElementById('logoutModal').classList.remove('show');
+        }
+
+        function confirmLogout() {
+            localStorage.clear();
+            window.location.href = '/login';
+        }
     </script>
 </body>
 </html>
