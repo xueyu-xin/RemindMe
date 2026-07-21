@@ -923,8 +923,26 @@
                 const result = await response.json();
                 
                 if (result.success) {
-                    document.getElementById('confirmationContainer').innerHTML = '';
                     addMessage('bot', '✅ 已修改，请确认');
+                    try {
+                        const dataResponse = await fetch('/api/confirmations/' + sessionId + '/data?userId=' + currentUserId);
+                        const data = await dataResponse.json();
+                        var card = {
+                            type: 'confirmation_card',
+                            message: '📋 我帮你解析了提醒信息，请确认：',
+                            data: data,
+                            actions: [
+                                { id: 'confirm', label: '✅ 确认', style: 'primary' },
+                                { id: 'edit', label: '✏️ 修改', style: 'warning' },
+                                { id: 'cancel', label: '❌ 取消', style: 'danger' }
+                            ],
+                            timeout: 180,
+                            expiresAt: new Date(Date.now() + 180000).toISOString()
+                        };
+                        showConfirmationCard(card);
+                    } catch (e) {
+                        console.error('重新加载卡片失败', e);
+                    }
                 } else {
                     addMessage('bot', '❌ ' + result.message);
                 }
