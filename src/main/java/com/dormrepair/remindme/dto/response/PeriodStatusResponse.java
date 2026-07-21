@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -17,7 +18,9 @@ public class PeriodStatusResponse {
     private String status;
     private String statusName;
     private String icon;
+    @JsonFormat(pattern = "yyyy-MM-dd", timezone = "Asia/Shanghai")
     private LocalDate nextPeriodDate;
+    @JsonFormat(pattern = "yyyy-MM-dd", timezone = "Asia/Shanghai")
     private LocalDate ovulationDate;
     private Integer daysUntilNextPeriod;
     private Integer cycleLength;

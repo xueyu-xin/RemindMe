@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -21,6 +22,7 @@ public class ReminderCreateRequest {
     private String title;
 
     @NotNull(message = "提醒时间不能为空")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
     private LocalDateTime remindTime;
 
     private String timezone = "Asia/Shanghai";

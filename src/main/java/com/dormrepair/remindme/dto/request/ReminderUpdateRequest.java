@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.dto.request;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
@@ -14,6 +15,7 @@ public class ReminderUpdateRequest {
     @Size(max = 255, message = "事项名称不超过255个字符")
     private String title;
 
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
     private LocalDateTime remindTime;
 
     private String timezone;

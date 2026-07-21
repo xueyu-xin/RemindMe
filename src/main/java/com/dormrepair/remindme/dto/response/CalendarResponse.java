@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -24,6 +25,7 @@ public class CalendarResponse {
     @NoArgsConstructor
     @AllArgsConstructor
     public static class DayItem {
+        @JsonFormat(pattern = "yyyy-MM-dd", timezone = "Asia/Shanghai")
         private LocalDate date;
         private Boolean hasReminder;
         private Integer reminderCount;
