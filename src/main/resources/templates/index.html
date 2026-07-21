@@ -391,6 +391,15 @@
                     var card = JSON.parse(message.body);
                     showConfirmationCard(card);
                 });
+                stompClient.subscribe('/user/topic/messages', function(message) {
+                    var msg;
+                    try {
+                        msg = JSON.parse(message.body);
+                    } catch (e) {
+                        msg = { type: 'text', message: message.body };
+                    }
+                    handleWebSocketMessage(msg);
+                });
             }, function(error) {
                 console.error('WebSocket连接失败:', error);
                 setTimeout(connectWebSocket, 5000);
@@ -421,6 +430,14 @@
                 return;
             }
             
+            if (card.type === 'timeout_auto_create') {
+                addMessage('bot', card.message);
+                container.innerHTML = '';
+                currentConfirmationSessionId = null;
+                renderCalendar();
+                return;
+            }
+            
             if (card.type === 'confirmation_card') {
                 currentConfirmationSessionId = card.data.sessionId;
                 var expiresAt = new Date(card.expiresAt);
@@ -440,12 +457,276 @@
                     html += '<button class="action-btn ' + action.style + '" onclick="handleConfirmationAction(\'' + action.id + '\', \'' + card.data.sessionId + '\')">' + action.label + '</button>';
                 });
                 html += '</div>';
-                html += '<div class="card-timer" id="timerText">⏰ ' + card.timeout + '秒后自动取消</div>';
+                html += '<div class="card-timer" id="timerText">⏳ 3分钟后未确认自动确认</div>';
                 html += '</div>';
                 
                 container.innerHTML = html;
                 
                 startTimer(expiresAt);
+            }
+            
+            if (card.type === 'execute_card') {
+                currentConfirmationSessionId = card.data.sessionId;
+                
+                var html = '<div class="confirmation-card execute-card" id="confirmationCard">';
+                html += '<div class="card-title">' + card.message + '</div>';
+                html += '<div class="card-info">';
+                html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + card.data.title + '</span></div>';
+                html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + card.data.remindTime + '</span></div>';
+                if (card.data.location) {
+                    html += '<div class="info-item"><span class="info-label">地点</span><span class="info-value">' + card.data.location + '</span></div>';
+                }
+                html += '</div>';
+                html += '<div class="card-actions">';
+                card.actions.forEach(function(action) {
+                    html += '<button class="action-btn ' + action.style + '" onclick="handleExecuteAction(\'' + action.id + '\', \'' + card.data.sessionId + '\')">' + action.label + '</button>';
+                });
+                html += '</div>';
+                html += '<div class="card-timer" id="timerText">第 ' + (card.data.attempt || 1) + ' 次提醒，还剩 ' + (3 - (card.data.attempt || 1)) + ' 次机会</div>';
+                html += '</div>';
+                
+                container.innerHTML = html;
+            }
+        }
+
+        function handleWebSocketMessage(msg) {
+            if (!msg || !msg.type) {
+                addMessage('bot', msg.message || JSON.stringify(msg));
+                return;
+            }
+
+            if (msg.type === 'single_confirm_card') {
+                renderSingleConfirmCard(msg);
+            } else if (msg.type === 'multi_confirm_card') {
+                renderMultiConfirmCard(msg);
+            } else if (msg.type === 'pending_summary') {
+                addMessage('bot', msg.message);
+            } else {
+                addMessage('bot', msg.message || JSON.stringify(msg));
+            }
+        }
+
+        function renderSingleConfirmCard(card) {
+            var container = document.getElementById('confirmationContainer');
+            var html = '<div class="confirmation-card" id="singleConfirmCard">';
+            html += '<div class="card-title">📋 请确认：' + card.title + '</div>';
+            html += '<div class="card-info">';
+            html += '<div class="info-item">⏰ ' + card.remindTime + '</div>';
+            if (card.location) {
+                html += '<div class="info-item">📍 ' + card.location + '</div>';
+            }
+            html += '</div>';
+            html += '<div class="card-timer">⏳ ' + card.expiresAt + ' 前未确认将自动确认</div>';
+            html += '<div class="card-actions">';
+            html += '<button class="action-btn primary" onclick="handleSingleConfirm(\'' + card.sessionId + '\')">✅ 确认</button>';
+            html += '<button class="action-btn danger" onclick="handleSingleCancel(\'' + card.sessionId + '\')">❌ 取消</button>';
+            html += '</div>';
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        async function handleSingleConfirm(sessionId) {
+            try {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/confirmations/action', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        sessionId: sessionId,
+                        action: 'confirm',
+                        userId: currentUserId
+                    })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    document.getElementById('singleConfirmCard').innerHTML = '<div class="card-title">✅ 已确认</div>';
+                    renderCalendar();
+                    setTimeout(function() {
+                        document.getElementById('confirmationContainer').innerHTML = '';
+                    }, 2000);
+                } else {
+                    addMessage('bot', '❌ ' + result.message);
+                }
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误');
+            }
+        }
+
+        async function handleSingleCancel(sessionId) {
+            try {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/confirmations/action', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        sessionId: sessionId,
+                        action: 'cancel',
+                        userId: currentUserId
+                    })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    document.getElementById('singleConfirmCard').innerHTML = '<div class="card-title">❌ 已取消</div>';
+                    setTimeout(function() {
+                        document.getElementById('confirmationContainer').innerHTML = '';
+                    }, 2000);
+                } else {
+                    addMessage('bot', '❌ ' + result.message);
+                }
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误');
+            }
+        }
+
+        function renderMultiConfirmCard(card) {
+            var container = document.getElementById('confirmationContainer');
+            var html = '<div class="confirmation-card" id="multiConfirmCard">';
+            html += '<div class="card-title">📋 您有 ' + card.count + ' 个待确认行程，请选择：</div>';
+            html += '<div class="card-list">';
+            card.items.forEach(function(item, index) {
+                html += '<div class="card-list-item" id="item-' + item.sessionId + '">';
+                html += '<span class="item-number">' + (index + 1) + '.</span>';
+                html += '<span class="item-title">' + item.title + '</span>';
+                html += '<span class="item-time">，' + item.remindTime + '</span>';
+                html += '<div class="item-actions">';
+                html += '<button class="mini-btn confirm" onclick="handleMultiItemConfirm(\'' + item.sessionId + '\')">✅确认</button>';
+                html += '<button class="mini-btn cancel" onclick="handleMultiItemCancel(\'' + item.sessionId + '\')">❌取消</button>';
+                html += '</div>';
+                html += '</div>';
+            });
+            html += '</div>';
+            html += '<div class="card-actions">';
+            html += '<button class="action-btn primary" onclick="handleConfirmAll()">✅ 一键确认全部</button>';
+            html += '<button class="action-btn danger" onclick="handleCancelAll()">❌ 一键取消全部</button>';
+            html += '</div>';
+            html += '<div class="card-timer">⏳ 单个行程可在右侧操作</div>';
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        async function handleMultiItemConfirm(sessionId) {
+            try {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/confirmations/action', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        sessionId: sessionId,
+                        action: 'confirm',
+                        userId: currentUserId
+                    })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    var item = document.getElementById('item-' + sessionId);
+                    if (item) {
+                        item.classList.add('disabled');
+                        item.innerHTML = item.innerHTML.replace('✅确认', '✅已确认').replace('❌取消', '');
+                    }
+                    renderCalendar();
+                } else {
+                    addMessage('bot', '❌ ' + result.message);
+                }
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误');
+            }
+        }
+
+        async function handleMultiItemCancel(sessionId) {
+            try {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/confirmations/action', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        sessionId: sessionId,
+                        action: 'cancel',
+                        userId: currentUserId
+                    })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    var item = document.getElementById('item-' + sessionId);
+                    if (item) {
+                        item.classList.add('disabled');
+                        item.innerHTML = item.innerHTML.replace('❌取消', '❌已取消').replace('✅确认', '');
+                    }
+                } else {
+                    addMessage('bot', '❌ ' + result.message);
+                }
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误');
+            }
+        }
+
+        async function handleConfirmAll() {
+            try {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/confirmations/action-all', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        userId: currentUserId,
+                        action: 'confirmAll'
+                    })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    addMessage('bot', result.message);
+                    document.getElementById('confirmationContainer').innerHTML = '';
+                    renderCalendar();
+                } else {
+                    addMessage('bot', '❌ ' + result.message);
+                }
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误');
+            }
+        }
+
+        async function handleCancelAll() {
+            try {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/confirmations/action-all', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        userId: currentUserId,
+                        action: 'cancelAll'
+                    })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    addMessage('bot', result.message);
+                    document.getElementById('confirmationContainer').innerHTML = '';
+                } else {
+                    addMessage('bot', '❌ ' + result.message);
+                }
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误');
             }
         }
 
@@ -464,7 +745,7 @@
                         timerText.classList.add('warning');
                         clearInterval(timerInterval);
                     } else {
-                        timerText.textContent = '⏰ ' + remaining + '秒后自动取消';
+                        timerText.textContent = '⏰ ' + remaining + '秒后自动确认';
                         if (remaining <= 10) {
                             timerText.classList.add('warning');
                         }
@@ -493,6 +774,7 @@
                         addMessage('bot', result.message);
                         document.getElementById('confirmationContainer').innerHTML = '';
                         currentConfirmationSessionId = null;
+                        renderCalendar();
                     } else {
                         addMessage('bot', '❌ ' + result.message);
                     }
@@ -510,13 +792,172 @@
                         addMessage('bot', '❌ ' + result.message);
                     }
                 } else if (action === 'edit') {
-                    document.getElementById('confirmationContainer').innerHTML = '';
-                    addMessage('bot', '✏️ 请重新输入提醒内容：');
-                    document.getElementById('chatInput').focus();
+                    showEditForm(sessionId);
                 }
             } catch (e) {
                 addMessage('bot', '❌ 网络错误，请重试');
             }
+        }
+
+        async function handleExecuteAction(action, sessionId) {
+            if (timerInterval) clearInterval(timerInterval);
+            
+            var headers = { 'Content-Type': 'application/json' };
+            var token = localStorage.getItem('token');
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+            
+            try {
+                var url = '/api/confirmations/' + sessionId + '/execute/';
+                if (action === 'confirm') {
+                    url += 'confirm';
+                } else if (action === 'later') {
+                    url += 'later';
+                } else if (action === 'cancel') {
+                    url += 'cancel';
+                }
+                
+                const response = await fetch(url + '?userId=' + currentUserId, {
+                    method: 'POST',
+                    headers: headers
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    addMessage('bot', result.message);
+                    document.getElementById('confirmationContainer').innerHTML = '';
+                    currentConfirmationSessionId = null;
+                    renderCalendar();
+                } else {
+                    addMessage('bot', '❌ ' + result.message);
+                }
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误，请重试');
+            }
+        }
+
+        function showEditForm(sessionId) {
+            if (timerInterval) clearInterval(timerInterval);
+            
+            var container = document.getElementById('confirmationContainer');
+            var html = '<div class="confirmation-card edit-form" id="editForm">';
+            html += '<div class="card-title">✏️ 修改提醒信息</div>';
+            html += '<div class="card-info">';
+            html += '<div class="form-item">';
+            html += '<label class="form-label">标题</label>';
+            html += '<input type="text" class="form-input" id="editTitle" placeholder="请输入标题">';
+            html += '</div>';
+            html += '<div class="form-item">';
+            html += '<label class="form-label">时间</label>';
+            html += '<input type="datetime-local" class="form-input" id="editTime">';
+            html += '</div>';
+            html += '<div class="form-item">';
+            html += '<label class="form-label">地点</label>';
+            html += '<input type="text" class="form-input" id="editLocation" placeholder="请输入地点（可选）">';
+            html += '</div>';
+            html += '<div class="form-item">';
+            html += '<label class="form-label">优先级</label>';
+            html += '<select class="form-input" id="editPriority">';
+            html += '<option value="LOW">低</option>';
+            html += '<option value="NORMAL" selected>中</option>';
+            html += '<option value="HIGH">高</option>';
+            html += '</select>';
+            html += '</div>';
+            html += '</div>';
+            html += '<div class="card-actions">';
+            html += '<button class="action-btn primary" onclick="submitEditForm(\'' + sessionId + '\')">✅ 确认修改</button>';
+            html += '<button class="action-btn danger" onclick="cancelEditForm(\'' + sessionId + '\')">❌ 取消修改</button>';
+            html += '</div>';
+            html += '</div>';
+            
+            container.innerHTML = html;
+            
+            fetch('/api/confirmations/' + sessionId + '/data?userId=' + currentUserId)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.title) document.getElementById('editTitle').value = data.title;
+                    if (data.remindTime) {
+                        var dt = new Date(data.remindTime.replace(' ', 'T'));
+                        document.getElementById('editTime').value = dt.toISOString().slice(0, 16);
+                    }
+                    if (data.location) document.getElementById('editLocation').value = data.location;
+                    if (data.priority) document.getElementById('editPriority').value = data.priority;
+                })
+                .catch(e => console.error('加载数据失败', e));
+        }
+
+        async function submitEditForm(sessionId) {
+            var title = document.getElementById('editTitle').value.trim();
+            var timeStr = document.getElementById('editTime').value;
+            var location = document.getElementById('editLocation').value.trim();
+            var priority = document.getElementById('editPriority').value;
+            
+            if (!title) {
+                addMessage('bot', '❌ 请输入标题');
+                return;
+            }
+            if (!timeStr) {
+                addMessage('bot', '❌ 请选择时间');
+                return;
+            }
+            
+            var headers = { 'Content-Type': 'application/json' };
+            var token = localStorage.getItem('token');
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+            
+            try {
+                const response = await fetch('/api/confirmations/' + sessionId + '/reparse?userId=' + currentUserId, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        title: title,
+                        remindTime: timeStr.replace('T', ' ') + ':00',
+                        location: location || null,
+                        priority: priority,
+                        advanceMinutes: 10
+                    })
+                });
+                const result = await response.json();
+                
+                if (result.success) {
+                    document.getElementById('confirmationContainer').innerHTML = '';
+                    addMessage('bot', '✅ 已修改，请确认');
+                } else {
+                    addMessage('bot', '❌ ' + result.message);
+                }
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误，请重试');
+            }
+        }
+
+        function cancelEditForm(sessionId) {
+            fetch('/api/confirmations/' + sessionId + '/data?userId=' + currentUserId)
+                .then(response => response.json())
+                .then(data => {
+                    var container = document.getElementById('confirmationContainer');
+                    var html = '<div class="confirmation-card" id="confirmationCard">';
+                    html += '<div class="card-title">📋 我帮你解析了提醒信息，请确认：</div>';
+                    html += '<div class="card-info">';
+                    html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + data.title + '</span></div>';
+                    html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + data.remindTime + '</span></div>';
+                    if (data.location) {
+                        html += '<div class="info-item"><span class="info-label">地点</span><span class="info-value">' + data.location + '</span></div>';
+                    }
+                    html += '<div class="info-item"><span class="info-label">优先级</span><span class="info-value">' + data.priority + '</span></div>';
+                    html += '</div>';
+                    html += '<div class="card-actions">';
+                    html += '<button class="action-btn primary" onclick="handleConfirmationAction(\'confirm\', \'' + data.sessionId + '\')">✅ 确认创建</button>';
+                    html += '<button class="action-btn warning" onclick="handleConfirmationAction(\'edit\', \'' + data.sessionId + '\')">✏️ 修改</button>';
+                    html += '<button class="action-btn danger" onclick="handleConfirmationAction(\'cancel\', \'' + data.sessionId + '\')">❌ 取消</button>';
+                    html += '</div>';
+                    html += '<div class="card-timer" id="timerText">⏳ 3分钟后未确认自动确认</div>';
+                    html += '</div>';
+                    container.innerHTML = html;
+                })
+                .catch(e => console.error('加载数据失败', e));
         }
 
         document.addEventListener('DOMContentLoaded', function() {
@@ -646,16 +1087,109 @@
                     headers['Authorization'] = 'Bearer ' + token;
                 }
 
-                const response = await fetch('/api/reminders/parse', {
+                if (currentConfirmationSessionId) {
+                    if (/^(确认|是的|好|ok|OK|嗯|行|可以|确定|是)$/.test(text)) {
+                        const response = await fetch('/api/confirmations/' + currentConfirmationSessionId + '/confirm?userId=' + currentUserId, {
+                            method: 'POST',
+                            headers: headers
+                        });
+                        const result = await response.json();
+                        if (result.success) {
+                            addMessage('bot', result.message);
+                            document.getElementById('confirmationContainer').innerHTML = '';
+                            currentConfirmationSessionId = null;
+                            renderCalendar();
+                        } else {
+                            addMessage('bot', '❌ ' + result.message);
+                        }
+                        return;
+                    }
+
+                    if (/^(取消|算了|不|不要|否)$/.test(text)) {
+                        const response = await fetch('/api/confirmations/' + currentConfirmationSessionId + '/cancel?userId=' + currentUserId, {
+                            method: 'POST',
+                            headers: headers
+                        });
+                        const result = await response.json();
+                        if (result.success) {
+                            addMessage('bot', result.message);
+                            document.getElementById('confirmationContainer').innerHTML = '';
+                            currentConfirmationSessionId = null;
+                        } else {
+                            addMessage('bot', '❌ ' + result.message);
+                        }
+                        return;
+                    }
+
+                    if (/^(修改|改成|改为|重新|换一下|改一下)$/.test(text)) {
+                        document.getElementById('confirmationContainer').innerHTML = '';
+                        addMessage('bot', '✏️ 请重新输入提醒内容：');
+                        return;
+                    }
+
+                    const reparseResponse = await fetch('/api/reminders/parse', {
+                        method: 'POST',
+                        headers: headers,
+                        body: JSON.stringify({ input: text, userId: currentUserId })
+                    });
+                    const reparseResult = await reparseResponse.json();
+
+                    if (reparseResult.title && reparseResult.remindTime) {
+                        const editResponse = await fetch('/api/confirmations/' + currentConfirmationSessionId + '/edit?userId=' + currentUserId, {
+                            method: 'POST',
+                            headers: headers,
+                            body: JSON.stringify({
+                                input: text,
+                                parsedData: {
+                                    title: reparseResult.title,
+                                    remindTime: reparseResult.remindTime,
+                                    intentType: reparseResult.intentType,
+                                    location: reparseResult.location,
+                                    priority: reparseResult.priority,
+                                    advanceMinutes: 10,
+                                    confidence: 0.95
+                                }
+                            })
+                        });
+                        const editResult = await editResponse.json();
+                        if (editResult.success) {
+                            addMessage('bot', '✏️ 已更新提醒信息，请确认');
+                        } else {
+                            addMessage('bot', '❌ ' + editResult.message);
+                        }
+                    } else {
+                        addMessage('bot', '❌ ' + (reparseResult.message || '解析失败，请重试'));
+                    }
+                    return;
+                }
+
+                const response = await fetch('/api/chat/send', {
                     method: 'POST',
                     headers: headers,
-                    body: JSON.stringify({ input: text, userId: currentUserId })
+                    body: JSON.stringify({ text: text, userId: currentUserId })
                 });
                 
                 const result = await response.json();
 
                 if (result.needConfirmation) {
-                    addMessage('bot', '📋 请确认提醒信息：\n标题：' + result.data.title + '\n时间：' + result.data.remindTime);
+                    var card = {
+                        type: 'confirmation_card',
+                        message: '📋 我帮你解析了提醒信息，请确认：',
+                        data: result.data,
+                        actions: [
+                            { id: 'confirm', label: '✅ 确认', style: 'primary' },
+                            { id: 'edit', label: '✏️ 修改', style: 'warning' },
+                            { id: 'cancel', label: '❌ 取消', style: 'danger' }
+                        ],
+                        timeout: 180,
+                        expiresAt: new Date(Date.now() + 180000).toISOString()
+                    };
+                    showConfirmationCard(card);
+                } else if (result.success) {
+                    addMessage('bot', result.message);
+                    document.getElementById('confirmationContainer').innerHTML = '';
+                    currentConfirmationSessionId = null;
+                    renderCalendar();
                 } else if (result.title) {
                     var msg = '✅ 已解析：' + result.title;
                     if (result.remindTime) {
@@ -719,7 +1253,7 @@
             const history = document.getElementById('chatHistory');
             const msg = document.createElement('div');
             msg.className = `chat-message ${role}`;
-            msg.textContent = text;
+            msg.innerHTML = text.replace(/\n/g, '<br>');
             history.appendChild(msg);
             history.scrollTop = history.scrollHeight;
         }

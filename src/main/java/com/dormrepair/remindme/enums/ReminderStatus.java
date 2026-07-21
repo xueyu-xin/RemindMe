@@ -12,6 +12,7 @@ public enum ReminderStatus {
 
     PENDING("待推送"),
     SENT("已推送"),
+    COMPLETED("已完成"),
     CANCELLED("已取消"),
     EXPIRED("已过期");
 

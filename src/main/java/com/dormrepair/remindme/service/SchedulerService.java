@@ -10,6 +10,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -22,7 +23,7 @@ import java.util.List;
 public class SchedulerService {
 
     private final ReminderRepository reminderRepository;
-    private final PushService pushService;
+    private final ConfirmationService confirmationService;
 
     @Scheduled(cron = "0 * * * * ?")
     @Transactional
@@ -31,17 +32,31 @@ public class SchedulerService {
 
         List<Reminder> pendingReminders = reminderRepository.findAll().stream()
                 .filter(r -> r.getStatus() == ReminderStatus.PENDING)
+                .filter(r -> r.getRemindTime() != null)
                 .filter(r -> r.getRemindTime().isBefore(LocalDateTime.now()))
                 .collect(java.util.stream.Collectors.toList());
 
         for (Reminder reminder : pendingReminders) {
             try {
-                pushService.pushReminder(reminder);
-                reminder.setStatus(ReminderStatus.SENT);
-                reminderRepository.save(reminder);
-                log.info("提醒已推送: id={}, title={}", reminder.getId(), reminder.getTitle());
+                boolean shouldPush = true;
+
+                if (reminder.getLastConfirmRemindAt() != null) {
+                    int intervalMinutes = reminder.getAdvanceMinutes() > 0 ? reminder.getAdvanceMinutes() : 10;
+                    long minutesSinceLastPush = Duration.between(reminder.getLastConfirmRemindAt(), LocalDateTime.now()).toMinutes();
+                    if (minutesSinceLastPush < intervalMinutes) {
+                        shouldPush = false;
+                    }
+                }
+
+                if (shouldPush) {
+                    confirmationService.pushExecuteCard(reminder);
+                    reminder.setLastConfirmRemindAt(LocalDateTime.now());
+                    reminder.setConfirmAttempts(reminder.getConfirmAttempts() + 1);
+                    reminderRepository.save(reminder);
+                    log.info("阶段二提醒已推送: id={}, title={}, attempt={}", reminder.getId(), reminder.getTitle(), reminder.getConfirmAttempts());
+                }
             } catch (Exception e) {
-                log.error("推送提醒失败: id={}", reminder.getId(), e);
+                log.error("推送阶段二提醒失败: id={}", reminder.getId(), e);
             }
         }
     }
@@ -51,29 +66,18 @@ public class SchedulerService {
     public void checkConfirmTimeout() {
         log.debug("检查超时未确认提醒...");
 
-        LocalDateTime timeoutThreshold = LocalDateTime.now().minusMinutes(30);
-
         List<Reminder> timeoutReminders = reminderRepository.findAll().stream()
                 .filter(r -> r.getConfirmStatus() == ConfirmStatus.PENDING)
                 .filter(r -> r.getStatus() == ReminderStatus.SENT)
-                .filter(r -> r.getLastConfirmRemindAt() == null || r.getLastConfirmRemindAt().isBefore(timeoutThreshold))
-                .filter(r -> r.getConfirmAttempts() < 3)
+                .filter(r -> r.getConfirmAttempts() >= 3)
                 .collect(java.util.stream.Collectors.toList());
 
         for (Reminder reminder : timeoutReminders) {
             try {
-                reminder.setConfirmAttempts(reminder.getConfirmAttempts() + 1);
-                reminder.setLastConfirmRemindAt(LocalDateTime.now());
-
-                if (reminder.getConfirmAttempts() >= 3) {
-                    reminder.setConfirmStatus(ConfirmStatus.DEFAULTED);
-                    log.info("提醒默认确认: id={}", reminder.getId());
-                } else {
-                    pushService.pushReminder(reminder);
-                    log.info("补提醒推送: id={}, attempt={}", reminder.getId(), reminder.getConfirmAttempts());
-                }
-
+                reminder.setConfirmStatus(ConfirmStatus.DEFAULTED);
+                reminder.setStatus(ReminderStatus.COMPLETED);
                 reminderRepository.save(reminder);
+                log.info("提醒默认确认(3次稍后): id={}", reminder.getId());
             } catch (Exception e) {
                 log.error("检查确认超时失败: id={}", reminder.getId(), e);
             }

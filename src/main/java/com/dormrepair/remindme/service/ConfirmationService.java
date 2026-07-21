@@ -23,6 +23,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @Slf4j
@@ -37,7 +38,7 @@ public class ConfirmationService {
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-    private static final int TIMEOUT_SECONDS = 30;
+    private static final int TIMEOUT_SECONDS = 180;
 
     @Transactional
     public ConfirmationCardResponse createSession(Long userId, String originalInput, Map<String, Object> parsedData) {
@@ -51,14 +52,29 @@ public class ConfirmationService {
             parsedDataJson = "{}";
         }
 
+        LocalDateTime parsedTime = null;
+        String remindTimeStr = (String) parsedData.get("remindTime");
+        if (remindTimeStr != null) {
+            parsedTime = LocalDateTime.parse(remindTimeStr, FORMATTER);
+        }
+
         ConfirmationSession session = ConfirmationSession.builder()
                 .sessionId(sessionId)
                 .userId(userId)
                 .originalInput(originalInput)
                 .parsedData(parsedDataJson)
+                .parsedTitle((String) parsedData.get("title"))
+                .parsedTime(parsedTime)
+                .parsedLocation((String) parsedData.get("location"))
+                .parsedPriority((String) parsedData.getOrDefault("priority", "NORMAL"))
+                .parsedAdvanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", 10))
+                .stage("INFO_CONFIRM")
                 .status(SessionStatus.PENDING)
                 .expiresAt(expiresAt)
                 .retryCount(0)
+                .attemptCount(0)
+                .maxAttempts(3)
+                .intervalMinutes(10)
                 .build();
 
         confirmationRepository.save(session);
@@ -66,7 +82,7 @@ public class ConfirmationService {
         ConfirmationCardResponse card = buildConfirmationCard(session, parsedData);
         pushConfirmationCard(userId, card);
 
-        log.info("创建确认会话: sessionId={}, userId={}, expiresAt={}", sessionId, userId, expiresAt);
+        log.info("创建阶段一确认会话: sessionId={}, userId={}, stage=INFO_CONFIRM, expiresAt={}", sessionId, userId, expiresAt);
         return card;
     }
 
@@ -74,21 +90,25 @@ public class ConfirmationService {
     public Map<String, Object> confirm(String sessionId, Long userId) {
         ConfirmationSession session = findValidSession(sessionId, userId);
 
+        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+        Reminder reminder = createReminder(userId, parsedData, com.dormrepair.remindme.enums.ConfirmStatus.CONFIRMED);
+
         session.setStatus(SessionStatus.CONFIRMED);
+        session.setStage("REMINDER_EXECUTE");
+        session.setReminderId(reminder.getId());
         confirmationRepository.save(session);
 
-        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
-        Reminder reminder = createReminder(userId, parsedData);
+        String successMessage = buildConfirmSuccessMessage(reminder);
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
-        result.put("message", "✅ 提醒已创建");
+        result.put("message", successMessage);
         result.put("reminderId", reminder.getId());
         result.put("title", reminder.getTitle());
         result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
 
         pushUserMessage(userId, "success", result);
-        log.info("确认创建提醒: sessionId={}, reminderId={}", sessionId, reminder.getId());
+        log.info("阶段一确认: sessionId={}, userId={}, reminderId={}", sessionId, userId, reminder.getId());
 
         return result;
     }
@@ -121,8 +141,19 @@ public class ConfirmationService {
             parsedDataJson = "{}";
         }
 
+        LocalDateTime parsedTime = null;
+        String remindTimeStr = (String) newParsedData.get("remindTime");
+        if (remindTimeStr != null) {
+            parsedTime = LocalDateTime.parse(remindTimeStr, FORMATTER);
+        }
+
         session.setOriginalInput(newInput);
         session.setParsedData(parsedDataJson);
+        session.setParsedTitle((String) newParsedData.get("title"));
+        session.setParsedTime(parsedTime);
+        session.setParsedLocation((String) newParsedData.get("location"));
+        session.setParsedPriority((String) newParsedData.getOrDefault("priority", "NORMAL"));
+        session.setParsedAdvanceMinutes((Integer) newParsedData.getOrDefault("advanceMinutes", 10));
         session.setRetryCount(session.getRetryCount() + 1);
         session.setExpiresAt(LocalDateTime.now().plusSeconds(TIMEOUT_SECONDS));
         confirmationRepository.save(session);
@@ -130,7 +161,7 @@ public class ConfirmationService {
         ConfirmationCardResponse card = buildConfirmationCard(session, newParsedData);
         pushConfirmationCard(userId, card);
 
-        log.info("重新解析确认会话: sessionId={}, userId={}, retryCount={}", sessionId, userId, session.getRetryCount());
+        log.info("阶段一修改: sessionId={}, userId={}, retryCount={}", sessionId, userId, session.getRetryCount());
         return card;
     }
 
@@ -141,20 +172,50 @@ public class ConfirmationService {
                 SessionStatus.PENDING, LocalDateTime.now());
 
         for (ConfirmationSession session : expired) {
-            session.setStatus(SessionStatus.EXPIRED);
-            confirmationRepository.save(session);
+            if ("INFO_CONFIRM".equals(session.getStage())) {
+                try {
+                    Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+                    Reminder reminder = createReminder(session.getUserId(), parsedData, com.dormrepair.remindme.enums.ConfirmStatus.CONFIRMED);
 
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", false);
-            result.put("message", "⏰ 确认已超时，请重新输入");
+                    session.setStatus(SessionStatus.CONFIRMED);
+                    session.setStage("REMINDER_EXECUTE");
+                    session.setReminderId(reminder.getId());
+                    confirmationRepository.save(session);
 
-            try {
+                    String autoMessage = buildAutoConfirmMessage(reminder);
+
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("success", true);
+                    result.put("message", autoMessage);
+                    result.put("reminderId", reminder.getId());
+                    result.put("title", reminder.getTitle());
+                    result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+
+                    pushUserMessage(session.getUserId(), "timeout_auto_create", result);
+                    log.info("阶段一超时自动确认: sessionId={}, userId={}, reminderId={}", 
+                            session.getSessionId(), session.getUserId(), reminder.getId());
+                } catch (Exception e) {
+                    log.warn("阶段一超时自动确认失败: sessionId={}, error={}", 
+                            session.getSessionId(), e.getMessage());
+                    
+                    session.setStatus(SessionStatus.EXPIRED);
+                    confirmationRepository.save(session);
+                    
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("success", false);
+                    result.put("message", "⏰ 确认已超时，请重新输入");
+                    pushUserMessage(session.getUserId(), "timeout", result);
+                }
+            } else {
+                session.setStatus(SessionStatus.EXPIRED);
+                confirmationRepository.save(session);
+                
+                Map<String, Object> result = new HashMap<>();
+                result.put("success", false);
+                result.put("message", "⏰ 会话已过期");
                 pushUserMessage(session.getUserId(), "timeout", result);
-            } catch (Exception e) {
-                log.warn("推送超时通知失败: userId={}", session.getUserId());
+                log.info("会话过期: sessionId={}, userId={}", session.getSessionId(), session.getUserId());
             }
-
-            log.info("会话超时: sessionId={}, userId={}", session.getSessionId(), session.getUserId());
         }
     }
 
@@ -165,7 +226,7 @@ public class ConfirmationService {
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在或已过期"));
     }
 
-    private Reminder createReminder(Long userId, Map<String, Object> parsedData) {
+    private Reminder createReminder(Long userId, Map<String, Object> parsedData, com.dormrepair.remindme.enums.ConfirmStatus confirmStatus) {
         Reminder reminder = new Reminder();
         reminder.setUserId(userId);
         reminder.setTitle((String) parsedData.get("title"));
@@ -175,7 +236,7 @@ public class ConfirmationService {
         reminder.setLocation((String) parsedData.get("location"));
         reminder.setAdvanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", 10));
         reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.PENDING);
-        reminder.setConfirmStatus(com.dormrepair.remindme.enums.ConfirmStatus.PENDING);
+        reminder.setConfirmStatus(confirmStatus);
         reminder.setSource(com.dormrepair.remindme.enums.ReminderSource.USER_INPUT);
         reminder.setTimezone("Asia/Shanghai");
 
@@ -226,6 +287,427 @@ public class ConfirmationService {
             return objectMapper.readValue(json, Map.class);
         } catch (JsonProcessingException e) {
             return new HashMap<>();
+        }
+    }
+
+    public Optional<ConfirmationSession> findPendingSession(Long userId) {
+        return confirmationRepository.findByUserIdAndStatus(userId, SessionStatus.PENDING)
+                .stream()
+                .filter(s -> s.getExpiresAt() == null || s.getExpiresAt().isAfter(LocalDateTime.now()))
+                .findFirst();
+    }
+
+    @Transactional
+    public void pushExecuteCard(Reminder reminder) {
+        String sessionId = UUID.randomUUID().toString();
+
+        ConfirmationSession session = ConfirmationSession.builder()
+                .sessionId(sessionId)
+                .userId(reminder.getUserId())
+                .reminderId(reminder.getId())
+                .parsedTitle(reminder.getTitle())
+                .parsedTime(reminder.getRemindTime())
+                .parsedLocation(reminder.getLocation())
+                .parsedPriority(reminder.getPriority().name())
+                .parsedAdvanceMinutes(reminder.getAdvanceMinutes())
+                .stage("REMINDER_EXECUTE")
+                .status(SessionStatus.PENDING)
+                .attemptCount(reminder.getConfirmAttempts())
+                .maxAttempts(3)
+                .intervalMinutes(reminder.getAdvanceMinutes() > 0 ? reminder.getAdvanceMinutes() : 10)
+                .build();
+
+        confirmationRepository.save(session);
+
+        Map<String, Object> parsedData = new HashMap<>();
+        parsedData.put("title", reminder.getTitle());
+        parsedData.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+        parsedData.put("location", reminder.getLocation());
+        parsedData.put("priority", reminder.getPriority().name());
+        parsedData.put("advanceMinutes", reminder.getAdvanceMinutes());
+        parsedData.put("attempt", reminder.getConfirmAttempts());
+        parsedData.put("maxAttempts", 3);
+
+        ConfirmationCardResponse card = buildExecuteCard(session, parsedData);
+        pushConfirmationCard(reminder.getUserId(), card);
+
+        log.info("推送阶段二提醒执行卡片: sessionId={}, reminderId={}, userId={}", 
+                sessionId, reminder.getId(), reminder.getUserId());
+    }
+
+    @Transactional
+    public Map<String, Object> handleExecuteLater(String sessionId, Long userId) {
+        ConfirmationSession session = findExecuteSession(sessionId, userId);
+
+        Reminder reminder = reminderRepository.findById(session.getReminderId())
+                .orElseThrow(() -> new IllegalArgumentException("提醒不存在"));
+
+        int newAttemptCount = session.getAttemptCount() + 1;
+        session.setAttemptCount(newAttemptCount);
+        session.setExpiresAt(LocalDateTime.now().plusMinutes(session.getIntervalMinutes()));
+        confirmationRepository.save(session);
+
+        Map<String, Object> result = new HashMap<>();
+
+        if (newAttemptCount >= session.getMaxAttempts()) {
+            reminder.setConfirmStatus(com.dormrepair.remindme.enums.ConfirmStatus.DEFAULTED);
+            reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.COMPLETED);
+            session.setStatus(SessionStatus.EXPIRED);
+            confirmationRepository.save(session);
+            reminderRepository.save(reminder);
+
+            result.put("success", true);
+            result.put("message", "⏰ 已自动确认（3次稍后未响应）");
+            pushUserMessage(userId, "execute_auto_confirm", result);
+            log.info("阶段二自动确认(3次稍后): sessionId={}, reminderId={}", sessionId, reminder.getId());
+        } else {
+            result.put("success", true);
+            result.put("message", "⏰ 已推迟，" + session.getIntervalMinutes() + "分钟后再次提醒");
+            pushUserMessage(userId, "execute_later", result);
+            log.info("阶段二稍后: sessionId={}, reminderId={}, attempt={}/{}", 
+                    sessionId, reminder.getId(), newAttemptCount, session.getMaxAttempts());
+        }
+
+        return result;
+    }
+
+    @Transactional
+    public Map<String, Object> handleExecuteConfirm(String sessionId, Long userId) {
+        ConfirmationSession session = findExecuteSession(sessionId, userId);
+
+        Reminder reminder = reminderRepository.findById(session.getReminderId())
+                .orElseThrow(() -> new IllegalArgumentException("提醒不存在"));
+
+        reminder.setConfirmStatus(com.dormrepair.remindme.enums.ConfirmStatus.CONFIRMED);
+        reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.COMPLETED);
+        session.setStatus(SessionStatus.CONFIRMED);
+
+        reminderRepository.save(reminder);
+        confirmationRepository.save(session);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "✅ 提醒已完成");
+        pushUserMessage(userId, "execute_success", result);
+
+        log.info("阶段二确认完成: sessionId={}, reminderId={}", sessionId, reminder.getId());
+        return result;
+    }
+
+    @Transactional
+    public Map<String, Object> handleExecuteCancel(String sessionId, Long userId) {
+        ConfirmationSession session = findExecuteSession(sessionId, userId);
+
+        Reminder reminder = reminderRepository.findById(session.getReminderId())
+                .orElseThrow(() -> new IllegalArgumentException("提醒不存在"));
+
+        reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.CANCELLED);
+        reminder.setConfirmStatus(com.dormrepair.remindme.enums.ConfirmStatus.CANCELLED);
+        session.setStatus(SessionStatus.CANCELLED);
+
+        reminderRepository.save(reminder);
+        confirmationRepository.save(session);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "❌ 提醒已取消");
+        pushUserMessage(userId, "execute_cancelled", result);
+
+        log.info("阶段二取消: sessionId={}, reminderId={}", sessionId, reminder.getId());
+        return result;
+    }
+
+    private ConfirmationSession findExecuteSession(String sessionId, Long userId) {
+        return confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                .filter(s -> s.getStatus() == SessionStatus.PENDING)
+                .filter(s -> "REMINDER_EXECUTE".equals(s.getStage()))
+                .orElseThrow(() -> new IllegalArgumentException("执行会话不存在或已过期"));
+    }
+
+    private ConfirmationCardResponse buildExecuteCard(ConfirmationSession session, Map<String, Object> parsedData) {
+        ConfirmationData data = ConfirmationData.builder()
+                .sessionId(session.getSessionId())
+                .title((String) parsedData.get("title"))
+                .remindTime((String) parsedData.get("remindTime"))
+                .priority((String) parsedData.get("priority"))
+                .location((String) parsedData.get("location"))
+                .advanceMinutes((Integer) parsedData.get("advanceMinutes"))
+                .build();
+
+        List<Action> actions = Arrays.asList(
+                Action.builder().id("confirm").label("✅ 知道了").style("primary").build(),
+                Action.builder().id("later").label("⏰ 稍后提醒").style("warning").build(),
+                Action.builder().id("cancel").label("❌ 取消").style("danger").build()
+        );
+
+        return ConfirmationCardResponse.builder()
+                .type("execute_card")
+                .message("🔔 叮！该执行提醒了：")
+                .data(data)
+                .actions(actions)
+                .timeout(session.getIntervalMinutes() * 60)
+                .expiresAt(session.getExpiresAt() != null ? session.getExpiresAt().format(ISO_FORMATTER) : null)
+                .build();
+    }
+
+    public Map<String, Object> getSessionData(String sessionId) {
+        return confirmationRepository.findBySessionId(sessionId)
+                .map(session -> {
+                    Map<String, Object> data = new HashMap<>();
+                    data.put("sessionId", session.getSessionId());
+                    data.put("title", session.getParsedTitle());
+                    data.put("remindTime", session.getParsedTime() != null ? session.getParsedTime().format(FORMATTER) : null);
+                    data.put("location", session.getParsedLocation());
+                    data.put("priority", session.getParsedPriority());
+                    data.put("advanceMinutes", session.getParsedAdvanceMinutes());
+                    return data;
+                })
+                .orElse(new HashMap<>());
+    }
+
+    private String buildConfirmSuccessMessage(Reminder reminder) {
+        String title = reminder.getTitle();
+        String remindTime = reminder.getRemindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+        return "✅ 已创建提醒：\"" + title + "\"，" + remindTime + " 执行\n" +
+               "⏰ 我将在 " + remindTime + " 提醒您" + title;
+    }
+
+    private String buildAutoConfirmMessage(Reminder reminder) {
+        String title = reminder.getTitle();
+        String remindTime = reminder.getRemindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+        return "⏳ 3分钟未确认，已自动确认提醒：\"" + title + "\"，" + remindTime + " 执行\n" +
+               "⏰ 我将在 " + remindTime + " 提醒您" + title;
+    }
+
+    public List<ConfirmationSession> getPendingSessions(Long userId) {
+        return confirmationRepository.findByUserIdAndStatus(userId, SessionStatus.PENDING)
+                .stream()
+                .filter(s -> "INFO_CONFIRM".equals(s.getStage()))
+                .filter(s -> s.getExpiresAt() != null && s.getExpiresAt().isAfter(LocalDateTime.now()))
+                .sorted((a, b) -> a.getCreatedAt().compareTo(b.getCreatedAt()))
+                .toList();
+    }
+
+    public ConfirmationSession getLatestPendingSession(Long userId) {
+        List<ConfirmationSession> sessions = getPendingSessions(userId);
+        if (sessions.isEmpty()) {
+            return null;
+        }
+        return sessions.get(sessions.size() - 1);
+    }
+
+    @Transactional
+    public Reminder confirmByTitle(Long userId, String keyword) {
+        List<ConfirmationSession> sessions = getPendingSessions(userId);
+        if (sessions.isEmpty()) {
+            throw new IllegalArgumentException("当前没有待确认的行程");
+        }
+
+        ConfirmationSession targetSession;
+        if (keyword == null || keyword.trim().isEmpty()) {
+            targetSession = sessions.get(sessions.size() - 1);
+        } else {
+            final String searchKeyword = keyword.trim();
+            targetSession = sessions.stream()
+                    .filter(s -> s.getParsedTitle() != null && s.getParsedTitle().contains(searchKeyword))
+                    .findFirst()
+                    .orElseThrow(() -> new IllegalArgumentException("未找到匹配的行程：" + searchKeyword));
+        }
+
+        return createReminderFromSession(targetSession);
+    }
+
+    @Transactional
+    public boolean cancelByTitle(Long userId, String keyword) {
+        List<ConfirmationSession> sessions = getPendingSessions(userId);
+        if (sessions.isEmpty()) {
+            return false;
+        }
+
+        ConfirmationSession targetSession;
+        if (keyword == null || keyword.trim().isEmpty()) {
+            targetSession = sessions.get(sessions.size() - 1);
+        } else {
+            final String searchKeyword = keyword.trim();
+            targetSession = sessions.stream()
+                    .filter(s -> s.getParsedTitle() != null && s.getParsedTitle().contains(searchKeyword))
+                    .findFirst()
+                    .orElse(null);
+        }
+
+        if (targetSession == null) {
+            return false;
+        }
+
+        targetSession.setStatus(SessionStatus.CANCELLED);
+        confirmationRepository.save(targetSession);
+        log.info("取消行程: sessionId={}, userId={}, title={}", targetSession.getSessionId(), userId, targetSession.getParsedTitle());
+        return true;
+    }
+
+    @Transactional
+    public List<Reminder> confirmAll(Long userId) {
+        List<ConfirmationSession> sessions = getPendingSessions(userId);
+        if (sessions.isEmpty()) {
+            throw new IllegalArgumentException("当前没有待确认的行程");
+        }
+
+        return sessions.stream()
+                .map(this::createReminderFromSession)
+                .toList();
+    }
+
+    @Transactional
+    public int cancelAll(Long userId) {
+        List<ConfirmationSession> sessions = getPendingSessions(userId);
+        if (sessions.isEmpty()) {
+            return 0;
+        }
+
+        sessions.forEach(s -> s.setStatus(SessionStatus.CANCELLED));
+        confirmationRepository.saveAll(sessions);
+        log.info("一键取消所有行程: userId={}, count={}", userId, sessions.size());
+        return sessions.size();
+    }
+
+    @Transactional
+    public Reminder confirmSingle(Long userId, String sessionId) {
+        ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                .filter(s -> s.getStatus() == SessionStatus.PENDING)
+                .filter(s -> "INFO_CONFIRM".equals(s.getStage()))
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在或已过期"));
+
+        return createReminderFromSession(session);
+    }
+
+    @Transactional
+    public boolean cancelSingle(Long userId, String sessionId) {
+        return confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                .filter(s -> s.getStatus() == SessionStatus.PENDING)
+                .filter(s -> "INFO_CONFIRM".equals(s.getStage()))
+                .map(session -> {
+                    session.setStatus(SessionStatus.CANCELLED);
+                    confirmationRepository.save(session);
+                    log.info("取消单个行程: sessionId={}, userId={}", sessionId, userId);
+                    return true;
+                })
+                .orElse(false);
+    }
+
+    private Reminder createReminderFromSession(ConfirmationSession session) {
+        Reminder reminder = new Reminder();
+        reminder.setUserId(session.getUserId());
+        reminder.setTitle(session.getParsedTitle());
+        reminder.setRemindTime(session.getParsedTime());
+        
+        String priorityStr = session.getParsedPriority();
+        if (priorityStr == null) {
+            priorityStr = "NORMAL";
+        }
+        reminder.setPriority(com.dormrepair.remindme.enums.Priority.valueOf(priorityStr.toUpperCase()));
+        
+        reminder.setLocation(session.getParsedLocation());
+        reminder.setAdvanceMinutes(session.getParsedAdvanceMinutes() != null ? session.getParsedAdvanceMinutes() : 10);
+        reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.PENDING);
+        reminder.setConfirmStatus(com.dormrepair.remindme.enums.ConfirmStatus.PENDING);
+        reminder.setSource(com.dormrepair.remindme.enums.ReminderSource.USER_INPUT);
+        reminder.setTimezone("Asia/Shanghai");
+
+        Reminder savedReminder = reminderRepository.save(reminder);
+
+        session.setStatus(SessionStatus.CONFIRMED);
+        session.setStage("REMINDER_EXECUTE");
+        session.setReminderId(savedReminder.getId());
+        confirmationRepository.save(session);
+
+        log.info("从会话创建提醒: sessionId={}, userId={}, reminderId={}, title={}", 
+                session.getSessionId(), session.getUserId(), savedReminder.getId(), session.getParsedTitle());
+        
+        return savedReminder;
+    }
+
+    public void pushSingleConfirmCard(Long userId, ConfirmationSession session) {
+        Map<String, Object> cardData = new HashMap<>();
+        cardData.put("type", "single_confirm_card");
+        cardData.put("sessionId", session.getSessionId());
+        cardData.put("title", session.getParsedTitle());
+        
+        String timeStr;
+        if (session.getParsedTime() != null) {
+            LocalDateTime now = LocalDateTime.now();
+            if (session.getParsedTime().toLocalDate().equals(now.toLocalDate())) {
+                timeStr = session.getParsedTime().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+            } else {
+                timeStr = session.getParsedTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+            }
+        } else {
+            timeStr = "未设置";
+        }
+        cardData.put("remindTime", timeStr);
+        cardData.put("location", session.getParsedLocation());
+        cardData.put("expiresAt", session.getExpiresAt() != null ? session.getExpiresAt().format(ISO_FORMATTER) : null);
+
+        pushMessage(userId, cardData);
+    }
+
+    public void pushMultiConfirmCard(Long userId, List<ConfirmationSession> sessions) {
+        Map<String, Object> cardData = new HashMap<>();
+        cardData.put("type", "multi_confirm_card");
+        cardData.put("count", sessions.size());
+        
+        List<Map<String, Object>> items = sessions.stream()
+                .map(session -> {
+                    Map<String, Object> item = new HashMap<>();
+                    item.put("sessionId", session.getSessionId());
+                    item.put("title", session.getParsedTitle());
+                    
+                    String timeStr;
+                    if (session.getParsedTime() != null) {
+                        timeStr = session.getParsedTime().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+                    } else {
+                        timeStr = "未设置";
+                    }
+                    item.put("remindTime", timeStr);
+                    return item;
+                })
+                .toList();
+        
+        cardData.put("items", items);
+
+        pushMessage(userId, cardData);
+    }
+
+    public void pushPendingSummary(Long userId) {
+        List<ConfirmationSession> sessions = getPendingSessions(userId);
+        if (sessions.isEmpty()) {
+            return;
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("⏳ 您有 ").append(sessions.size()).append(" 个待确认行程：\n");
+        
+        int index = 1;
+        for (ConfirmationSession session : sessions) {
+            String timeStr = session.getParsedTime() != null 
+                    ? session.getParsedTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) 
+                    : "未设置";
+            sb.append(index++).append(". ").append(session.getParsedTitle()).append(" - ").append(timeStr).append("\n");
+        }
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("type", "pending_summary");
+        data.put("message", sb.toString().trim());
+        data.put("count", sessions.size());
+
+        pushMessage(userId, data);
+    }
+
+    private void pushMessage(Long userId, Map<String, Object> data) {
+        try {
+            String json = objectMapper.writeValueAsString(data);
+            messagingTemplate.convertAndSendToUser(String.valueOf(userId), "/topic/messages", json);
+        } catch (JsonProcessingException e) {
+            log.error("推送消息失败: userId={}, error={}", userId, e.getMessage());
         }
     }
 }

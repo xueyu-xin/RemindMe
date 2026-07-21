@@ -12,6 +12,8 @@ import java.util.Optional;
 @Repository
 public interface ConfirmationRepository extends JpaRepository<ConfirmationSession, String> {
 
+    Optional<ConfirmationSession> findBySessionId(String sessionId);
+
     Optional<ConfirmationSession> findBySessionIdAndUserId(String sessionId, Long userId);
 
     List<ConfirmationSession> findByUserIdAndStatus(Long userId, SessionStatus status);
