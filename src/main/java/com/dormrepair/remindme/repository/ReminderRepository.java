@@ -37,4 +37,10 @@ public interface ReminderRepository extends JpaRepository<Reminder, Long> {
     List<Reminder> findByUserIdAndStatusAndExecutionStatus(Long userId, ReminderStatus status, ExecutionStatus executionStatus);
 
     List<Reminder> findByUserIdAndStatusAndConfirmStatusAndExecutionStatus(Long userId, ReminderStatus status, ConfirmStatus confirmStatus, ExecutionStatus executionStatus);
+
+    List<Reminder> findByStatusAndConfirmStatusAndExecutionStatusAndRemindTimeBefore(
+            ReminderStatus status, ConfirmStatus confirmStatus, ExecutionStatus executionStatus, LocalDateTime before);
+
+    List<Reminder> findByStatusAndConfirmStatusAndExecutionStatusAndConfirmAttemptsGreaterThanEqual(
+            ReminderStatus status, ConfirmStatus confirmStatus, ExecutionStatus executionStatus, Integer minAttempts);
 }
