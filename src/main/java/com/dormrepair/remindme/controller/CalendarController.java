@@ -4,6 +4,7 @@ import com.dormrepair.remindme.dto.response.CalendarResponse;
 import com.dormrepair.remindme.dto.response.PeriodStatusResponse;
 import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.entity.User;
+import com.dormrepair.remindme.enums.ExecutionStatus;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.repository.UserRepository;
 import com.dormrepair.remindme.service.PeriodService;
@@ -124,7 +125,8 @@ public class CalendarController {
 
         boolean hasPendingReminder = dayReminders.stream()
                 .anyMatch(r -> r.getStatus().name().equals("PENDING") 
-                           && r.getConfirmStatus().name().equals("PENDING"));
+                           && r.getConfirmStatus().name().equals("CONFIRMED")
+                           && r.getExecutionStatus() == ExecutionStatus.PENDING);
 
         String periodStatus = null;
         if (user != null && user.getGender().name().equals("FEMALE")) {

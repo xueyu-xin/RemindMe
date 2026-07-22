@@ -387,13 +387,19 @@
         function connectWebSocket() {
             var socket = new SockJS('/ws');
             stompClient = Stomp.over(socket);
-            stompClient.connect({}, function(frame) {
+            var headers = {};
+                var token = localStorage.getItem('token');
+                if (token) {
+                    headers['Authorization'] = 'Bearer ' + token;
+                }
+                headers['user-id'] = currentUserId;
+                stompClient.connect(headers, function(frame) {
                 console.log('WebSocket连接成功: ' + frame);
-                stompClient.subscribe('/user/topic/confirmations', function(message) {
+                stompClient.subscribe('/topic/confirmations', function(message) {
                     var card = JSON.parse(message.body);
                     showConfirmationCard(card);
                 });
-                stompClient.subscribe('/user/topic/messages', function(message) {
+                stompClient.subscribe('/topic/messages', function(message) {
                     var msg;
                     try {
                         msg = JSON.parse(message.body);
@@ -444,7 +450,7 @@
                 currentConfirmationSessionId = card.data.sessionId;
                 var expiresAt = new Date(card.expiresAt);
                 
-                var html = '<div class="confirmation-card" id="confirmationCard">';
+                var html = '<div class="confirmation-card" id="confirmationCard" data-session-id="' + card.data.sessionId + '">';
                 html += '<div class="card-title">' + card.message + '</div>';
                 html += '<div class="card-info">';
                 html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + card.data.title + '</span></div>';
@@ -459,7 +465,7 @@
                     html += '<button class="action-btn ' + action.style + '" onclick="handleConfirmationAction(\'' + action.id + '\', \'' + card.data.sessionId + '\')">' + action.label + '</button>';
                 });
                 html += '</div>';
-                html += '<div class="card-timer" id="timerText">⏳ 3分钟后未确认自动确认</div>';
+                html += '<div class="card-timer" id="timerText">⏳ 15秒后未确认自动确认</div>';
                 html += '</div>';
                 
                 container.innerHTML = html;
@@ -470,7 +476,7 @@
             if (card.type === 'execute_card') {
                 currentConfirmationSessionId = card.data.sessionId;
                 
-                var html = '<div class="confirmation-card execute-card" id="confirmationCard">';
+                var html = '<div class="confirmation-card execute-card" id="confirmationCard" data-session-id="' + card.data.sessionId + '">';
                 html += '<div class="card-title">' + card.message + '</div>';
                 html += '<div class="card-info">';
                 html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + card.data.title + '</span></div>';
@@ -503,14 +509,135 @@
                 renderMultiConfirmCard(msg);
             } else if (msg.type === 'pending_summary') {
                 addMessage('bot', msg.message);
+            } else if (msg.type === 'timeout_auto_create') {
+                handleTimeoutAutoCreate(msg);
+            } else if (msg.type === 'execute_auto_confirm') {
+                handleExecuteAutoConfirm(msg);
+            } else if (msg.type === 'batch_confirm_result') {
+                handleBatchResult(msg);
+            } else if (msg.type === 'batch_cancel_result') {
+                handleBatchResult(msg);
+            } else if (msg.type === 'card_confirmed') {
+                handleCardConfirmed(msg);
+            } else if (msg.type === 'card_cancelled') {
+                handleCardCancelled(msg);
             } else {
                 addMessage('bot', msg.message || JSON.stringify(msg));
             }
         }
 
+        function handleTimeoutAutoCreate(msg) {
+            if (timerInterval) clearInterval(timerInterval);
+            
+            addMessage('bot', msg.message || '✅ 已自动确认提醒');
+            renderCalendar();
+            
+            // 立即清空卡片，不延迟，避免用户点击过期会话
+            var container = document.getElementById('confirmationContainer');
+            if (container) container.innerHTML = '';
+        }
+
+        function handleExecuteAutoConfirm(msg) {
+            var card = document.getElementById('confirmationCard');
+            if (card) {
+                card.innerHTML = '<div class="card-title">✅ 提醒已自动确认（3次稍后未响应）</div>';
+            }
+            addMessage('bot', msg.message || '✅ 提醒已自动确认');
+            renderCalendar();
+            
+            setTimeout(function() {
+                var container = document.getElementById('confirmationContainer');
+                if (container) container.innerHTML = '';
+            }, 2000);
+        }
+
+        function handleBatchResult(msg) {
+            addMessage('bot', msg.message || '操作完成');
+            renderCalendar();
+        }
+
+        function handleCardConfirmed(msg) {
+            if (timerInterval) clearInterval(timerInterval);
+            
+            var sessionId = msg.sessionId;
+            var title = msg.title || '';
+            var remindTime = msg.remindTime || '';
+            
+            // 查找并移除对应的确认卡片
+            if (sessionId) {
+                // 先尝试按data-session-id查找单张卡片
+                var card = document.querySelector('.confirmation-card[data-session-id="' + sessionId + '"]');
+                if (card) {
+                    card.remove();
+                } else {
+                    // 尝试查找multi-confirm卡片中的单个item
+                    var item = document.getElementById('item-' + sessionId);
+                    if (item) {
+                        item.remove();
+                        // 如果multi卡片中没有更多item，移除整个卡片
+                        var multiCard = document.getElementById('multiConfirmCard');
+                        if (multiCard && multiCard.querySelectorAll('.card-list-item').length === 0) {
+                            multiCard.remove();
+                        }
+                    } else {
+                        // 都找不到，清空整个容器
+                        var container = document.getElementById('confirmationContainer');
+                        if (container) container.innerHTML = '';
+                    }
+                }
+            } else {
+                // 阶段二确认，清除所有卡片
+                var container = document.getElementById('confirmationContainer');
+                if (container) container.innerHTML = '';
+            }
+            
+            // 显示确认成功消息
+            var message = '✅ 已确认：' + title;
+            if (remindTime) {
+                message += '，时间 ' + remindTime;
+            }
+            addMessage('bot', message);
+            
+            // 刷新日历
+            renderCalendar();
+        }
+
+        function handleCardCancelled(msg) {
+            if (timerInterval) clearInterval(timerInterval);
+            
+            var sessionId = msg.sessionId;
+            var title = msg.title || '';
+            
+            // 查找并移除对应的确认卡片
+            if (sessionId) {
+                var card = document.querySelector('.confirmation-card[data-session-id="' + sessionId + '"]');
+                if (card) {
+                    card.remove();
+                } else {
+                    var item = document.getElementById('item-' + sessionId);
+                    if (item) {
+                        item.remove();
+                        var multiCard = document.getElementById('multiConfirmCard');
+                        if (multiCard && multiCard.querySelectorAll('.card-list-item').length === 0) {
+                            multiCard.remove();
+                        }
+                    } else {
+                        var container = document.getElementById('confirmationContainer');
+                        if (container) container.innerHTML = '';
+                    }
+                }
+            } else {
+                var container = document.getElementById('confirmationContainer');
+                if (container) container.innerHTML = '';
+            }
+            
+            // 显示取消消息
+            addMessage('bot', '❌ 已取消：' + title);
+        }
+
         function renderSingleConfirmCard(card) {
             var container = document.getElementById('confirmationContainer');
-            var html = '<div class="confirmation-card" id="singleConfirmCard">';
+            var html = '<div class="confirmation-card" id="singleConfirmCard" data-session-id="' + card.sessionId + '">';
             html += '<div class="card-title">📋 请确认：' + card.title + '</div>';
             html += '<div class="card-info">';
             html += '<div class="info-item">⏰ ' + card.remindTime + '</div>';
@@ -544,15 +671,10 @@
                 });
                 const result = await response.json();
 
-                if (result.success) {
-                    document.getElementById('singleConfirmCard').innerHTML = '<div class="card-title">✅ 已确认</div>';
-                    renderCalendar();
-                    setTimeout(function() {
-                        document.getElementById('confirmationContainer').innerHTML = '';
-                    }, 2000);
-                } else {
+                if (!result.success) {
                     addMessage('bot', '❌ ' + result.message);
                 }
+                // 卡片关闭由WebSocket消息 card_confirmed 处理
             } catch (e) {
                 addMessage('bot', '❌ 网络错误');
             }
@@ -576,21 +698,7 @@
                 const result = await response.json();
 
                 var timerText = document.getElementById('timerText');
-                if (result.success) {
-                    if (timerText) {
-                        timerText.textContent = '✅ 已自动确认';
-                        timerText.classList.remove('warning');
-                    }
-                    var card = document.getElementById('singleConfirmCard');
-                    if (card) {
-                        card.innerHTML = '<div class="card-title">✅ 已自动确认</div>';
-                    }
-                    renderCalendar();
-                    setTimeout(function() {
-                        var container = document.getElementById('confirmationContainer');
-                        if (container) container.innerHTML = '';
-                    }, 2000);
-                } else {
+                if (!result.success) {
                     if (timerText) {
                         timerText.textContent = '❌ 自动确认失败';
                     }
@@ -622,14 +730,10 @@
                 });
                 const result = await response.json();
 
-                if (result.success) {
-                    document.getElementById('singleConfirmCard').innerHTML = '<div class="card-title">❌ 已取消</div>';
-                    setTimeout(function() {
-                        document.getElementById('confirmationContainer').innerHTML = '';
-                    }, 2000);
-                } else {
+                if (!result.success) {
                     addMessage('bot', '❌ ' + result.message);
                 }
+                // 卡片关闭由WebSocket消息处理
             } catch (e) {
                 addMessage('bot', '❌ 网络错误');
             }
@@ -637,7 +741,7 @@
 
         function renderMultiConfirmCard(card) {
             var container = document.getElementById('confirmationContainer');
-            var html = '<div class="confirmation-card" id="multiConfirmCard">';
+            var html = '<div class="confirmation-card" id="multiConfirmCard" data-session-id="multi">';
             html += '<div class="card-title">📋 您有 ' + card.count + ' 个待确认行程，请选择：</div>';
             html += '<div class="card-list">';
             card.items.forEach(function(item, index) {
@@ -678,16 +782,10 @@
                 });
                 const result = await response.json();
 
-                if (result.success) {
-                    var item = document.getElementById('item-' + sessionId);
-                    if (item) {
-                        item.classList.add('disabled');
-                        item.innerHTML = item.innerHTML.replace('✅确认', '✅已确认').replace('❌取消', '');
-                    }
-                    renderCalendar();
-                } else {
+                if (!result.success) {
                     addMessage('bot', '❌ ' + result.message);
                 }
+                // 卡片关闭由WebSocket消息 card_confirmed 处理
             } catch (e) {
                 addMessage('bot', '❌ 网络错误');
             }
@@ -710,15 +808,10 @@
                 });
                 const result = await response.json();
 
-                if (result.success) {
-                    var item = document.getElementById('item-' + sessionId);
-                    if (item) {
-                        item.classList.add('disabled');
-                        item.innerHTML = item.innerHTML.replace('❌取消', '❌已取消').replace('✅确认', '');
-                    }
-                } else {
+                if (!result.success) {
                     addMessage('bot', '❌ ' + result.message);
                 }
+                // 卡片关闭由WebSocket消息处理
             } catch (e) {
                 addMessage('bot', '❌ 网络错误');
             }
@@ -740,13 +833,10 @@
                 });
                 const result = await response.json();
 
-                if (result.success) {
-                    addMessage('bot', result.message);
-                    document.getElementById('confirmationContainer').innerHTML = '';
-                    renderCalendar();
-                } else {
+                if (!result.success) {
                     addMessage('bot', '❌ ' + result.message);
                 }
+                // 卡片关闭由WebSocket消息 card_confirmed / batch_confirm_result 处理
             } catch (e) {
                 addMessage('bot', '❌ 网络错误');
             }
@@ -793,9 +883,7 @@
                 if (timerText) {
                     if (remaining <= 0) {
                         clearInterval(timerInterval);
-                        timerText.textContent = '⏳ 正在自动确认...';
-                        // 调用后端自动确认接口
-                        handleAutoConfirm(sessionId);
+                        timerText.textContent = '⏳ 确认已超时，系统正在自动处理...';
                     } else {
                         timerText.textContent = '⏰ ' + remaining + '秒后自动确认';
                         if (remaining <= 10) {
@@ -989,7 +1077,7 @@
                                 { id: 'cancel', label: '❌ 取消', style: 'danger' }
                             ],
                             timeout: 180,
-                            expiresAt: new Date(Date.now() + 180000).toISOString()
+                            expiresAt: new Date(Date.now() + 15000).toISOString()
                         };
                         showConfirmationCard(card);
                     } catch (e) {
@@ -1008,7 +1096,7 @@
                 .then(response => response.json())
                 .then(data => {
                     var container = document.getElementById('confirmationContainer');
-                    var html = '<div class="confirmation-card" id="confirmationCard">';
+                    var html = '<div class="confirmation-card" id="confirmationCard" data-session-id="' + data.sessionId + '">';
                     html += '<div class="card-title">📋 我帮你解析了提醒信息，请确认：</div>';
                     html += '<div class="card-info">';
                     html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + data.title + '</span></div>';
@@ -1023,7 +1111,7 @@
                     html += '<button class="action-btn warning" onclick="handleConfirmationAction(\'edit\', \'' + data.sessionId + '\')">✏️ 修改</button>';
                     html += '<button class="action-btn danger" onclick="handleConfirmationAction(\'cancel\', \'' + data.sessionId + '\')">❌ 取消</button>';
                     html += '</div>';
-                    html += '<div class="card-timer" id="timerText">⏳ 3分钟后未确认自动确认</div>';
+                    html += '<div class="card-timer" id="timerText">⏳ 15秒后未确认自动确认</div>';
                     html += '</div>';
                     container.innerHTML = html;
                 })
@@ -1111,29 +1199,6 @@
                 });
             } catch (e) { console.error(e); }
         }
-
-        document.getElementById('addForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const data = {
-                userId: currentUserId,
-                title: document.getElementById('title').value,
-                remindTime: document.getElementById('remindTime').value,
-                location: document.getElementById('location').value,
-                priority: document.getElementById('priority').value
-            };
-            
-            try {
-                await fetch('/api/reminders', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(data)
-                });
-                
-                document.getElementById('addForm').reset();
-                loadReminders();
-            } catch (e) { console.error(e); }
-        });
 
         async function confirmReminder(id) {
             await fetch(`/api/reminders/${id}/confirm?userId=${currentUserId}`, { method: 'POST' });
@@ -1255,7 +1320,7 @@
                             { id: 'cancel', label: '❌ 取消', style: 'danger' }
                         ],
                         timeout: 180,
-                        expiresAt: new Date(Date.now() + 180000).toISOString()
+                        expiresAt: new Date(Date.now() + 15000).toISOString()
                     };
                     showConfirmationCard(card);
                 } else if (result.success) {

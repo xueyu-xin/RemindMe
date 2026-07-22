@@ -6,6 +6,7 @@ import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.Confirmatio
 import com.dormrepair.remindme.entity.ConfirmationSession;
 import com.dormrepair.remindme.entity.ConfirmationSession.SessionStatus;
 import com.dormrepair.remindme.entity.Reminder;
+import com.dormrepair.remindme.enums.ExecutionStatus;
 import com.dormrepair.remindme.repository.ConfirmationRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -13,6 +14,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,6 +25,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -38,7 +44,7 @@ public class ConfirmationService {
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-    private static final int TIMEOUT_SECONDS = 180;
+    private static final int TIMEOUT_SECONDS = 15;
 
     @Transactional
     public ConfirmationCardResponse createSession(Long userId, String originalInput, Map<String, Object> parsedData) {
@@ -165,7 +171,7 @@ public class ConfirmationService {
         return card;
     }
 
-    @Scheduled(fixedRate = 60000)
+    @Scheduled(fixedRate = 15000)
     @Transactional
     public void cleanupExpiredSessions() {
         List<ConfirmationSession> expired = confirmationRepository.findByStatusAndExpiresAtBefore(
@@ -174,13 +180,8 @@ public class ConfirmationService {
         for (ConfirmationSession session : expired) {
             if ("INFO_CONFIRM".equals(session.getStage())) {
                 try {
-                    Map<String, Object> parsedData = parseParsedData(session.getParsedData());
-                    Reminder reminder = createReminder(session.getUserId(), parsedData, com.dormrepair.remindme.enums.ConfirmStatus.CONFIRMED);
-
-                    session.setStatus(SessionStatus.CONFIRMED);
-                    session.setStage("REMINDER_EXECUTE");
-                    session.setReminderId(reminder.getId());
-                    confirmationRepository.save(session);
+                    // 使用 createReminderFromSession 触发 card_confirmed 推送
+                    Reminder reminder = createReminderFromSession(session);
 
                     String autoMessage = buildAutoConfirmMessage(reminder);
 
@@ -188,9 +189,11 @@ public class ConfirmationService {
                     result.put("success", true);
                     result.put("message", autoMessage);
                     result.put("reminderId", reminder.getId());
+                    result.put("sessionId", session.getSessionId());
                     result.put("title", reminder.getTitle());
                     result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
 
+                    // 保留 timeout_auto_create 消息用于向后兼容
                     pushUserMessage(session.getUserId(), "timeout_auto_create", result);
                     log.info("阶段一超时自动确认: sessionId={}, userId={}, reminderId={}", 
                             session.getSessionId(), session.getUserId(), reminder.getId());
@@ -237,6 +240,7 @@ public class ConfirmationService {
         reminder.setAdvanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", 10));
         reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.PENDING);
         reminder.setConfirmStatus(confirmStatus);
+        reminder.setExecutionStatus(ExecutionStatus.PENDING);
         reminder.setSource(com.dormrepair.remindme.enums.ReminderSource.USER_INPUT);
         reminder.setTimezone("Asia/Shanghai");
 
@@ -271,14 +275,14 @@ public class ConfirmationService {
     }
 
     private void pushConfirmationCard(Long userId, ConfirmationCardResponse card) {
-        messagingTemplate.convertAndSendToUser(String.valueOf(userId), "/topic/confirmations", card);
+        messagingTemplate.convertAndSend("/topic/confirmations", card);
     }
 
     private void pushUserMessage(Long userId, String type, Map<String, Object> data) {
         Map<String, Object> message = new HashMap<>();
         message.put("type", type);
         message.putAll(data);
-        messagingTemplate.convertAndSendToUser(String.valueOf(userId), "/topic/confirmations", message);
+        messagingTemplate.convertAndSend("/topic/messages", message);
     }
 
     @SuppressWarnings("unchecked")
@@ -350,16 +354,16 @@ public class ConfirmationService {
         Map<String, Object> result = new HashMap<>();
 
         if (newAttemptCount >= session.getMaxAttempts()) {
-            reminder.setConfirmStatus(com.dormrepair.remindme.enums.ConfirmStatus.DEFAULTED);
-            reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.COMPLETED);
+            reminder.setExecutionStatus(ExecutionStatus.DEFAULTED);
+            reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.SENT);
             session.setStatus(SessionStatus.EXPIRED);
             confirmationRepository.save(session);
             reminderRepository.save(reminder);
 
             result.put("success", true);
-            result.put("message", "⏰ 已自动确认（3次稍后未响应）");
+            result.put("message", "⏰ 已自动确认执行（3次稍后未响应）");
             pushUserMessage(userId, "execute_auto_confirm", result);
-            log.info("阶段二自动确认(3次稍后): sessionId={}, reminderId={}", sessionId, reminder.getId());
+            log.info("阶段二自动确认执行(3次稍后): sessionId={}, reminderId={}", sessionId, reminder.getId());
         } else {
             result.put("success", true);
             result.put("message", "⏰ 已推迟，" + session.getIntervalMinutes() + "分钟后再次提醒");
@@ -378,8 +382,8 @@ public class ConfirmationService {
         Reminder reminder = reminderRepository.findById(session.getReminderId())
                 .orElseThrow(() -> new IllegalArgumentException("提醒不存在"));
 
-        reminder.setConfirmStatus(com.dormrepair.remindme.enums.ConfirmStatus.CONFIRMED);
-        reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.COMPLETED);
+        reminder.setExecutionStatus(ExecutionStatus.CONFIRMED);
+        reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.SENT);
         session.setStatus(SessionStatus.CONFIRMED);
 
         reminderRepository.save(reminder);
@@ -402,7 +406,7 @@ public class ConfirmationService {
                 .orElseThrow(() -> new IllegalArgumentException("提醒不存在"));
 
         reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.CANCELLED);
-        reminder.setConfirmStatus(com.dormrepair.remindme.enums.ConfirmStatus.CANCELLED);
+        reminder.setExecutionStatus(ExecutionStatus.CANCELLED);
         session.setStatus(SessionStatus.CANCELLED);
 
         reminderRepository.save(reminder);
@@ -475,7 +479,7 @@ public class ConfirmationService {
     private String buildAutoConfirmMessage(Reminder reminder) {
         String title = reminder.getTitle();
         String remindTime = reminder.getRemindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
-        return "⏳ 3分钟未确认，已自动确认提醒：\"" + title + "\"，" + remindTime + " 执行\n" +
+        return "⏳ 15秒未确认，已自动确认提醒：\"" + title + "\"，" + remindTime + " 执行\n" +
                "⏰ 我将在 " + remindTime + " 提醒您" + title;
     }
 
@@ -498,23 +502,65 @@ public class ConfirmationService {
 
     @Transactional
     public Reminder confirmByTitle(Long userId, String keyword) {
+        // 阶段一：查询待确认创建的会话
         List<ConfirmationSession> sessions = getPendingSessions(userId);
-        if (sessions.isEmpty()) {
+        
+        if (!sessions.isEmpty()) {
+            ConfirmationSession targetSession;
+            if (keyword == null || keyword.trim().isEmpty()) {
+                targetSession = sessions.get(sessions.size() - 1);
+            } else {
+                final String searchKeyword = keyword.trim();
+                targetSession = sessions.stream()
+                        .filter(s -> s.getParsedTitle() != null && s.getParsedTitle().contains(searchKeyword))
+                        .findFirst()
+                        .orElse(null);
+            }
+            
+            if (targetSession != null) {
+                return createReminderFromSession(targetSession);
+            }
+        }
+
+        // 阶段二：查询待执行确认的提醒
+        List<Reminder> pendingReminders = reminderRepository
+                .findByUserIdAndStatusAndConfirmStatusAndExecutionStatus(
+                        userId, 
+                        com.dormrepair.remindme.enums.ReminderStatus.PENDING, 
+                        com.dormrepair.remindme.enums.ConfirmStatus.CONFIRMED, 
+                        ExecutionStatus.PENDING);
+        
+        if (pendingReminders.isEmpty()) {
             throw new IllegalArgumentException("当前没有待确认的行程");
         }
 
-        ConfirmationSession targetSession;
+        Reminder targetReminder;
         if (keyword == null || keyword.trim().isEmpty()) {
-            targetSession = sessions.get(sessions.size() - 1);
+            targetReminder = pendingReminders.get(pendingReminders.size() - 1);
         } else {
             final String searchKeyword = keyword.trim();
-            targetSession = sessions.stream()
-                    .filter(s -> s.getParsedTitle() != null && s.getParsedTitle().contains(searchKeyword))
+            targetReminder = pendingReminders.stream()
+                    .filter(r -> r.getTitle() != null && r.getTitle().contains(searchKeyword))
                     .findFirst()
                     .orElseThrow(() -> new IllegalArgumentException("未找到匹配的行程：" + searchKeyword));
         }
 
-        return createReminderFromSession(targetSession);
+        // 执行阶段二确认
+        targetReminder.setExecutionStatus(ExecutionStatus.CONFIRMED);
+        targetReminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.SENT);
+        reminderRepository.save(targetReminder);
+
+        log.info("阶段二确认执行: userId={}, reminderId={}, title={}", userId, targetReminder.getId(), targetReminder.getTitle());
+        
+        // 推送阶段二确认消息，通知前端关闭卡片
+        Map<String, Object> data = new HashMap<>();
+        data.put("sessionId", null);
+        data.put("title", targetReminder.getTitle());
+        data.put("remindTime", targetReminder.getRemindTime() != null ? 
+                targetReminder.getRemindTime().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) : null);
+        pushUserMessage(userId, "card_confirmed", data);
+        
+        return targetReminder;
     }
 
     @Transactional
@@ -552,9 +598,17 @@ public class ConfirmationService {
             throw new IllegalArgumentException("当前没有待确认的行程");
         }
 
-        return sessions.stream()
+        List<Reminder> reminders = sessions.stream()
                 .map(this::createReminderFromSession)
                 .toList();
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "✅ 已确认全部 " + reminders.size() + " 个行程");
+        result.put("count", reminders.size());
+        pushUserMessage(userId, "batch_confirm_result", result);
+
+        return reminders;
     }
 
     @Transactional
@@ -567,6 +621,13 @@ public class ConfirmationService {
         sessions.forEach(s -> s.setStatus(SessionStatus.CANCELLED));
         confirmationRepository.saveAll(sessions);
         log.info("一键取消所有行程: userId={}, count={}", userId, sessions.size());
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "❌ 已取消全部 " + sessions.size() + " 个行程");
+        result.put("count", sessions.size());
+        pushUserMessage(userId, "batch_cancel_result", result);
+
         return sessions.size();
     }
 
@@ -589,6 +650,15 @@ public class ConfirmationService {
                     session.setStatus(SessionStatus.CANCELLED);
                     confirmationRepository.save(session);
                     log.info("取消单个行程: sessionId={}, userId={}", sessionId, userId);
+                    
+                    // 推送取消成功消息，通知前端关闭卡片
+                    Map<String, Object> data = new HashMap<>();
+                    data.put("sessionId", session.getSessionId());
+                    data.put("title", session.getParsedTitle());
+                    data.put("remindTime", session.getParsedTime() != null ? 
+                            session.getParsedTime().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) : null);
+                    pushUserMessage(userId, "card_cancelled", data);
+                    
                     return true;
                 })
                 .orElse(false);
@@ -623,7 +693,22 @@ public class ConfirmationService {
         log.info("从会话创建提醒: sessionId={}, userId={}, reminderId={}, title={}", 
                 session.getSessionId(), session.getUserId(), savedReminder.getId(), session.getParsedTitle());
         
+        // 推送卡片确认消息，通知前端关闭卡片
+        pushCardConfirmed(session.getUserId(), session.getSessionId(), 
+                session.getParsedTitle(), session.getParsedTime());
+        
         return savedReminder;
+    }
+
+    private void pushCardConfirmed(Long userId, String sessionId, String title, LocalDateTime remindTime) {
+        if (userId == null || sessionId == null) {
+            return;
+        }
+        Map<String, Object> data = new HashMap<>();
+        data.put("sessionId", sessionId);
+        data.put("title", title);
+        data.put("remindTime", remindTime != null ? remindTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) : null);
+        pushUserMessage(userId, "card_confirmed", data);
     }
 
     public void pushSingleConfirmCard(Long userId, ConfirmationSession session) {

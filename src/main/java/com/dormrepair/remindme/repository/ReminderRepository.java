@@ -2,6 +2,7 @@ package com.dormrepair.remindme.repository;
 
 import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.enums.ConfirmStatus;
+import com.dormrepair.remindme.enums.ExecutionStatus;
 import com.dormrepair.remindme.enums.ReminderStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -32,4 +33,8 @@ public interface ReminderRepository extends JpaRepository<Reminder, Long> {
             @Param("userId") Long userId,
             @Param("now") LocalDateTime now
     );
+
+    List<Reminder> findByUserIdAndStatusAndExecutionStatus(Long userId, ReminderStatus status, ExecutionStatus executionStatus);
+
+    List<Reminder> findByUserIdAndStatusAndConfirmStatusAndExecutionStatus(Long userId, ReminderStatus status, ConfirmStatus confirmStatus, ExecutionStatus executionStatus);
 }

@@ -1,6 +1,7 @@
 package com.dormrepair.remindme.entity;
 
 import com.dormrepair.remindme.enums.ConfirmStatus;
+import com.dormrepair.remindme.enums.ExecutionStatus;
 import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.enums.ReminderSource;
 import com.dormrepair.remindme.enums.ReminderStatus;
@@ -60,6 +61,10 @@ public class Reminder {
     @Column(name = "confirm_status", nullable = false)
     @Enumerated(EnumType.STRING)
     private ConfirmStatus confirmStatus = ConfirmStatus.PENDING;
+
+    @Column(name = "execution_status", nullable = false)
+    @Enumerated(EnumType.STRING)
+    private ExecutionStatus executionStatus = ExecutionStatus.PENDING;
 
     @Column(name = "confirm_attempts", nullable = false)
     private Integer confirmAttempts = 0;

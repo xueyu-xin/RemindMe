@@ -166,7 +166,9 @@ public class ChatController {
 
         Map<String, Object> parsedData = new HashMap<>();
         parsedData.put("title", result.title());
-        parsedData.put("remindTime", result.remindTime() != null ? result.remindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) : null);
+        // 如果时间为null，使用默认时间（当前时间+10分钟）
+        LocalDateTime remindTime = result.remindTime() != null ? result.remindTime() : LocalDateTime.now().plusMinutes(10);
+        parsedData.put("remindTime", remindTime.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
         parsedData.put("intentType", result.intentType());
         parsedData.put("location", result.location());
         parsedData.put("priority", result.priority());
