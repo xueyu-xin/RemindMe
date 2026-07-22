@@ -464,7 +464,7 @@
                 
                 container.innerHTML = html;
                 
-                startTimer(expiresAt);
+                startTimer(expiresAt, card.data.sessionId);
             }
             
             if (card.type === 'execute_card') {
@@ -554,6 +554,53 @@
                     addMessage('bot', '❌ ' + result.message);
                 }
             } catch (e) {
+                addMessage('bot', '❌ 网络错误');
+            }
+        }
+
+        async function handleAutoConfirm(sessionId) {
+            try {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                const response = await fetch('/api/confirmations/action', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        sessionId: sessionId,
+                        action: 'confirm',
+                        userId: currentUserId
+                    })
+                });
+                const result = await response.json();
+
+                var timerText = document.getElementById('timerText');
+                if (result.success) {
+                    if (timerText) {
+                        timerText.textContent = '✅ 已自动确认';
+                        timerText.classList.remove('warning');
+                    }
+                    var card = document.getElementById('singleConfirmCard');
+                    if (card) {
+                        card.innerHTML = '<div class="card-title">✅ 已自动确认</div>';
+                    }
+                    renderCalendar();
+                    setTimeout(function() {
+                        var container = document.getElementById('confirmationContainer');
+                        if (container) container.innerHTML = '';
+                    }, 2000);
+                } else {
+                    if (timerText) {
+                        timerText.textContent = '❌ 自动确认失败';
+                    }
+                    addMessage('bot', '❌ ' + result.message);
+                }
+            } catch (e) {
+                var timerText = document.getElementById('timerText');
+                if (timerText) {
+                    timerText.textContent = '❌ 网络错误';
+                }
                 addMessage('bot', '❌ 网络错误');
             }
         }
@@ -733,8 +780,10 @@
         }
 
         var timerInterval = null;
-        function startTimer(expiresAt) {
+        var currentTimerSessionId = null;
+        function startTimer(expiresAt, sessionId) {
             if (timerInterval) clearInterval(timerInterval);
+            currentTimerSessionId = sessionId;
             
             timerInterval = setInterval(function() {
                 var now = new Date();
@@ -743,9 +792,10 @@
                 var timerText = document.getElementById('timerText');
                 if (timerText) {
                     if (remaining <= 0) {
-                        timerText.textContent = '⏰ 确认已超时';
-                        timerText.classList.add('warning');
                         clearInterval(timerInterval);
+                        timerText.textContent = '⏳ 正在自动确认...';
+                        // 调用后端自动确认接口
+                        handleAutoConfirm(sessionId);
                     } else {
                         timerText.textContent = '⏰ ' + remaining + '秒后自动确认';
                         if (remaining <= 10) {
