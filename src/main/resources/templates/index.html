@@ -385,21 +385,20 @@
         var currentConfirmationSessionId = null;
 
         function connectWebSocket() {
-            var socket = new SockJS('/ws');
+            var socket = new SockJS('/ws?user-id=' + currentUserId);
             stompClient = Stomp.over(socket);
             var headers = {};
                 var token = localStorage.getItem('token');
                 if (token) {
                     headers['Authorization'] = 'Bearer ' + token;
                 }
-                headers['user-id'] = currentUserId;
                 stompClient.connect(headers, function(frame) {
                 console.log('WebSocket连接成功: ' + frame);
-                stompClient.subscribe('/topic/confirmations', function(message) {
+                stompClient.subscribe('/user/queue/confirmations', function(message) {
                     var card = JSON.parse(message.body);
                     showConfirmationCard(card);
                 });
-                stompClient.subscribe('/topic/messages', function(message) {
+                stompClient.subscribe('/user/queue/messages', function(message) {
                     var msg;
                     try {
                         msg = JSON.parse(message.body);

@@ -6,7 +6,6 @@ import com.dormrepair.remindme.enums.PushChannel;
 import com.dormrepair.remindme.repository.PushLogRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,28 +14,18 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * WebSocket推送服务
+ * 推送服务（含推送日志记录）
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class PushService {
 
-    private final SimpMessagingTemplate messagingTemplate;
+    private final WebSocketPushService webSocketPushService;
     private final PushLogRepository pushLogRepository;
 
-    public void pushToUser(Long userId, String message) {
-        messagingTemplate.convertAndSendToUser(
-                String.valueOf(userId),
-                "/topic/reminders",
-                message
-        );
-        log.info("推送消息给用户: userId={}, message={}", userId, message);
-    }
-
-    public void broadcast(String message) {
-        messagingTemplate.convertAndSend("/topic/public", message);
-        log.info("广播消息: {}", message);
+    public void pushToUser(Long userId, Object data) {
+        webSocketPushService.pushToUser(userId, "/queue/reminders", data);
     }
 
     @Transactional
@@ -49,7 +38,7 @@ public class PushService {
         notification.put("location", reminder.getLocation());
         notification.put("priority", reminder.getPriority());
 
-        pushToUser(reminder.getUserId(), notification.toString());
+        pushToUser(reminder.getUserId(), notification);
 
         PushLog pushLog = new PushLog();
         pushLog.setReminderId(reminder.getId());

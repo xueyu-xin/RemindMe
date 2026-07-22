@@ -6,18 +6,17 @@ import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.Confirmatio
 import com.dormrepair.remindme.entity.ConfirmationSession;
 import com.dormrepair.remindme.entity.ConfirmationSession.SessionStatus;
 import com.dormrepair.remindme.entity.Reminder;
+import com.dormrepair.remindme.enums.ConfirmStatus;
 import com.dormrepair.remindme.enums.ExecutionStatus;
+import com.dormrepair.remindme.enums.Priority;
+import com.dormrepair.remindme.enums.ReminderSource;
+import com.dormrepair.remindme.enums.ReminderStatus;
 import com.dormrepair.remindme.repository.ConfirmationRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
-import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,7 +24,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,8 +37,8 @@ public class ConfirmationService {
 
     private final ConfirmationRepository confirmationRepository;
     private final ReminderRepository reminderRepository;
-    private final SimpMessagingTemplate messagingTemplate;
     private final ObjectMapper objectMapper;
+    private final WebSocketPushService webSocketPushService;
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
@@ -97,7 +95,7 @@ public class ConfirmationService {
         ConfirmationSession session = findValidSession(sessionId, userId);
 
         Map<String, Object> parsedData = parseParsedData(session.getParsedData());
-        Reminder reminder = createReminder(userId, parsedData, com.dormrepair.remindme.enums.ConfirmStatus.CONFIRMED);
+        Reminder reminder = createReminder(userId, parsedData, ConfirmStatus.CONFIRMED);
 
         session.setStatus(SessionStatus.CONFIRMED);
         session.setStage("REMINDER_EXECUTE");
@@ -234,14 +232,14 @@ public class ConfirmationService {
         reminder.setUserId(userId);
         reminder.setTitle((String) parsedData.get("title"));
         reminder.setRemindTime(LocalDateTime.parse((String) parsedData.get("remindTime"), FORMATTER));
-        reminder.setPriority(com.dormrepair.remindme.enums.Priority.valueOf(
+        reminder.setPriority(Priority.valueOf(
                 ((String) parsedData.getOrDefault("priority", "NORMAL")).toUpperCase()));
         reminder.setLocation((String) parsedData.get("location"));
         reminder.setAdvanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", 10));
-        reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.PENDING);
+        reminder.setStatus(ReminderStatus.PENDING);
         reminder.setConfirmStatus(confirmStatus);
         reminder.setExecutionStatus(ExecutionStatus.PENDING);
-        reminder.setSource(com.dormrepair.remindme.enums.ReminderSource.USER_INPUT);
+        reminder.setSource(ReminderSource.USER_INPUT);
         reminder.setTimezone("Asia/Shanghai");
 
         return reminderRepository.save(reminder);
@@ -275,14 +273,14 @@ public class ConfirmationService {
     }
 
     private void pushConfirmationCard(Long userId, ConfirmationCardResponse card) {
-        messagingTemplate.convertAndSend("/topic/confirmations", card);
+        webSocketPushService.pushToUser(userId, "/queue/confirmations", card);
     }
 
     private void pushUserMessage(Long userId, String type, Map<String, Object> data) {
         Map<String, Object> message = new HashMap<>();
         message.put("type", type);
         message.putAll(data);
-        messagingTemplate.convertAndSend("/topic/messages", message);
+        webSocketPushService.pushToUser(userId, "/queue/messages", message);
     }
 
     @SuppressWarnings("unchecked")
@@ -355,7 +353,7 @@ public class ConfirmationService {
 
         if (newAttemptCount >= session.getMaxAttempts()) {
             reminder.setExecutionStatus(ExecutionStatus.DEFAULTED);
-            reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.SENT);
+            reminder.setStatus(ReminderStatus.SENT);
             session.setStatus(SessionStatus.EXPIRED);
             confirmationRepository.save(session);
             reminderRepository.save(reminder);
@@ -383,7 +381,7 @@ public class ConfirmationService {
                 .orElseThrow(() -> new IllegalArgumentException("提醒不存在"));
 
         reminder.setExecutionStatus(ExecutionStatus.CONFIRMED);
-        reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.SENT);
+        reminder.setStatus(ReminderStatus.SENT);
         session.setStatus(SessionStatus.CONFIRMED);
 
         reminderRepository.save(reminder);
@@ -405,7 +403,7 @@ public class ConfirmationService {
         Reminder reminder = reminderRepository.findById(session.getReminderId())
                 .orElseThrow(() -> new IllegalArgumentException("提醒不存在"));
 
-        reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.CANCELLED);
+        reminder.setStatus(ReminderStatus.CANCELLED);
         reminder.setExecutionStatus(ExecutionStatus.CANCELLED);
         session.setStatus(SessionStatus.CANCELLED);
 
@@ -526,8 +524,8 @@ public class ConfirmationService {
         List<Reminder> pendingReminders = reminderRepository
                 .findByUserIdAndStatusAndConfirmStatusAndExecutionStatus(
                         userId, 
-                        com.dormrepair.remindme.enums.ReminderStatus.PENDING, 
-                        com.dormrepair.remindme.enums.ConfirmStatus.CONFIRMED, 
+                        ReminderStatus.PENDING, 
+                        ConfirmStatus.CONFIRMED, 
                         ExecutionStatus.PENDING);
         
         if (pendingReminders.isEmpty()) {
@@ -547,7 +545,7 @@ public class ConfirmationService {
 
         // 执行阶段二确认
         targetReminder.setExecutionStatus(ExecutionStatus.CONFIRMED);
-        targetReminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.SENT);
+        targetReminder.setStatus(ReminderStatus.SENT);
         reminderRepository.save(targetReminder);
 
         log.info("阶段二确认执行: userId={}, reminderId={}, title={}", userId, targetReminder.getId(), targetReminder.getTitle());
@@ -671,17 +669,21 @@ public class ConfirmationService {
         reminder.setRemindTime(session.getParsedTime());
         
         String priorityStr = session.getParsedPriority();
-        if (priorityStr == null) {
+        if (priorityStr == null || priorityStr.isBlank()) {
             priorityStr = "NORMAL";
         }
-        reminder.setPriority(com.dormrepair.remindme.enums.Priority.valueOf(priorityStr.toUpperCase()));
+        try {
+            reminder.setPriority(Priority.valueOf(priorityStr.toUpperCase()));
+        } catch (IllegalArgumentException e) {
+            log.warn("无效的优先级值: {}, 使用默认值 NORMAL", priorityStr);
+            reminder.setPriority(Priority.NORMAL);
+        }
         
         reminder.setLocation(session.getParsedLocation());
         reminder.setAdvanceMinutes(session.getParsedAdvanceMinutes() != null ? session.getParsedAdvanceMinutes() : 10);
-        reminder.setStatus(com.dormrepair.remindme.enums.ReminderStatus.PENDING);
-        reminder.setConfirmStatus(com.dormrepair.remindme.enums.ConfirmStatus.PENDING);
-        reminder.setSource(com.dormrepair.remindme.enums.ReminderSource.USER_INPUT);
-        reminder.setTimezone("Asia/Shanghai");
+        reminder.setStatus(ReminderStatus.PENDING);
+        reminder.setConfirmStatus(ConfirmStatus.PENDING);
+        reminder.setSource(ReminderSource.USER_INPUT);
 
         Reminder savedReminder = reminderRepository.save(reminder);
 
@@ -701,6 +703,7 @@ public class ConfirmationService {
     }
 
     private void pushCardConfirmed(Long userId, String sessionId, String title, LocalDateTime remindTime) {
+        log.info("pushCardConfirmed 被调用: userId={}, sessionId={}", userId, sessionId);
         if (userId == null || sessionId == null) {
             return;
         }
@@ -788,11 +791,6 @@ public class ConfirmationService {
     }
 
     private void pushMessage(Long userId, Map<String, Object> data) {
-        try {
-            String json = objectMapper.writeValueAsString(data);
-            messagingTemplate.convertAndSendToUser(String.valueOf(userId), "/topic/messages", json);
-        } catch (JsonProcessingException e) {
-            log.error("推送消息失败: userId={}, error={}", userId, e.getMessage());
-        }
+        webSocketPushService.pushToUser(userId, "/queue/messages", data);
     }
 }
