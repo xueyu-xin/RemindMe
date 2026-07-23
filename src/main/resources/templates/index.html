@@ -2021,7 +2021,8 @@
             } else {
                 var selected = document.querySelector('.modal-option.active');
                 if (!selected) return;
-                value = selected.getAttribute('data-value');
+                // 将字符串转为数字
+                value = parseInt(selected.getAttribute('data-value'), 10);
             }
 
             var updateData = {};
@@ -2035,9 +2036,16 @@
                 },
                 body: JSON.stringify(updateData)
             })
-            .then(function() {
-                updateProfileDisplay(currentEditField, value);
-                hideModal();
+            .then(function(response) {
+                if (response.ok) {
+                    updateProfileDisplay(currentEditField, value);
+                    hideModal();
+                } else {
+                    alert('修改失败，请重试');
+                }
+            })
+            .catch(function() {
+                alert('网络错误，请重试');
             });
         }
 

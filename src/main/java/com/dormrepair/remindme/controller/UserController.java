@@ -53,17 +53,51 @@ public class UserController {
                         user.setCity((String) updates.get("city"));
                     }
                     if (updates.containsKey("defaultAdvanceMinutes")) {
-                        user.setDefaultAdvanceMinutes(((Number) updates.get("defaultAdvanceMinutes")).intValue());
+                        user.setDefaultAdvanceMinutes(toInt(updates.get("defaultAdvanceMinutes")));
                     }
                     if (updates.containsKey("cycleDays")) {
-                        user.setCycleDays(((Number) updates.get("cycleDays")).intValue());
+                        user.setCycleDays(toInt(updates.get("cycleDays")));
                     }
                     if (updates.containsKey("enablePeriodReminder")) {
-                        user.setEnablePeriodReminder((Boolean) updates.get("enablePeriodReminder"));
+                        user.setEnablePeriodReminder(toBoolean(updates.get("enablePeriodReminder")));
                     }
                     User saved = userService.save(user);
                     return ResponseEntity.ok(saved);
                 })
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    private Integer toInt(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        if (value instanceof String) {
+            try {
+                return Integer.parseInt(((String) value).trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private Boolean toBoolean(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Boolean) {
+            return (Boolean) value;
+        }
+        if (value instanceof String) {
+            String str = ((String) value).trim().toLowerCase();
+            return "true".equals(str) || "1".equals(str) || "yes".equals(str);
+        }
+        if (value instanceof Number) {
+            return ((Number) value).intValue() != 0;
+        }
+        return null;
     }
 }

@@ -66,3 +66,8 @@ logging:
   level:
     com.dormrepair.remindme: DEBUG
     org.hibernate.SQL: WARN
+
+agent:
+  enabled: true  # Agent 开关，设为 false 时回退到原有逻辑
+  max-history: 10  # 最多保留的对话历史条数
+  timeout-seconds: 15  # Agent 处理超时时间

@@ -1,5 +1,7 @@
 package com.dormrepair.remindme.controller;
 
+import com.dormrepair.remindme.agent.AgentResponse;
+import com.dormrepair.remindme.agent.AgentService;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse;
 import com.dormrepair.remindme.entity.ConfirmationSession;
 import com.dormrepair.remindme.enums.IntentType;
@@ -8,6 +10,7 @@ import com.dormrepair.remindme.service.DialogStatsService;
 import com.dormrepair.remindme.service.LLMService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -25,6 +28,10 @@ public class ChatController {
     private final ConfirmationService confirmationService;
     private final LLMService llmService;
     private final DialogStatsService dialogStatsService;
+    private final AgentService agentService;
+
+    @Value("${agent.enabled:false}")
+    private boolean agentEnabled;
 
     @PostMapping("/send")
     public ResponseEntity<Map<String, Object>> sendMessage(@RequestBody Map<String, Object> request) {
@@ -39,6 +46,48 @@ public class ChatController {
         }
 
         text = text.trim();
+
+        // Agent模式：如果启用Agent，调用AgentService处理
+        if (agentEnabled) {
+            try {
+                AgentResponse agentResponse = agentService.processRequest(userId, text);
+                
+                Map<String, Object> response = new HashMap<>();
+                
+                if (agentResponse.isSuccess()) {
+                    switch (agentResponse.getType()) {
+                        case TEXT:
+                            response.put("success", true);
+                            response.put("message", agentResponse.getContent());
+                            response.put("type", "text");
+                            break;
+                        case TOOL_CALL:
+                            response.put("success", true);
+                            response.put("type", "tool_call");
+                            response.put("toolName", agentResponse.getToolName());
+                            response.put("toolArgs", agentResponse.getToolArgs());
+                            break;
+                        case CONFIRMATION:
+                            response.put("success", true);
+                            response.put("type", "confirmation_required");
+                            response.put("message", agentResponse.getContent());
+                            response.put("needConfirmation", true);
+                            break;
+                        default:
+                            response.put("success", true);
+                            response.put("message", agentResponse.getContent());
+                    }
+                } else {
+                    response.put("success", false);
+                    response.put("message", agentResponse.getErrorMessage());
+                }
+                
+                return ResponseEntity.ok(response);
+            } catch (Exception e) {
+                log.error("Agent处理请求失败，回退到原有逻辑: userId={}, error={}", userId, e.getMessage(), e);
+                // 回退到原有逻辑
+            }
+        }
 
         List<com.dormrepair.remindme.entity.ConfirmationSession> pendingSessions = confirmationService.getPendingSessions(userId);
         com.dormrepair.remindme.entity.ConfirmationSession pendingSession = pendingSessions.isEmpty() ? null : pendingSessions.get(0);

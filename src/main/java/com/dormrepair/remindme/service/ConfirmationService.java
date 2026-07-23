@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.service;
 
+import com.dormrepair.remindme.agent.event.EventPublisher;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.Action;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.ConfirmationData;
@@ -39,6 +40,7 @@ public class ConfirmationService {
     private final ReminderRepository reminderRepository;
     private final ObjectMapper objectMapper;
     private final WebSocketPushService webSocketPushService;
+    private final EventPublisher eventPublisher;
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
@@ -114,6 +116,14 @@ public class ConfirmationService {
         pushUserMessage(userId, "success", result);
         log.info("阶段一确认: sessionId={}, userId={}, reminderId={}", sessionId, userId, reminder.getId());
 
+        // 发布提醒确认事件（通知Agent）
+        try {
+            eventPublisher.publishReminderConfirmed(userId, reminder.getId(), reminder.getTitle());
+            log.info("发布确认事件: sessionId={}, userId={}, reminderId={}", sessionId, userId, reminder.getId());
+        } catch (Exception e) {
+            log.error("发布确认事件失败: sessionId={}, userId={}, error={}", sessionId, userId, e.getMessage(), e);
+        }
+
         return result;
     }
 
@@ -130,6 +140,14 @@ public class ConfirmationService {
 
         pushUserMessage(userId, "cancelled", result);
         log.info("取消确认会话: sessionId={}, userId={}", sessionId, userId);
+
+        // 发布提醒取消事件（通知Agent）
+        try {
+            eventPublisher.publishReminderCancelled(userId, session.getReminderId(), session.getParsedTitle());
+            log.info("发布取消事件: sessionId={}, userId={}", sessionId, userId);
+        } catch (Exception e) {
+            log.error("发布取消事件失败: sessionId={}, userId={}, error={}", sessionId, userId, e.getMessage(), e);
+        }
 
         return result;
     }
@@ -682,7 +700,7 @@ public class ConfirmationService {
         reminder.setLocation(session.getParsedLocation());
         reminder.setAdvanceMinutes(session.getParsedAdvanceMinutes() != null ? session.getParsedAdvanceMinutes() : 10);
         reminder.setStatus(ReminderStatus.PENDING);
-        reminder.setConfirmStatus(ConfirmStatus.PENDING);
+        reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
         reminder.setSource(ReminderSource.USER_INPUT);
 
         Reminder savedReminder = reminderRepository.save(reminder);
