@@ -2,12 +2,10 @@ server:
   port: 8083
 
 spring:
-  application:
-    name: RemindMe
   datasource:
-    url: jdbc:mysql://localhost:3307/reminder?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://localhost:3306/reminder?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
     username: root
-    password: password
+    password: 123456
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 10
@@ -50,6 +48,24 @@ spring:
           temperature: 0.3
           max-tokens: 1024
 
+    # Chroma向量数据库配置
+    vectorstore:
+      chroma:
+        client:
+          host: http://localhost
+          port: 8000
+        tenant-name: default_tenant
+        database-name: default_database
+        collection-name: public_knowledge
+        initialize-schema: true
+
+    # Ollama配置（用于Embedding）
+    ollama:
+      base-url: http://localhost:11434
+      embedding:
+        options:
+          model: qwen3-embedding:4b
+
 jwt:
   secret: ${JWT_SECRET:your-jwt-secret-key-at-least-256-bits-long}
   expiration: 604800000
@@ -57,7 +73,7 @@ jwt:
 weather:
   api:
     key: ${WEATHER_API_KEY:your-weather-api-key}
-    url: https://devapi.qweather.com/v7/weather/now
+    host: ${WEATHER_API_HOST:your-weather-api-host}
 
 sms:
   api-key: ${SMS_API_KEY:your-sms-api-key}

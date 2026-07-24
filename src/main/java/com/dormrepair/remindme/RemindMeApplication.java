@@ -11,9 +11,12 @@ import java.util.TimeZone;
 /**
  * 校园生活提醒助手 - 启动类
  */
-@SpringBootApplication
-@EnableJpaAuditing // 开启 JPA 审计功能（自动填充创建时间、更新时间等）
-@EnableScheduling  // 开启定时任务支持
+@SpringBootApplication(exclude = {
+        org.springframework.ai.model.ollama.autoconfigure.OllamaChatAutoConfiguration.class,
+        org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration.class
+})
+@EnableJpaAuditing
+@EnableScheduling
 public class RemindMeApplication {
 
     @PostConstruct

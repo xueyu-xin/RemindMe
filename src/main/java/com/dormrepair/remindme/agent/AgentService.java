@@ -5,6 +5,7 @@ import com.dormrepair.remindme.agent.event.ReminderCancelledEvent;
 import com.dormrepair.remindme.agent.event.ReminderConfirmedEvent;
 import com.dormrepair.remindme.agent.event.ReminderCreatedEvent;
 import com.dormrepair.remindme.service.LLMService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +29,7 @@ public class AgentService {
     private final LLMService llmService;
     private final ToolRegistry toolRegistry;
     private final ConversationMemory conversationMemory;
+    private final ObjectMapper objectMapper;
 
     @Value("${agent.enabled:false}")
     private boolean agentEnabled;
@@ -131,7 +133,14 @@ public class AgentService {
             Object result = toolRegistry.executeTool(toolCall.getToolName(), arguments);
 
             // 构建成功结果
-            String resultJson = "{\"success\": true, \"data\": " + serializeResult(result) + "}";
+            String resultJson;
+            if (result instanceof Map) {
+                // 如果返回值已经是 Map，直接序列化（如 ReminderService）
+                resultJson = serializeResult(result);
+            } else {
+                // 如果返回值是 DTO 对象，包装一层（如 WeatherService）
+                resultJson = "{\"success\": true, \"data\": " + serializeResult(result) + "}";
+            }
             log.info("工具执行成功: userId={}, toolName={}, result={}", userId, toolCall.getToolName(), resultJson);
             return resultJson;
 
@@ -154,10 +163,11 @@ public class AgentService {
         if (result instanceof Number || result instanceof Boolean) {
             return result.toString();
         }
-        // 其他类型尝试转换为字符串
+        // 支持 Map 和复杂对象的 JSON 序列化
         try {
-            return "\"" + result.toString().replace("\"", "\\\"") + "\"";
+            return objectMapper.writeValueAsString(result);
         } catch (Exception e) {
+            log.warn("序列化结果失败: {}", e.getMessage());
             return "\"" + result.getClass().getName() + "\"";
         }
     }

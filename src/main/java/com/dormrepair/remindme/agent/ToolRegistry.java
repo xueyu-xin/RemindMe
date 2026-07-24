@@ -168,9 +168,24 @@ public class ToolRegistry {
                 "userId", "用户ID（系统自动填充）",
                 "reminderId", "提醒ID（必填）"
             ),
-            "getWeatherForAgent", Map.of(
+            "queryWeatherNowForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",
-                "city", "城市名称（可选，默认北京）"
+                "location", "LocationID（如101010100）或经纬度（如116.41,39.92）"
+            ),
+            "queryWeatherForecastForAgent", Map.of(
+                "userId", "用户ID（系统自动填充）",
+                "location", "LocationID或经纬度",
+                "days", "预报天数（3/7/10/15/30，默认7天）"
+            ),
+            "queryAirQualityForAgent", Map.of(
+                "userId", "用户ID（系统自动填充）",
+                "latitude", "纬度",
+                "longitude", "经度"
+            ),
+            "queryWeatherAlertForAgent", Map.of(
+                "userId", "用户ID（系统自动填充）",
+                "latitude", "纬度",
+                "longitude", "经度"
             )
         );
 

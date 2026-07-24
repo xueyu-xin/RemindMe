@@ -266,7 +266,10 @@ public class LLMService {
             4. 如果用户询问日程安排，请调用query_reminders工具。
             5. 如果用户要求修改提醒，请调用update_reminder工具。
             6. 如果用户要求取消提醒，请调用cancel_reminder工具。
-            7. 如果用户询问天气，请调用query_weather工具。
+            7. 如果用户询问当前天气，请调用query_weather_now工具。
+            8. 如果用户询问未来天气，请调用query_weather_forecast工具。
+            9. 如果用户询问空气质量，请调用query_air_quality工具。
+            10. 如果用户询问天气预警，请调用query_weather_alert工具。
             
             响应格式要求：
             1. 如果需要调用工具，请返回JSON格式：
