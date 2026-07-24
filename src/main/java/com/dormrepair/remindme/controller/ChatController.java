@@ -72,6 +72,8 @@ public class ChatController {
                             response.put("type", "confirmation_required");
                             response.put("message", agentResponse.getContent());
                             response.put("needConfirmation", true);
+                            response.put("sessionId", agentResponse.getSessionId());
+                            response.put("data", agentResponse.getConfirmationData());
                             break;
                         default:
                             response.put("success", true);

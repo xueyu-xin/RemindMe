@@ -129,8 +129,10 @@ public class ToolRegistry {
 
             properties.put(paramName, property);
             
-            // 所有非userId参数都设为必填（由工具定义决定是否必填）
-            required.add(paramName);
+            // 根据参数描述判断是否必填：如果描述中包含"(必填)"则设为必填，否则为可选
+            if (description.contains("（必填）") || description.contains("(必填)")) {
+                required.add(paramName);
+            }
         }
 
         return ToolDefinition.Parameters.builder()

@@ -1258,12 +1258,59 @@
                         return;
                     }
 
-                    if (/^(修改|改成|改为|重新|换一下|改一下)$/.test(text)) {
-                        document.getElementById('confirmationContainer').innerHTML = '';
-                        addMessage('bot', '✏️ 请重新输入提醒内容：');
+                    // 检查带内容的修改指令（如"改成五点"、"修改为下午三点"）
+                    var editMatch = text.match(/^(改成|修改为|换一下|改一下|调整|变更|改为|调整为)\s*(.+)$/);
+                    if (editMatch) {
+                        var editContent = editMatch[2].trim();
+                        // 调用解析接口，解析提取后的实际内容
+                        const reparseResponse = await fetch('/api/reminders/parse', {
+                            method: 'POST',
+                            headers: headers,
+                            body: JSON.stringify({ input: editContent, userId: currentUserId })
+                        });
+                        const reparseResult = await reparseResponse.json();
+
+                        if (reparseResult.title && reparseResult.remindTime) {
+                            // 调用后端 edit 接口更新确认会话
+                            const editResponse = await fetch('/api/confirmations/' + currentConfirmationSessionId + '/edit?userId=' + currentUserId, {
+                                method: 'POST',
+                                headers: headers,
+                                body: JSON.stringify({
+                                    input: editContent,
+                                    parsedData: {
+                                        title: reparseResult.title,
+                                        remindTime: reparseResult.remindTime,
+                                        intentType: reparseResult.intentType,
+                                        location: reparseResult.location,
+                                        priority: reparseResult.priority,
+                                        advanceMinutes: 10,
+                                        confidence: 0.95
+                                    }
+                                })
+                            });
+                            const editResult = await editResponse.json();
+                            if (editResult.success) {
+                                addMessage('bot', '✏️ 已更新提醒信息，请确认');
+                            } else {
+                                addMessage('bot', '❌ ' + editResult.message);
+                            }
+                        } else {
+                            addMessage('bot', '❌ ' + (reparseResult.message || '解析失败，请重试'));
+                        }
                         return;
                     }
 
+                    // 仅修改关键词（无内容），提示用户重新输入
+                    if (/^(修改|改成|改为|重新|换一下|改一下)$/.test(text)) {
+                        // 提示用户输入新的内容
+                        addMessage('bot', '✏️ 请重新输入提醒内容：');
+                        // 清空卡片但保留 sessionId 用于后续修改
+                        document.getElementById('confirmationContainer').innerHTML = '';
+                        // 不清空 currentConfirmationSessionId，等待用户输入新内容后通过下面的 reparse 逻辑处理
+                        return;
+                    }
+
+                    // 用户直接输入新内容（被提示后输入的完整提醒）
                     const reparseResponse = await fetch('/api/reminders/parse', {
                         method: 'POST',
                         headers: headers,
@@ -1309,10 +1356,24 @@
                 const result = await response.json();
 
                 if (result.needConfirmation) {
+                    // 兼容 Agent 模式（result.sessionId）和非 Agent 模式（result.data.sessionId）
+                    var sessionId = null;
+                    if (result.data && result.data.sessionId) {
+                        sessionId = result.data.sessionId;
+                    } else if (result.sessionId) {
+                        sessionId = result.sessionId;
+                    }
+
+                    // 构建 card.data，确保包含 sessionId（showConfirmationCard 依赖 card.data.sessionId）
+                    var cardData = result.data || {};
+                    if (sessionId && !cardData.sessionId) {
+                        cardData.sessionId = sessionId;
+                    }
+
                     var card = {
                         type: 'confirmation_card',
-                        message: '📋 我帮你解析了提醒信息，请确认：',
-                        data: result.data,
+                        message: result.message || '📋 我帮你解析了提醒信息，请确认：',
+                        data: cardData,
                         actions: [
                             { id: 'confirm', label: '✅ 确认', style: 'primary' },
                             { id: 'edit', label: '✏️ 修改', style: 'warning' },
@@ -1321,6 +1382,12 @@
                         timeout: 180,
                         expiresAt: new Date(Date.now() + 15000).toISOString()
                     };
+
+                    // 双保险：提前设置 currentConfirmationSessionId
+                    if (sessionId) {
+                        currentConfirmationSessionId = sessionId;
+                    }
+
                     showConfirmationCard(card);
                 } else if (result.success) {
                     addMessage('bot', result.message);

@@ -45,6 +45,16 @@ public class AgentResponse {
     private boolean needConfirmation;
 
     /**
+     * 确认会话ID（当type为confirmation时）
+     */
+    private String sessionId;
+
+    /**
+     * 确认数据（当type为confirmation时，包含title、remindTime、location等）
+     */
+    private Map<String, Object> confirmationData;
+
+    /**
      * 工具执行结果（当type为text且包含工具执行结果时）
      */
     private Object toolResult;
@@ -116,6 +126,20 @@ public class AgentResponse {
                 .type(ResponseType.CONFIRMATION)
                 .content(content)
                 .needConfirmation(true)
+                .success(true)
+                .build();
+    }
+
+    /**
+     * 创建确认响应（带sessionId和确认数据）
+     */
+    public static AgentResponse confirmation(String sessionId, String content, Map<String, Object> confirmationData) {
+        return AgentResponse.builder()
+                .type(ResponseType.CONFIRMATION)
+                .content(content)
+                .needConfirmation(true)
+                .sessionId(sessionId)
+                .confirmationData(confirmationData)
                 .success(true)
                 .build();
     }

@@ -235,6 +235,7 @@ public class ReminderService {
             result.put("location", location);
             result.put("priority", priority != null ? priority : "NORMAL");
             result.put("sessionCreated", true);
+            result.put("sessionId", card.getData().getSessionId());
             result.put("confirmationRequired", true);
             
             log.info("Agent创建提醒成功: title={}, sessionCreated=true", title);

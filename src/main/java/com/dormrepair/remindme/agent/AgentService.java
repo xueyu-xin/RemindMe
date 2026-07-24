@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -90,8 +91,15 @@ public class AgentService {
                 conversationMemory.addToolCall(userId, llmToolCall.getToolName(), llmToolCall.getArguments());
                 conversationMemory.addToolResult(userId, llmToolCall.getToolName(), toolResult, true);
 
-                // 更新历史和用户输入（将工具结果作为新的输入）
-                userInput = "工具执行结果: " + toolResult;
+                // 检查工具执行结果是否包含sessionId（create_reminder工具触发确认流程）
+                AgentResponse confirmationResponse = buildConfirmationResponse(toolResult);
+                if (confirmationResponse != null) {
+                    log.info("工具结果包含sessionId，构建CONFIRMATION响应: toolName={}", llmToolCall.getToolName());
+                    return confirmationResponse;
+                }
+
+                // 更新历史（工具结果已添加到对话历史中，不再修改userInput）
+                // LLM下次迭代时会通过对话历史看到工具执行结果
                 history = conversationMemory.getHistory(userId);
                 lastToolResult = toolResult;
             }
@@ -137,6 +145,17 @@ public class AgentService {
             if (result instanceof Map) {
                 // 如果返回值已经是 Map，直接序列化（如 ReminderService）
                 resultJson = serializeResult(result);
+                // 解析结果中的sessionId（create_reminder工具触发确认流程）
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> resultMap = (Map<String, Object>) result;
+                    if (Boolean.TRUE.equals(resultMap.get("success")) && resultMap.containsKey("sessionId")) {
+                        log.info("工具执行结果包含sessionId，标记为需要确认: toolName={}, sessionId={}",
+                                toolCall.getToolName(), resultMap.get("sessionId"));
+                    }
+                } catch (Exception e) {
+                    log.warn("解析工具结果sessionId失败: {}", e.getMessage());
+                }
             } else {
                 // 如果返回值是 DTO 对象，包装一层（如 WeatherService）
                 resultJson = "{\"success\": true, \"data\": " + serializeResult(result) + "}";
@@ -188,6 +207,15 @@ public class AgentService {
             return AgentResponse.toolCall(toolCall.getToolName(), toolCall.getArguments());
         }
 
+        // 检查工具执行结果是否包含sessionId（create_reminder工具触发确认流程）
+        if (toolResult != null) {
+            AgentResponse confirmationResponse = buildConfirmationResponse(toolResult);
+            if (confirmationResponse != null) {
+                log.info("工具结果包含sessionId，返回CONFIRMATION类型响应");
+                return confirmationResponse;
+            }
+        }
+
         // 检查是否包含错误信息
         if (llmOutput != null && llmOutput.contains("error")) {
             return AgentResponse.error(llmOutput);
@@ -199,6 +227,59 @@ public class AgentService {
             response.setToolResult(toolResult);
         }
         return response;
+    }
+
+    /**
+     * 从工具执行结果中构建CONFIRMATION响应
+     * <p>
+     * 检查工具结果是否包含sessionId（create_reminder工具返回），
+     * 如果包含则构建CONFIRMATION类型的响应
+     * </p>
+     *
+     * @param toolResult 工具执行结果（JSON字符串或Map）
+     * @return CONFIRMATION响应，如果不包含sessionId则返回null
+     */
+    private AgentResponse buildConfirmationResponse(Object toolResult) {
+        if (toolResult == null) {
+            return null;
+        }
+
+        try {
+            Map<String, Object> resultMap;
+            if (toolResult instanceof String) {
+                resultMap = objectMapper.readValue((String) toolResult, Map.class);
+            } else if (toolResult instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> castedMap = (Map<String, Object>) toolResult;
+                resultMap = castedMap;
+            } else {
+                return null;
+            }
+
+            // 检查是否是成功的工具结果且包含sessionId
+            if (!Boolean.TRUE.equals(resultMap.get("success")) || !resultMap.containsKey("sessionId")) {
+                return null;
+            }
+
+            String sessionId = (String) resultMap.get("sessionId");
+            String title = (String) resultMap.get("title");
+            String remindTime = (String) resultMap.get("remindTime");
+            String location = (String) resultMap.get("location");
+
+            Map<String, Object> confirmationData = new HashMap<>();
+            confirmationData.put("title", title);
+            confirmationData.put("remindTime", remindTime);
+            confirmationData.put("location", location);
+            if (resultMap.containsKey("priority")) {
+                confirmationData.put("priority", resultMap.get("priority"));
+            }
+
+            String content = "📋 我帮你解析了提醒信息，请确认：";
+            return AgentResponse.confirmation(sessionId, content, confirmationData);
+        } catch (Exception e) {
+            log.warn("解析工具结果构建CONFIRMATION响应失败: {}", e.getMessage());
+            return null;
+        }
     }
 
     /**

@@ -103,70 +103,291 @@ public class LLMService {
      * @return ToolCall对象，如果不是工具调用则返回null
      */
     public ToolCall parseToolCall(String llmResponse) {
+        if (llmResponse == null || llmResponse.isBlank()) {
+            log.debug("LLM响应为空");
+            return null;
+        }
+
+        // 调试日志：打印原始响应（截断）
+        String truncatedResponse = llmResponse.length() > 200 ? llmResponse.substring(0, 200) + "..." : llmResponse;
+        log.debug("开始解析LLM响应: {}", truncatedResponse);
+
+        // 方式一：标准JSON解析
         try {
             JsonNode root = objectMapper.readTree(llmResponse);
+            ToolCall result = parseStandardJson(root);
+            if (result != null) {
+                return result;
+            }
+        } catch (Exception e) {
+            log.debug("标准JSON解析失败: {}", e.getMessage());
+        }
+
+        // 方式二：尝试修复JSON后再解析
+        String fixedJson = fixJson(llmResponse);
+        if (!fixedJson.equals(llmResponse)) {
+            log.debug("尝试修复后的JSON: {}", fixedJson.length() > 200 ? fixedJson.substring(0, 200) + "..." : fixedJson);
+            try {
+                JsonNode root = objectMapper.readTree(fixedJson);
+                ToolCall result = parseStandardJson(root);
+                if (result != null) {
+                    log.debug("修复后解析成功");
+                    return result;
+                }
+            } catch (Exception e) {
+                log.debug("修复后JSON解析失败: {}", e.getMessage());
+            }
+        }
+
+        // 方式三：从文本中提取JSON片段（正则表达式）
+        String jsonFragment = extractJsonFragment(llmResponse);
+        if (jsonFragment != null) {
+            log.debug("提取到JSON片段: {}", jsonFragment.length() > 200 ? jsonFragment.substring(0, 200) + "..." : jsonFragment);
+            try {
+                JsonNode root = objectMapper.readTree(jsonFragment);
+                ToolCall result = parseStandardJson(root);
+                if (result != null) {
+                    log.debug("提取JSON片段解析成功");
+                    return result;
+                }
+            } catch (Exception e) {
+                log.debug("提取JSON片段解析失败: {}", e.getMessage());
+            }
+        }
+
+        // 如果是纯文本字符串，不是JSON格式的工具调用
+        if (!llmResponse.trim().startsWith("{")) {
+            log.debug("LLM返回纯文本回复，非工具调用");
+            return null;
+        }
+
+        log.debug("未解析到工具调用，响应内容: {}", truncatedResponse);
+        return null;
+    }
+
+    /**
+     * 解析标准JSON格式的工具调用
+     */
+    private ToolCall parseStandardJson(JsonNode root) {
+        // 检查是否包含工具调用（自定义格式）
+        if (root.has("tool_call")) {
+            JsonNode toolCallNode = root.get("tool_call");
+            String toolName = toolCallNode.has("name") ? toolCallNode.get("name").asText() : null;
             
-            // 检查是否包含工具调用
-            if (root.has("tool_call")) {
-                JsonNode toolCallNode = root.get("tool_call");
-                String toolName = toolCallNode.has("name") ? toolCallNode.get("name").asText() : null;
-                
-                if (toolName != null && !toolName.isBlank()) {
-                    Map<String, Object> arguments = new HashMap<>();
-                    if (toolCallNode.has("arguments")) {
-                        JsonNode argsNode = toolCallNode.get("arguments");
+            if (toolName != null && !toolName.isBlank()) {
+                Map<String, Object> arguments = new HashMap<>();
+                if (toolCallNode.has("arguments")) {
+                    JsonNode argsNode = toolCallNode.get("arguments");
+                    if (argsNode.isObject()) {
                         argsNode.fields().forEachRemaining(entry -> {
                             arguments.put(entry.getKey(), convertJsonNode(entry.getValue()));
                         });
                     }
-                    
-                    log.info("解析到工具调用: toolName={}, arguments={}", toolName, arguments);
-                    return ToolCall.of(toolName, arguments);
                 }
-            }
-            
-            // 检查是否有function_call字段（OpenAI格式）
-            if (root.has("function_call")) {
-                JsonNode functionCallNode = root.get("function_call");
-                String functionName = functionCallNode.has("name") ? functionCallNode.get("name").asText() : null;
                 
-                if (functionName != null && !functionName.isBlank()) {
-                    Map<String, Object> arguments = new HashMap<>();
-                    if (functionCallNode.has("arguments")) {
-                        String argsStr = functionCallNode.get("arguments").asText();
-                        try {
-                            JsonNode argsNode = objectMapper.readTree(argsStr);
+                log.info("解析到工具调用: toolName={}, arguments={}", toolName, arguments);
+                return ToolCall.of(toolName, arguments);
+            }
+        }
+        
+        // 检查是否有function_call字段（OpenAI格式）
+        if (root.has("function_call")) {
+            JsonNode functionCallNode = root.get("function_call");
+            String functionName = functionCallNode.has("name") ? functionCallNode.get("name").asText() : null;
+            
+            if (functionName != null && !functionName.isBlank()) {
+                Map<String, Object> arguments = new HashMap<>();
+                if (functionCallNode.has("arguments")) {
+                    try {
+                        JsonNode argsNode = functionCallNode.get("arguments");
+                        if (argsNode.isObject()) {
                             argsNode.fields().forEachRemaining(entry -> {
                                 arguments.put(entry.getKey(), convertJsonNode(entry.getValue()));
                             });
-                        } catch (Exception e) {
-                            log.warn("解析arguments失败: {}", argsStr);
+                        } else if (argsNode.isTextual()) {
+                            // 处理arguments是字符串的情况
+                            JsonNode parsedArgs = objectMapper.readTree(argsNode.asText());
+                            parsedArgs.fields().forEachRemaining(entry -> {
+                                arguments.put(entry.getKey(), convertJsonNode(entry.getValue()));
+                            });
+                        }
+                    } catch (Exception e) {
+                        log.warn("解析arguments失败: {}", e.getMessage());
+                    }
+                }
+                
+                log.info("解析到函数调用: functionName={}, arguments={}", functionName, arguments);
+                return ToolCall.of(functionName, arguments);
+            }
+        }
+        
+        // 检查是否有tool字段（简化格式）
+        if (root.has("tool")) {
+            String toolName = root.get("tool").asText();
+            if (toolName != null && !toolName.isBlank()) {
+                Map<String, Object> arguments = new HashMap<>();
+                if (root.has("arguments")) {
+                    JsonNode argsNode = root.get("arguments");
+                    if (argsNode.isObject()) {
+                        argsNode.fields().forEachRemaining(entry -> {
+                            arguments.put(entry.getKey(), convertJsonNode(entry.getValue()));
+                        });
+                    }
+                }
+                
+                log.info("解析到简化格式工具调用: toolName={}, arguments={}", toolName, arguments);
+                return ToolCall.of(toolName, arguments);
+            }
+        }
+        
+        // 如果不包含工具调用，检查是否是纯文本响应
+        if (root.has("content") && !root.has("tool_call") && !root.has("function_call")) {
+            return null;
+        }
+        
+        return null;
+    }
+
+    /**
+     * 修复常见的JSON格式问题
+     */
+    private String fixJson(String json) {
+        String fixed = json.trim();
+        
+        // 1. 移除Markdown代码块标记
+        if (fixed.startsWith("```json")) {
+            fixed = fixed.substring(7);
+        } else if (fixed.startsWith("```")) {
+            fixed = fixed.substring(3);
+        }
+        if (fixed.endsWith("```")) {
+            fixed = fixed.substring(0, fixed.length() - 3);
+        }
+        fixed = fixed.trim();
+        
+        // 2. 处理缺少闭合括号的情况
+        int openBraces = countOccurrences(fixed, '{');
+        int closeBraces = countOccurrences(fixed, '}');
+        while (closeBraces < openBraces) {
+            fixed += "}";
+            closeBraces++;
+        }
+        
+        // 3. 处理缺少闭合方括号的情况
+        int openBrackets = countOccurrences(fixed, '[');
+        int closeBrackets = countOccurrences(fixed, ']');
+        while (closeBrackets < openBrackets) {
+            fixed += "]";
+            closeBrackets++;
+        }
+        
+        // 4. 移除尾随逗号
+        fixed = fixed.replaceAll(",\\s*}", "}");
+        fixed = fixed.replaceAll(",\\s*]", "]");
+        
+        // 5. 处理字符串中未转义的引号（简单处理）
+        // 在JSON字符串中，未转义的引号会破坏结构，尝试修复
+        fixed = fixUnescapedQuotes(fixed);
+        
+        return fixed;
+    }
+
+    /**
+     * 修复JSON字符串中未转义的引号
+     */
+    private String fixUnescapedQuotes(String json) {
+        StringBuilder result = new StringBuilder();
+        boolean inString = false;
+        boolean escaped = false;
+        
+        for (int i = 0; i < json.length(); i++) {
+            char c = json.charAt(i);
+            
+            if (escaped) {
+                result.append(c);
+                escaped = false;
+                continue;
+            }
+            
+            if (c == '\\') {
+                result.append(c);
+                escaped = true;
+                continue;
+            }
+            
+            if (c == '"') {
+                if (inString) {
+                    // 检查下一个字符是否是有效的JSON字符
+                    if (i + 1 < json.length()) {
+                        char nextChar = json.charAt(i + 1);
+                        if (nextChar != ',' && nextChar != '}' && nextChar != ']' && nextChar != ':') {
+                            // 可能是未转义的引号，转义它
+                            result.append("\\\"");
+                            continue;
                         }
                     }
-                    
-                    log.info("解析到函数调用: functionName={}, arguments={}", functionName, arguments);
-                    return ToolCall.of(functionName, arguments);
+                    inString = false;
+                } else {
+                    inString = true;
                 }
             }
             
-            // 如果不包含工具调用，检查是否是纯文本响应
-            if (root.has("content") && !root.has("tool_call") && !root.has("function_call")) {
-                return null;
-            }
-            
-            // 如果是纯文本字符串，不是JSON格式的工具调用
-            if (llmResponse != null && !llmResponse.startsWith("{")) {
-                log.debug("LLM返回纯文本回复，非工具调用");
-                return null;
-            }
-            
-            log.debug("未解析到工具调用，响应内容: {}", llmResponse);
-            return null;
-            
-        } catch (Exception e) {
-            log.debug("LLM返回纯文本回复，非工具调用: {}", e.getMessage());
+            result.append(c);
+        }
+        
+        return result.toString();
+    }
+
+    /**
+     * 从文本中提取JSON片段
+     */
+    private String extractJsonFragment(String text) {
+        int start = text.indexOf('{');
+        if (start == -1) {
             return null;
         }
+        
+        int end = text.lastIndexOf('}');
+        if (end == -1 || end < start) {
+            return null;
+        }
+        
+        // 检查是否有完整的JSON结构
+        String fragment = text.substring(start, end + 1);
+        int openBraces = countOccurrences(fragment, '{');
+        int closeBraces = countOccurrences(fragment, '}');
+        
+        if (openBraces == closeBraces) {
+            return fragment;
+        }
+        
+        // 尝试找到匹配的闭合括号
+        int balance = 0;
+        for (int i = start; i < text.length(); i++) {
+            if (text.charAt(i) == '{') {
+                balance++;
+            } else if (text.charAt(i) == '}') {
+                balance--;
+                if (balance == 0) {
+                    return text.substring(start, i + 1);
+                }
+            }
+        }
+        
+        return null;
+    }
+
+    /**
+     * 统计字符串中字符出现的次数
+     */
+    private int countOccurrences(String str, char c) {
+        int count = 0;
+        for (int i = 0; i < str.length(); i++) {
+            if (str.charAt(i) == c) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /**
@@ -219,6 +440,21 @@ public class LLMService {
                     messages.add(new AssistantMessage(msg.getContent()));
                 } else if ("system".equals(msg.getRole())) {
                     messages.add(new SystemMessage(msg.getContent()));
+                } else if ("tool".equals(msg.getRole())) {
+                    // 工具消息：包含工具调用或工具执行结果
+                    StringBuilder toolContent = new StringBuilder();
+                    if (msg.getToolCall() != null) {
+                        toolContent.append("工具调用: ").append(msg.getToolCall().getToolName())
+                                .append(", 参数: ").append(msg.getToolCall().getArguments());
+                    }
+                    if (msg.getToolResult() != null) {
+                        if (toolContent.length() > 0) {
+                            toolContent.append("\n");
+                        }
+                        toolContent.append("工具执行结果: ").append(msg.getToolResult().getResult());
+                    }
+                    // 将工具消息作为系统消息添加，让LLM知道工具执行结果
+                    messages.add(new SystemMessage(toolContent.toString()));
                 }
             }
         }
@@ -270,12 +506,66 @@ public class LLMService {
             8. 如果用户询问未来天气，请调用query_weather_forecast工具。
             9. 如果用户询问空气质量，请调用query_air_quality工具。
             10. 如果用户询问天气预警，请调用query_weather_alert工具。
+
+            ================================================
+            时间复用规则（非常重要！请严格遵守）：
+            ================================================
+            当用户说"再提醒我..."、"也提醒我..."、"同样提醒我..."、"再帮我提醒..."时，表示复用上一个提醒的时间：
+            1. 从对话历史（包括工具调用记录和工具执行结果）中查找最近一次创建提醒时使用的 remindTime
+            2. 如果找到，新提醒使用相同的 remindTime
+            3. 如果对话历史中没有找到任何提醒时间，请追问用户具体时间，不要使用当前时间或默认时间
+
+            示例：
+            对话历史：用户说"明天下午4点提醒我喝咖啡"，工具执行结果包含 remindTime: "2026-07-26 16:00:00"
+            用户输入："再提醒我带伞"
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "带伞", "remindTime": "2026-07-26 16:00:00", "location": null, "priority": "NORMAL"}}}
+
+            对话历史：无任何提醒创建记录
+            用户输入："再提醒我带伞"
+            你的输出："请问你想在什么时间提醒你带伞呢？"
+
+            ================================================
+            响应格式要求（非常重要！请严格遵守）：
+            ================================================
             
-            响应格式要求：
-            1. 如果需要调用工具，请返回JSON格式：
-               {"tool_call": {"name": "工具名称", "arguments": {"参数名": "参数值"}}}
-            2. 如果不需要调用工具，可以直接回复用户，返回自然语言文本。
-            3. 如果已经收到工具执行结果，请根据结果用自然语言总结回复用户。
+            【情况一：需要调用工具】
+            如果需要调用工具来完成用户请求，请返回严格的JSON格式，不要包含任何其他文本：
+            {"tool_call": {"name": "工具名称", "arguments": {"参数名": "参数值"}}}
+            
+            工具调用示例：
+            示例1（创建提醒）：
+            用户输入："明天下午3点提醒我还书"
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "还书", "remindTime": "2026-07-26 15:00:00"}}}
+            
+            示例2（查询日程）：
+            用户输入："我今天有什么安排？"
+            你的输出：{"tool_call": {"name": "query_reminders", "arguments": {"date": "2026-07-25"}}}
+            
+            示例3（取消提醒）：
+            用户输入："取消还书的提醒"
+            你的输出：{"tool_call": {"name": "cancel_reminder", "arguments": {"reminderId": 1}}}
+            
+            【情况二：不需要调用工具】
+            如果不需要调用工具，可以直接用自然语言回复用户。
+            
+            示例：
+            用户输入："你好"
+            你的输出："你好！我是智能提醒助手，可以帮你设置提醒、查询日程和天气。请问有什么需要帮助的吗？"
+            
+            【情况三：收到工具执行结果后】
+            如果已经收到工具执行结果，需要根据结果用自然语言总结回复用户。
+            
+            示例：
+            工具执行结果：{"success": true, "message": "提醒创建成功", "title": "还书", "remindTime": "2026-07-26 15:00:00"}
+            你的输出："好的，已为你创建提醒「还书」，时间是明天下午3点。"
+            
+            ================================================
+            注意事项：
+            ================================================
+            1. 调用工具时，只返回JSON，不要返回"好的，我将调用xxx工具"等多余文字。
+            2. 参数值必须与工具定义中的类型匹配（字符串用引号，数字不用引号）。
+            3. 只调用必要的工具，不要重复调用。
+            4. 如果收到工具执行结果，一定要用自然语言总结给用户，不要再调用工具。
             
             请根据用户的请求，决定是直接回复还是调用工具。
             """.formatted(currentDate, toolsJson);
