@@ -48,11 +48,35 @@ public class AgentService {
      * @return Agent响应
      */
     public AgentResponse processRequest(Long userId, String userInput) {
+        return processRequest(userId, userInput, null);
+    }
+
+    /**
+     * 处理用户请求（带上下文）
+     *
+     * @param userId 用户ID
+     * @param userInput 用户输入
+     * @param context 额外上下文（如GPS坐标），可为null
+     * @return Agent响应
+     */
+    public AgentResponse processRequest(Long userId, String userInput, Map<String, Object> context) {
         log.info("Agent开始处理请求: userId={}, userInput={}", userId, userInput);
 
         try {
             // 保存用户输入到对话历史
             conversationMemory.addUserMessage(userId, userInput);
+
+            // 如果有位置上下文，作为系统消息注入对话历史
+            if (context != null && context.containsKey("latitude") && context.containsKey("longitude")) {
+                Double lat = (Double) context.get("latitude");
+                Double lng = (Double) context.get("longitude");
+                String locationInfo = String.format(
+                        "用户当前GPS坐标：纬度 %s，经度 %s，请调用 get_location 工具将坐标转换为地址",
+                        lat, lng
+                );
+                conversationMemory.addSystemMessage(userId, locationInfo);
+                log.info("请求包含GPS坐标: lat={}, lng={}", lat, lng);
+            }
 
             // 获取对话历史
             List<Message> history = conversationMemory.getHistory(userId);

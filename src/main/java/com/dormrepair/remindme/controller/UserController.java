@@ -2,6 +2,7 @@ package com.dormrepair.remindme.controller;
 
 import com.dormrepair.remindme.entity.User;
 import com.dormrepair.remindme.enums.Gender;
+import com.dormrepair.remindme.service.LocationService;
 import com.dormrepair.remindme.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +22,7 @@ import java.util.Map;
 public class UserController {
 
     private final UserService userService;
+    private final LocationService locationService;
 
     @GetMapping("/{userId}")
     public ResponseEntity<User> getUserById(@PathVariable Long userId) {
@@ -65,6 +67,32 @@ public class UserController {
                     return ResponseEntity.ok(saved);
                 })
                 .orElse(ResponseEntity.notFound().build());
+    }
+
+    /**
+     * 根据经纬度更新用户默认城市
+     */
+    @PutMapping("/location")
+    public ResponseEntity<Map<String, Object>> updateLocation(
+            @RequestParam Long userId,
+            @RequestBody Map<String, Object> body) {
+        Map<String, Object> response = new HashMap<>();
+        try {
+            Double latitude = ((Number) body.get("latitude")).doubleValue();
+            Double longitude = ((Number) body.get("longitude")).doubleValue();
+
+            String address = locationService.reverseGeocode(latitude, longitude);
+            userService.updateDefaultCity(userId, address);
+
+            response.put("success", true);
+            response.put("address", address);
+            return ResponseEntity.ok(response);
+        } catch (Exception e) {
+            log.error("更新用户位置失败: userId={}", userId, e);
+            response.put("success", false);
+            response.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
     }
 
     private Integer toInt(Object value) {

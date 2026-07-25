@@ -47,10 +47,20 @@ public class ChatController {
 
         text = text.trim();
 
+        // 提取可选的GPS坐标
+        Double latitude = request.containsKey("latitude") ? toDouble(request.get("latitude")) : null;
+        Double longitude = request.containsKey("longitude") ? toDouble(request.get("longitude")) : null;
+
         // Agent模式：如果启用Agent，调用AgentService处理
         if (agentEnabled) {
             try {
-                AgentResponse agentResponse = agentService.processRequest(userId, text);
+                Map<String, Object> context = null;
+                if (latitude != null && longitude != null) {
+                    context = new HashMap<>();
+                    context.put("latitude", latitude);
+                    context.put("longitude", longitude);
+                }
+                AgentResponse agentResponse = agentService.processRequest(userId, text, context);
                 
                 Map<String, Object> response = new HashMap<>();
                 
@@ -272,5 +282,15 @@ public class ChatController {
 
     private boolean isLater(String text) {
         return text.matches("^(稍后|等下|过会|再等|稍等|过一会儿)$");
+    }
+
+    private Double toDouble(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number) return ((Number) value).doubleValue();
+        if (value instanceof String) {
+            try { return Double.parseDouble(((String) value).trim()); }
+            catch (NumberFormatException e) { return null; }
+        }
+        return null;
     }
 }

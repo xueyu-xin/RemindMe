@@ -403,7 +403,58 @@ public class ReminderService {
             result.put("success", false);
             result.put("error", "取消提醒失败: " + e.getMessage());
         }
-        
+
+        return result;
+    }
+
+    /**
+     * Agent工具：获取提醒详情
+     * <p>
+     * 查询单个提醒的完整信息
+     * </p>
+     *
+     * @param userId     用户ID
+     * @param reminderId 提醒ID
+     * @return 提醒详情
+     */
+    @AgentTool(name = "get_reminder_detail", description = "获取单个提醒的完整详情，用户询问'第一个提醒是什么时间'、'具体信息'时调用")
+    public Map<String, Object> getReminderDetail(Long userId, Long reminderId) {
+        log.info("Agent调用获取提醒详情: userId={}, reminderId={}", userId, reminderId);
+
+        Map<String, Object> result = new HashMap<>();
+
+        try {
+            Reminder reminder = getReminderByIdAndUserId(reminderId, userId);
+
+            result.put("success", true);
+            result.put("id", reminder.getId());
+            result.put("title", reminder.getTitle());
+            result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+            result.put("timezone", reminder.getTimezone());
+            result.put("advanceMinutes", reminder.getAdvanceMinutes());
+            result.put("cronExpression", reminder.getCronExpression());
+            result.put("location", reminder.getLocation());
+            result.put("priority", reminder.getPriority().name());
+            result.put("status", reminder.getStatus().name());
+            result.put("confirmStatus", reminder.getConfirmStatus().name());
+            result.put("executionStatus", reminder.getExecutionStatus().name());
+            result.put("confirmAttempts", reminder.getConfirmAttempts());
+            result.put("source", reminder.getSource().name());
+            result.put("createdAt", reminder.getCreatedAt() != null ? reminder.getCreatedAt().format(FORMATTER) : null);
+            result.put("updatedAt", reminder.getUpdatedAt() != null ? reminder.getUpdatedAt().format(FORMATTER) : null);
+
+            log.info("Agent获取提醒详情成功: reminderId={}, title={}", reminderId, reminder.getTitle());
+
+        } catch (IllegalArgumentException e) {
+            log.warn("Agent获取提醒详情失败: userId={}, reminderId={}, error={}", userId, reminderId, e.getMessage());
+            result.put("success", false);
+            result.put("error", e.getMessage());
+        } catch (Exception e) {
+            log.error("Agent获取提醒详情异常: userId={}, reminderId={}, error={}", userId, reminderId, e.getMessage(), e);
+            result.put("success", false);
+            result.put("error", "获取提醒详情失败: " + e.getMessage());
+        }
+
         return result;
     }
 }
