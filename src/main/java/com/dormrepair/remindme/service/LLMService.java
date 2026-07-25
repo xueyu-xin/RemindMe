@@ -3,8 +3,11 @@ package com.dormrepair.remindme.service;
 import com.dormrepair.remindme.agent.ConversationMemory.Message;
 import com.dormrepair.remindme.agent.ToolCall;
 import com.dormrepair.remindme.agent.ToolDefinition;
+import com.dormrepair.remindme.utils.TimeUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.Builder;
+import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -652,6 +655,131 @@ public class LLMService {
             log.warn("时间解析失败: {}", dateTimeStr);
             return null;
         }
+    }
+
+    /**
+     * 智能解析用户的修改意图
+     * <p>
+     * 根据用户输入和当前确认卡片数据，分析用户想修改哪个字段（时间/地点/标题/优先级）
+     * </p>
+     *
+     * @param userInput   用户输入的修改文本
+     * @param currentData 当前确认卡片中的完整数据
+     * @return EditIntent 对象，包含 field 和 newValue
+     */
+    public EditIntent parseEditIntent(String userInput, Map<String, Object> currentData) {
+        log.info("开始解析修改意图: userInput={}, currentData={}", userInput, currentData);
+
+        try {
+            String prompt = buildEditIntentPrompt(userInput, currentData);
+
+            UserMessage userMessage = new UserMessage(prompt);
+            Prompt promptObj = new Prompt(userMessage);
+
+            String content = chatModel.call(promptObj).getResult().getOutput().getText();
+            log.info("修改意图解析LLM响应: {}", content);
+
+            JsonNode root = objectMapper.readTree(content);
+
+            String field = root.has("field") ? root.get("field").asText() : "unknown";
+            String newValue = root.has("newValue") ? root.get("newValue").asText() : "";
+            String reason = root.has("reason") ? root.get("reason").asText() : "";
+
+            // 校验 field 取值范围
+            if (!isValidField(field)) {
+                log.warn("LLM返回的field无效: {}, 设为unknown", field);
+                field = "unknown";
+            }
+
+            return EditIntent.builder()
+                    .field(field)
+                    .newValue(newValue)
+                    .reason(reason)
+                    .build();
+
+        } catch (Exception e) {
+            log.error("解析修改意图失败: userInput={}, error={}", userInput, e.getMessage(), e);
+            return EditIntent.builder()
+                    .field("unknown")
+                    .newValue("")
+                    .reason("解析失败")
+                    .build();
+        }
+    }
+
+    /**
+     * 校验 field 是否合法
+     */
+    private boolean isValidField(String field) {
+        return "time".equals(field) || "location".equals(field)
+                || "title".equals(field) || "priority".equals(field)
+                || "unknown".equals(field);
+    }
+
+    /**
+     * 构建修改意图解析的 Prompt
+     */
+    private String buildEditIntentPrompt(String userInput, Map<String, Object> currentData) {
+        String currentTime = TimeUtils.format(TimeUtils.now());
+
+        String title = currentData.getOrDefault("title", "").toString();
+        String remindTime = currentData.getOrDefault("remindTime", "").toString();
+        String location = currentData.getOrDefault("location", "").toString();
+        String priority = currentData.getOrDefault("priority", "NORMAL").toString();
+
+        return """
+                你是一个智能提醒修改助手。用户想要修改当前的提醒信息，请分析用户的修改意图。
+
+                当前时间：%s
+
+                当前提醒信息：
+                - 标题：%s
+                - 时间：%s
+                - 地点：%s
+                - 优先级：%s
+
+                用户输入：%s
+
+                请分析用户想修改哪个字段，以及新的值是什么。
+
+                返回严格的JSON格式，不要包含任何其他文本：
+                {"field": "字段名", "newValue": "新值", "reason": "简短说明"}
+
+                field 可选值：
+                - "time": 修改时间（newValue格式：yyyy-MM-dd HH:mm:ss）
+                - "location": 修改地点
+                - "title": 修改标题
+                - "priority": 修改优先级（newValue：LOW/NORMAL/HIGH）
+                - "unknown": 无法识别修改意图
+
+                时间解析规则：
+                - "下午三点" → 当天 15:00:00
+                - "明天下午3点" → 明天 15:00:00
+                - "五点" → 当天 17:00:00
+                - "改成明天" → 明天相同时间
+                - "后天上午9点" → 后天 09:00:00
+
+                示例：
+                当前标题：开会，用户输入"改成下午三点" → {"field": "time", "newValue": "2026-07-26 15:00:00", "reason": "修改时间"}
+                当前标题：开会，用户输入"地点改为会议室A" → {"field": "location", "newValue": "会议室A", "reason": "修改地点"}
+                当前标题：开会，用户输入"改成讨论会" → {"field": "title", "newValue": "讨论会", "reason": "修改标题"}
+                当前标题：开会，用户输入"优先级设为高" → {"field": "priority", "newValue": "HIGH", "reason": "修改优先级"}
+                当前标题：开会，用户输入"你好" → {"field": "unknown", "newValue": "", "reason": "未识别到修改意图"}
+                """.formatted(currentTime, title, remindTime, location, priority, userInput);
+    }
+
+    /**
+     * 修改意图解析结果
+     */
+    @Data
+    @Builder
+    public static class EditIntent {
+        /** 修改的字段名：time/location/title/priority/unknown */
+        private String field;
+        /** 新值 */
+        private String newValue;
+        /** 简短说明 */
+        private String reason;
     }
 
     /**

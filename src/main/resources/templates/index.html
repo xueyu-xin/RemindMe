@@ -413,6 +413,44 @@
             });
         }
 
+        /**
+         * 根据标签名查找确认卡片中对应的值
+         * @param {string} label - 标签文本（如"标题"、"时间"、"地点"、"优先级"）
+         * @returns {string|null} 对应的值，未找到返回 null
+         */
+        function getCardFieldValue(label) {
+            var card = document.getElementById('confirmationCard');
+            if (!card) return null;
+
+            var infoItems = card.querySelectorAll('.info-item');
+            for (var i = 0; i < infoItems.length; i++) {
+                var labelEl = infoItems[i].querySelector('.info-label');
+                if (labelEl && labelEl.textContent === label) {
+                    var valueEl = infoItems[i].querySelector('.info-value');
+                    return valueEl ? valueEl.textContent : null;
+                }
+            }
+            return null;
+        }
+
+        /**
+         * 从当前显示的确认卡片中提取完整数据
+         * @returns {Object|null} 包含 title/remindTime/location/priority/sessionId 的对象，卡片不存在返回 null
+         */
+        function getCurrentCardData() {
+            var card = document.getElementById('confirmationCard');
+            if (!card) return null;
+
+            var data = {
+                title: getCardFieldValue('标题'),
+                remindTime: getCardFieldValue('时间'),
+                location: getCardFieldValue('地点'),
+                priority: getCardFieldValue('优先级'),
+                sessionId: card.getAttribute('data-session-id')
+            };
+            return data;
+        }
+
         function showConfirmationCard(card) {
             var container = document.getElementById('confirmationContainer');
             
@@ -1258,93 +1296,45 @@
                         return;
                     }
 
-                    // 检查带内容的修改指令（如"改成五点"、"修改为下午三点"）
-                    var editMatch = text.match(/^(改成|修改为|换一下|改一下|调整|变更|改为|调整为)\s*(.+)$/);
-                    if (editMatch) {
-                        var editContent = editMatch[2].trim();
-                        // 调用解析接口，解析提取后的实际内容
-                        const reparseResponse = await fetch('/api/reminders/parse', {
-                            method: 'POST',
-                            headers: headers,
-                            body: JSON.stringify({ input: editContent, userId: currentUserId })
-                        });
-                        const reparseResult = await reparseResponse.json();
-
-                        if (reparseResult.title && reparseResult.remindTime) {
-                            // 调用后端 edit 接口更新确认会话
-                            const editResponse = await fetch('/api/confirmations/' + currentConfirmationSessionId + '/edit?userId=' + currentUserId, {
-                                method: 'POST',
-                                headers: headers,
-                                body: JSON.stringify({
-                                    input: editContent,
-                                    parsedData: {
-                                        title: reparseResult.title,
-                                        remindTime: reparseResult.remindTime,
-                                        intentType: reparseResult.intentType,
-                                        location: reparseResult.location,
-                                        priority: reparseResult.priority,
-                                        advanceMinutes: 10,
-                                        confidence: 0.95
-                                    }
-                                })
-                            });
-                            const editResult = await editResponse.json();
-                            if (editResult.success) {
-                                addMessage('bot', '✏️ 已更新提醒信息，请确认');
-                            } else {
-                                addMessage('bot', '❌ ' + editResult.message);
-                            }
-                        } else {
-                            addMessage('bot', '❌ ' + (reparseResult.message || '解析失败，请重试'));
-                        }
-                        return;
-                    }
-
-                    // 仅修改关键词（无内容），提示用户重新输入
-                    if (/^(修改|改成|改为|重新|换一下|改一下)$/.test(text)) {
-                        // 提示用户输入新的内容
-                        addMessage('bot', '✏️ 请重新输入提醒内容：');
-                        // 清空卡片但保留 sessionId 用于后续修改
-                        document.getElementById('confirmationContainer').innerHTML = '';
-                        // 不清空 currentConfirmationSessionId，等待用户输入新内容后通过下面的 reparse 逻辑处理
-                        return;
-                    }
-
-                    // 用户直接输入新内容（被提示后输入的完整提醒）
-                    const reparseResponse = await fetch('/api/reminders/parse', {
-                        method: 'POST',
-                        headers: headers,
-                        body: JSON.stringify({ input: text, userId: currentUserId })
+                    // 智能修改关键词检测
+                    var editKeywords = ['修改', '改成', '改为', '调整为', '变更为', '换成', '改一下', '调整'];
+                    var isEditIntent = editKeywords.some(function(keyword) {
+                        return text.includes(keyword);
                     });
-                    const reparseResult = await reparseResponse.json();
 
-                    if (reparseResult.title && reparseResult.remindTime) {
-                        const editResponse = await fetch('/api/confirmations/' + currentConfirmationSessionId + '/edit?userId=' + currentUserId, {
+                    if (isEditIntent) {
+                        // 从当前确认卡片中提取完整数据
+                        var currentData = getCurrentCardData();
+                        if (!currentData) {
+                            addMessage('bot', '❌ 当前没有可修改的确认卡片，请先创建提醒');
+                            return;
+                        }
+
+                        // 确保必要字段存在
+                        if (!currentData.title) {
+                            addMessage('bot', '❌ 无法提取卡片数据，请重试');
+                            return;
+                        }
+
+                        // 调用智能修改接口
+                        const editResponse = await fetch('/api/confirmations/' + currentConfirmationSessionId + '/smart-edit?userId=' + currentUserId, {
                             method: 'POST',
                             headers: headers,
                             body: JSON.stringify({
-                                input: text,
-                                parsedData: {
-                                    title: reparseResult.title,
-                                    remindTime: reparseResult.remindTime,
-                                    intentType: reparseResult.intentType,
-                                    location: reparseResult.location,
-                                    priority: reparseResult.priority,
-                                    advanceMinutes: 10,
-                                    confidence: 0.95
-                                }
+                                userInput: text,
+                                currentData: currentData
                             })
                         });
                         const editResult = await editResponse.json();
                         if (editResult.success) {
-                            addMessage('bot', '✏️ 已更新提醒信息，请确认');
+                            addMessage('bot', editResult.message);
                         } else {
                             addMessage('bot', '❌ ' + editResult.message);
                         }
-                    } else {
-                        addMessage('bot', '❌ ' + (reparseResult.message || '解析失败，请重试'));
+                        return;
                     }
-                    return;
+
+                    // 非修改指令的输入，直接发送到聊天接口处理
                 }
 
                 const response = await fetch('/api/chat/send', {
