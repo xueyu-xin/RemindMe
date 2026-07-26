@@ -1,168 +1,682 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>校园生活提醒助手</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; min-height: 100vh; }
-        
-        .app-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 18px 20px; text-align: center; font-size: 18px; font-weight: 600; position: fixed; top: 0; left: 0; right: 0; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        
-        .content-area { max-width: 800px; margin: 0 auto; padding: 70px 20px 80px; min-height: 100vh; }
-        
-        .card { background: white; border-radius: 12px; padding: 25px; margin-bottom: 20px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
-        h2 { color: #333; margin-bottom: 20px; font-size: 18px; }
-        
-        .form-group { margin-bottom: 15px; }
-        label { display: block; margin-bottom: 8px; color: #555; font-weight: 500; font-size: 14px; }
-        input, textarea, select { width: 100%; padding: 12px 14px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 14px; }
-        input:focus, textarea:focus, select:focus { outline: none; border-color: #667eea; }
-        
-        button { padding: 12px 24px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer; }
-        button:hover { opacity: 0.9; }
-        
-        .reminder-list { list-style: none; }
-        .reminder-item { padding: 15px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; }
-        .reminder-item:last-child { border-bottom: none; }
-        .reminder-title { font-weight: 600; color: #333; font-size: 15px; }
-        .reminder-time { color: #666; font-size: 13px; margin-top: 4px; }
-        .reminder-actions button { padding: 6px 12px; font-size: 12px; margin-left: 5px; }
-        .btn-danger { background: #e74c3c; }
-        .btn-success { background: #27ae60; }
-        
-        .chat-input { display: flex; gap: 10px; }
-        .chat-input input { flex: 1; }
-        .chat-history { max-height: 400px; overflow-y: auto; margin-bottom: 15px; padding-right: 10px; }
-        .chat-message { padding: 12px 16px; margin-bottom: 10px; border-radius: 12px; font-size: 14px; line-height: 1.5; word-break: break-all; }
-        .chat-message.user { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; text-align: right; border-bottom-right-radius: 2px; }
-        .chat-message.bot { background: #f0f4ff; color: #333; border-bottom-left-radius: 2px; }
-        
-        .prompt-bar { background: #f8f9fa; padding: 10px 15px; border-radius: 8px; margin-bottom: 15px; text-align: center; color: #666; font-size: 13px; }
-        
-        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; padding: 8px 12px; }
-        .weekday { text-align: center; font-weight: bold; color: #666; padding: 8px 0; font-size: 13px; }
-        .day { text-align: center; padding: 10px 0; border-radius: 8px; cursor: pointer; position: relative; min-height: 44px; }
-        .day:hover { background: #f0f0f0; }
-        .day.today { background: #e3f0ff; font-weight: bold; }
-        .day.selected { background: #4A90D9; color: #fff; }
-        .day.has-reminder .red-dot { display: block; }
-        .red-dot { display: none; width: 6px; height: 6px; background: #ff4444; border-radius: 50%; margin: 2px auto 0; }
-        .day-number { display: block; }
-        .calendar-header { display: flex; justify-content: space-between; align-items: center; padding: 16px; }
-        .calendar-header h3 { margin: 0; font-size: 16px; color: #333; }
-        .mode-switch { display: flex; gap: 8px; }
-        .mode-btn { padding: 8px 16px; border: 2px solid #4A90D9; background: #fff; color: #4A90D9; border-radius: 20px; cursor: pointer; font-size: 13px; font-weight: 500; }
-        .mode-btn.active { background: #4A90D9; color: #fff; border-color: #4A90D9; }
-        .mode-btn:hover { background: #e3f0ff; }
-        .calendar-nav { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; }
-        .calendar-nav button { background: #fff; border: 2px solid #4A90D9; color: #4A90D9; font-size: 18px; cursor: pointer; padding: 6px 14px; border-radius: 8px; }
-        .calendar-nav button:hover { background: #4A90D9; color: #fff; }
-        #calendarTitle { font-size: 15px; font-weight: 600; color: #333; }
-        #scheduleList { padding: 12px 16px; border-top: 1px solid #eee; }
-        .schedule-header { display: flex; align-items: center; gap: 4px; margin-bottom: 12px; }
-        #scheduleTitle { font-size: 14px; color: #666; }
-        #scheduleCount { font-size: 14px; color: #999; }
-        #scheduleItems { min-height: 80px; }
-        .schedule-item { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid #f0f0f0; font-size: 14px; }
-        .schedule-item:last-child { border-bottom: none; }
-        .schedule-time { font-weight: 600; color: #4A90D9; width: 56px; flex-shrink: 0; }
-        .schedule-title { flex: 1; color: #333; }
-        .schedule-location { color: #999; font-size: 12px; margin-top: 2px; }
-        .schedule-tag { font-size: 12px; padding: 2px 6px; border-radius: 4px; margin-left: 4px; }
-        .schedule-tag.pending { background: #f5f5f5; color: #333; }
-        .schedule-tag.cancelled { background: #f0f0f0; color: #999; }
-        .empty-schedule { text-align: center; color: #999; padding: 20px 0; font-size: 14px; }
-        
-        .profile-card { text-align: center; padding: 20px; }
-        .avatar-circle { width: 80px; height: 80px; border-radius: 50%; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; display: flex; align-items: center; justify-content: center; font-size: 32px; margin: 0 auto 12px; }
-        .user-name { font-size: 18px; font-weight: 600; color: #333; }
-        .user-phone { font-size: 14px; color: #999; margin-top: 4px; }
-        
-        .settings-group { margin-top: 16px; }
-        .settings-title { font-size: 14px; font-weight: 600; color: #666; padding: 12px 16px; border-bottom: 1px solid #f0f0f0; }
-        .settings-item { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; cursor: pointer; border-bottom: 1px solid #f5f5f5; }
-        .settings-item:hover { background: #fafafa; }
-        .settings-label { font-size: 15px; color: #333; }
-        .settings-value { font-size: 15px; color: #999; display: flex; align-items: center; gap: 8px; }
-        .settings-arrow { color: #ccc; font-size: 14px; }
-        
-        .toggle-switch { position: relative; width: 48px; height: 26px; background: #ddd; border-radius: 13px; cursor: pointer; }
-        .toggle-switch.active { background: #4A90D9; }
-        .toggle-knob { position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; background: white; border-radius: 50%; transition: left 0.3s; }
-        .toggle-switch.active .toggle-knob { left: 24px; }
-        
-        .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
-        .modal-overlay.show { display: flex; }
-        .modal-content { background: white; border-radius: 12px; padding: 24px; width: 90%; max-width: 320px; }
-        .city-picker { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
-        .city-selects { display: flex; gap: 6px; }
-        .city-selects select { flex: 1; min-width: 0; padding: 10px 6px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 13px; }
-        .location-btn { width: 100%; padding: 10px; margin-bottom: 8px; border: none; border-radius: 8px; background: #e8f0fe; color: #1a73e8; font-size: 14px; cursor: pointer; transition: background 0.2s; }
-        .location-btn:hover { background: #d2e3fc; }
-        .location-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-        .location-status { font-size: 12px; color: #666; margin-bottom: 12px; min-height: 16px; }
-        .modal-title { font-size: 18px; font-weight: 600; color: #333; margin-bottom: 20px; }
-        .modal-input { width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 15px; margin-bottom: 12px; }
-        .modal-input:focus { outline: none; border-color: #667eea; }
-        .modal-options { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
-        .modal-option { padding: 8px 16px; border: 1px solid #ddd; border-radius: 20px; cursor: pointer; font-size: 14px; }
-        .modal-option.active { background: #667eea; color: white; border-color: #667eea; }
-        .modal-buttons { display: flex; gap: 10px; }
-        .modal-btn { flex: 1; padding: 12px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }
-        .modal-btn.cancel { background: #f0f0f0; color: #666; }
-        .modal-btn.confirm { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
-        
-        .tab-page { display: none; }
-        .tab-page.active { display: block; }
-        
-        .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #ffffff; border-top: 1px solid #e5e5e5; display: flex; justify-content: space-around; align-items: center; height: 60px; z-index: 999; box-shadow: 0 -2px 10px rgba(0,0,0,0.05); }
-        .nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 8px 20px; cursor: pointer; transition: all 0.3s; color: #999; }
-        .nav-item.active { color: #667eea; }
-        .nav-icon { font-size: 20px; margin-bottom: 2px; }
-        .nav-label { font-size: 11px; font-weight: 500; }
-        
-        .error { color: #e74c3c; font-size: 14px; margin-top: 5px; }
-        
-        .confirmation-card {
-            background: #fff;
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 15px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-            border-left: 4px solid #667eea;
-            animation: slideIn 0.3s ease;
+        /* ===== 猫啃什锦黑（标题/加粗用，可爱圆润） ===== */
+        @font-face {
+            font-family: 'MaoKenShiJinHei';
+            src: url('/fonts/MaoKenShiJinHei-2.ttf') format('truetype');
+            font-weight: normal;
+            font-display: swap;
         }
-        @keyframes slideIn {
-            from { opacity: 0; transform: translateY(-10px); }
+
+        /* ===== 猫啃猪圆体（正文用，圆润柔和） ===== */
+        @font-face {
+            font-family: 'MaoKenZhuYuanTi';
+            src: url('/fonts/MaoKenZhuYuanTi-MaokenZhuyuanTi-2.ttf') format('truetype');
+            font-weight: normal;
+            font-display: swap;
+        }
+
+        /* ===== 奶油蜜桃色彩令牌 ===== */
+        :root {
+            --cream-bg: #FFF5F5;
+            --cream-card: #FFFFFF;
+            --peach: #FFB5A7;
+            --peach-light: #FFCAC0;
+            --peach-soft: #FFDFD7;
+            --peach-pale: #FFF0EC;
+            --peach-glow: rgba(255, 181, 167, 0.3);
+            --pink-accent: #FF8FA3;
+            --brown-deep: #5C4033;
+            --brown-mid: #8B7355;
+            --brown-light: #B59D85;
+            --brown-pale: #F5E6E0;
+            --danger: #FF7B89;
+            --warning: #FFB347;
+            --success: #8ED4A6;
+            --shadow-soft: 0 4px 20px rgba(255, 181, 167, 0.15);
+            --shadow-card: 0 6px 24px rgba(255, 181, 167, 0.18);
+            --shadow-hover: 0 10px 32px rgba(255, 181, 167, 0.28);
+            --shadow-strong: 0 12px 40px rgba(255, 181, 167, 0.35);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        html, body {
+            height: 100%;
+            min-height: 100vh;
+            font-family: 'MaoKenZhuYuanTi', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(180deg, #FFF5F5 10%, #FFE4E1 90%);
+            background-attachment: fixed;
+            font-size: 16px;
+            line-height: 1.7;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* ===== 标题字体（什锦黑，加粗可爱） ===== */
+        .app-header, h2, h3, .modal-title, .card-title, .settings-title,
+        .nav-label, .user-name, .confirmation-card .card-title,
+        .calendar-header h3, button, .mode-btn.active {
+            font-family: 'MaoKenShiJinHei', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+        }
+
+        /* ===== 顶部栏 ===== */
+        .app-header {
+            background: linear-gradient(135deg, #FFFFFF 0%, #FFF5F5 100%);
+            color: var(--brown-deep);
+            padding: 0 20px;
+            text-align: center;
+            font-size: 22px;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+            height: 64px;
+            line-height: 64px;
+            border-bottom: 2px solid var(--peach-pale);
+            box-shadow: 0 2px 16px rgba(255, 181, 167, 0.15);
+            letter-spacing: 2px;
+        }
+
+        /* ===== 底部导航栏 ===== */
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(135deg, #FFFFFF 0%, #FFF5F5 100%);
+            border-top: 2px solid var(--peach-pale);
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            height: 68px;
+            z-index: 999;
+            box-shadow: 0 -4px 22px rgba(255, 181, 167, 0.15);
+            padding-bottom: env(safe-area-inset-bottom, 0);
+        }
+        .nav-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 32px;
+            cursor: pointer;
+            color: var(--brown-light);
+            transition: all 0.25s ease;
+            border-radius: 16px;
+        }
+        .nav-item:hover {
+            color: var(--brown-mid);
+            transform: translateY(-3px);
+        }
+        .nav-item.active {
+            color: var(--peach);
+        }
+        .nav-item.active .nav-icon {
+            transform: scale(1.2);
+        }
+        .nav-icon { font-size: 28px; margin-bottom: 2px; transition: transform 0.25s ease; }
+        .nav-label { font-size: 12px; letter-spacing: 0.5px; }
+
+        /* ===== 中间内容区 ===== */
+        .content-area {
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 0 24px;
+            padding-top: 76px;
+            padding-bottom: 80px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .tab-page {
+            display: none;
+            flex-direction: column;
+            flex: 1;
+        }
+
+        .tab-page.active {
+            display: flex;
+        }
+
+        /* ===== 卡片 ===== */
+        .card {
+            background: var(--cream-card);
+            border: 2px solid var(--peach-pale);
+            border-radius: 24px;
+            padding: 28px;
+            box-shadow: var(--shadow-card);
+            animation: cardFadeIn 0.4s ease-out;
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* ===== 聊天页面卡片 - 固定高度，有上下边距 ===== */
+        #page-chat .card {
+            flex: 0 1 auto;
+            height: calc(100vh - 64px - 68px - 40px);
+            min-height: 350px;
+            max-height: 680px;
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
+
+        /* ===== 日历页面卡片 - 自适应内容，但高度足够展示全部 ===== */
+        #page-calendar .card {
+            flex: 1;
+            min-height: 0;
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
+
+        /* ===== 我的页面卡片 - 自适应内容 ===== */
+        #page-profile .card {
+            flex: 1;
+            min-height: 0;
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
+
+        @keyframes cardFadeIn {
+            from { opacity: 0; transform: translateY(12px); }
             to { opacity: 1; transform: translateY(0); }
         }
+
+        h2 { color: var(--brown-deep); margin-bottom: 18px; font-size: 20px; font-weight: normal; letter-spacing: 1.5px; }
+
+        /* ===== 表单 ===== */
+        .form-group { margin-bottom: 22px; }
+        label { display: block; margin-bottom: 10px; color: var(--brown-deep); font-size: 16px; padding-left: 4px; }
+        input, textarea, select {
+            width: 100%;
+            padding: 14px 20px;
+            background: var(--cream-bg);
+            color: var(--brown-deep);
+            border: 2px solid var(--brown-pale);
+            border-radius: 16px;
+            font-family: inherit;
+            font-size: 16px;
+            line-height: 1.7;
+            height: 50px;
+            transition: all 0.25s ease;
+            outline: none;
+        }
+        input:hover, textarea:hover, select:hover { border-color: var(--peach-soft); background: #FFFAFA; }
+        input:focus, textarea:focus, select:focus {
+            border-color: var(--peach);
+            background: #FFFFFF;
+            box-shadow: 0 0 0 5px rgba(255, 181, 167, 0.15);
+        }
+        input::placeholder, textarea::placeholder { color: var(--brown-light); }
+        textarea { height: auto; padding: 16px 20px; }
+
+        /* ===== 按钮 ===== */
+        button {
+            padding: 10px 26px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+            color: #FFFFFF;
+            border: none;
+            border-radius: 16px;
+            font-family: inherit;
+            font-size: 16px;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            box-shadow: 0 4px 14px rgba(255, 181, 167, 0.35);
+            position: relative;
+            overflow: hidden;
+        }
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 22px rgba(255, 181, 167, 0.45);
+        }
+        button:active:not(:disabled) {
+            transform: translateY(0);
+            box-shadow: 0 2px 10px rgba(255, 181, 167, 0.3);
+        }
+        button:disabled {
+            background: var(--peach-soft);
+            cursor: not-allowed;
+            opacity: 0.7;
+            box-shadow: none;
+        }
+
+        /* ===== 提醒列表 ===== */
+        .reminder-list { list-style: none; }
+        .reminder-item {
+            padding: 14px 0;
+            border-bottom: 1px solid var(--peach-pale);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+        }
+        .reminder-item:last-child { border-bottom: none; }
+        .reminder-item:hover { background: var(--cream-bg); margin: 0 -12px; padding-left: 12px; padding-right: 12px; border-radius: 12px; }
+        .reminder-title { color: var(--brown-deep); font-size: 16px; }
+        .reminder-time { color: var(--brown-mid); font-size: 14px; margin-top: 4px; }
+        .reminder-actions button { padding: 6px 18px; font-size: 14px; margin-left: 10px; height: 36px; border-radius: 12px; }
+        .btn-danger { background: linear-gradient(135deg, #FF7B89 0%, #FFA0AB 100%) !important; box-shadow: 0 4px 14px rgba(255, 123, 137, 0.35) !important; }
+        .btn-success { background: linear-gradient(135deg, #8ED4A6 0%, #ABDFBE 100%) !important; box-shadow: 0 4px 14px rgba(142, 212, 166, 0.35) !important; }
+
+        /* ===== 聊天区域 ===== */
+        .chat-input { display: flex; gap: 12px; margin-top: auto; flex-shrink: 0; }
+        .chat-input input { flex: 1; }
+        #confirmationContainer { flex-shrink: 0; }
+        .prompt-bar { flex-shrink: 0; }
+        .chat-history {
+            flex: 1;
+            min-height: 0;
+            overflow-y: auto;
+            margin-bottom: 18px;
+            padding-right: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .chat-history::-webkit-scrollbar { width: 8px; }
+        .chat-history::-webkit-scrollbar-track { background: var(--peach-pale); border-radius: 4px; }
+        .chat-history::-webkit-scrollbar-thumb { background: var(--peach-soft); border-radius: 4px; }
+        .chat-history::-webkit-scrollbar-thumb:hover { background: var(--peach-light); }
+
+        .chat-message {
+            padding: 14px 20px;
+            border-radius: 20px;
+            font-size: 16px;
+            line-height: 1.75;
+            word-break: break-word;
+            max-width: 75%;
+            width: fit-content;
+            width: -moz-fit-content;
+            animation: msgPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        @keyframes msgPop {
+            0% { opacity: 0; transform: scale(0.85) translateY(8px); }
+            60% { transform: scale(1.03) translateY(-2px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+
+        .chat-message.user {
+            background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+            color: #FFFFFF;
+            align-self: flex-end;
+            border-bottom-right-radius: 6px;
+            box-shadow: 0 4px 14px rgba(255, 181, 167, 0.35);
+        }
+
+        .chat-message.bot {
+            background: var(--cream-card);
+            color: var(--brown-deep);
+            border: 2px solid var(--peach-pale);
+            align-self: flex-start;
+            border-bottom-left-radius: 6px;
+            box-shadow: var(--shadow-soft);
+        }
+
+        /* ===== 提示栏 ===== */
+        .prompt-bar {
+            background: linear-gradient(135deg, var(--peach-pale) 0%, #FFF5F0 100%);
+            padding: 14px 20px;
+            border-radius: 16px;
+            margin-bottom: 18px;
+            text-align: center;
+            color: var(--brown-mid);
+            font-size: 15px;
+            border: 1px solid var(--peach-soft);
+            animation: pulse 3s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.9; }
+            50% { opacity: 1; }
+        }
+
+        /* ===== 日历 ===== */
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; padding: 8px 0; }
+        .weekday { text-align: center; color: var(--brown-mid); padding: 12px 0; font-size: 14px; }
+        .day {
+            text-align: center;
+            padding: 12px 0;
+            border-radius: 14px;
+            cursor: pointer;
+            position: relative;
+            min-height: 48px;
+            font-size: 15px;
+            color: var(--brown-deep);
+            transition: all 0.2s ease;
+        }
+        .day:hover {
+            background: var(--peach-pale);
+            transform: scale(1.05);
+        }
+        .day.today {
+            background: var(--peach-soft);
+            color: var(--brown-deep);
+        }
+        .day.selected {
+            background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+            color: #FFFFFF;
+            transform: scale(1.05);
+            box-shadow: 0 4px 14px rgba(255, 181, 167, 0.4);
+        }
+        .day.has-reminder .red-dot { display: block; }
+        .red-dot { display: none; width: 7px; height: 7px; background: var(--pink-accent); border-radius: 50%; margin: 4px auto 0; box-shadow: 0 0 6px rgba(255, 143, 163, 0.5); }
+        .day-number { display: block; line-height: 1; }
+        .calendar-header { display: flex; justify-content: space-between; align-items: center; padding: 0 0 16px; }
+        .calendar-header h3 { margin: 0; font-size: 20px; color: var(--brown-deep); letter-spacing: 1.5px; }
+        .mode-switch { display: flex; gap: 6px; background: var(--cream-bg); padding: 6px; border-radius: 14px; border: 1px solid var(--peach-pale); }
+        .mode-btn {
+            padding: 8px 20px;
+            height: 38px;
+            background: transparent;
+            color: var(--brown-light);
+            border: none;
+            border-radius: 12px;
+            font-size: 14px;
+            line-height: 1.5;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            letter-spacing: 0.5px;
+            box-shadow: none;
+        }
+        .mode-btn.active {
+            color: #FFFFFF;
+            background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+            box-shadow: 0 3px 10px rgba(255, 181, 167, 0.35);
+        }
+        .mode-btn:hover { background: var(--peach-pale); color: var(--brown-deep); transform: none; }
+        .mode-btn.active:hover { background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%); color: #FFFFFF; }
+        .calendar-nav { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; }
+        .calendar-nav button {
+            background: var(--cream-card);
+            border: 2px solid var(--peach-pale);
+            color: var(--brown-deep);
+            font-size: 18px;
+            cursor: pointer;
+            padding: 4px 22px;
+            height: 40px;
+            border-radius: 14px;
+            line-height: 1.5;
+            box-shadow: var(--shadow-soft);
+            letter-spacing: 0;
+        }
+        .calendar-nav button:hover {
+            background: var(--peach-pale);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-hover);
+        }
+        #calendarTitle { font-size: 16px; color: var(--brown-deep); letter-spacing: 1px; }
+        #scheduleList { padding: 16px 0 0; border-top: 1px solid var(--peach-pale); overflow-y: auto; flex: 1; min-height: 0; }
+        .schedule-header { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-shrink: 0; }
+        #scheduleTitle { font-size: 15px; color: var(--brown-mid); }
+        #scheduleCount { font-size: 14px; color: var(--brown-light); }
+        #scheduleItems { min-height: 80px; }
+        .schedule-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 16px;
+            padding: 14px 0;
+            border-bottom: 1px solid var(--peach-pale);
+            font-size: 15px;
+            transition: background 0.2s;
+        }
+        .schedule-item:last-child { border-bottom: none; }
+        .schedule-item:hover { background: var(--cream-bg); margin: 0 -10px; padding-left: 10px; padding-right: 10px; border-radius: 10px; }
+        .schedule-time { color: var(--peach); width: 60px; flex-shrink: 0; }
+        .schedule-title { flex: 1; color: var(--brown-deep); }
+        .schedule-location { color: var(--brown-light); font-size: 13px; margin-top: 4px; }
+        .schedule-tag { font-size: 12px; padding: 3px 10px; border-radius: 10px; margin-left: 8px; }
+        .schedule-tag.pending { background: var(--peach-pale); color: var(--brown-mid); }
+        .schedule-tag.cancelled { background: var(--brown-pale); color: var(--brown-light); text-decoration: line-through; }
+        .empty-schedule { text-align: center; color: var(--brown-light); padding: 30px 0; font-size: 15px; }
+
+        /* ===== 个人资料 ===== */
+        .profile-card { text-align: center; padding: 24px 0; flex-shrink: 0; }
+        .avatar-circle {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+            color: #FFFFFF;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 32px;
+            margin: 0 auto 16px;
+            box-shadow: 0 6px 22px rgba(255, 181, 167, 0.4);
+        }
+        .user-name { font-size: 20px; color: var(--brown-deep); letter-spacing: 1.5px; }
+        .user-phone { font-size: 15px; color: var(--brown-mid); margin-top: 6px; }
+
+        .settings-group { margin-top: 22px; flex-shrink: 0; }
+        .settings-title {
+            font-size: 15px;
+            color: var(--peach);
+            padding: 10px 0;
+            border-bottom: 2px solid var(--peach-pale);
+            letter-spacing: 1.5px;
+            margin-bottom: 4px;
+        }
+        .settings-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px 8px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--peach-pale);
+            border-radius: 12px;
+            transition: all 0.2s ease;
+        }
+        .settings-item:hover { background: var(--cream-bg); padding-left: 14px; padding-right: 14px; }
+        .settings-item:last-child { border-bottom: none; }
+        .settings-label { font-size: 16px; color: var(--brown-deep); }
+        .settings-value { font-size: 15px; color: var(--brown-mid); display: flex; align-items: center; gap: 12px; }
+        .settings-arrow { color: var(--brown-light); font-size: 16px; }
+
+        /* ===== 开关 ===== */
+        .toggle-switch { position: relative; width: 54px; height: 30px; background: var(--brown-pale); border-radius: 9999px; cursor: pointer; transition: all 0.3s ease; }
+        .toggle-switch.active { background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%); box-shadow: 0 3px 10px rgba(255, 181, 167, 0.45); }
+        .toggle-knob { position: absolute; top: 2px; left: 2px; width: 26px; height: 26px; background: #FFFFFF; border-radius: 50%; transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15); }
+        .toggle-switch.active .toggle-knob { left: 26px; }
+
+        /* ===== 模态框 ===== */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(92, 64, 51, 0.35);
+            backdrop-filter: blur(5px);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            animation: fadeIn 0.25s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal-overlay.show { display: flex; }
+        .modal-content {
+            background: var(--cream-card);
+            border: 2px solid var(--peach-pale);
+            border-radius: 28px;
+            padding: 32px 28px 24px;
+            width: 90%;
+            max-width: 400px;
+            box-shadow: var(--shadow-strong);
+            animation: modalPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        @keyframes modalPop {
+            0% { opacity: 0; transform: scale(0.85); }
+            60% { transform: scale(1.03); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        .city-picker { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+        .city-selects { display: flex; gap: 10px; }
+        .city-selects select { flex: 1; min-width: 0; padding: 12px 14px; height: 46px; font-size: 14px; }
+        .location-btn {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 12px;
+            height: 46px;
+            border: 2px solid var(--peach-pale);
+            border-radius: 14px;
+            background: var(--cream-bg);
+            color: var(--brown-deep);
+            font-size: 15px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            line-height: 1.5;
+            box-shadow: none;
+            letter-spacing: 0;
+        }
+        .location-btn:hover:not(:disabled) {
+            background: var(--peach-pale);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-soft);
+        }
+        .location-btn:disabled { background: var(--brown-pale); color: var(--brown-light); cursor: not-allowed; box-shadow: none; opacity: 0.7; }
+        .location-status { font-size: 14px; color: var(--brown-mid); margin-bottom: 16px; min-height: 20px; }
+        .modal-title { font-size: 20px; color: var(--brown-deep); margin-bottom: 24px; text-align: center; letter-spacing: 1.5px; }
+        .modal-input {
+            width: 100%;
+            padding: 14px 20px;
+            background: var(--cream-bg);
+            color: var(--brown-deep);
+            border: 2px solid var(--brown-pale);
+            border-radius: 16px;
+            font-family: inherit;
+            font-size: 15px;
+            height: 46px;
+            margin-bottom: 14px;
+            outline: none;
+            transition: all 0.25s ease;
+        }
+        .modal-input:focus { background: #FFFFFF; border-color: var(--peach); box-shadow: 0 0 0 5px rgba(255, 181, 167, 0.15); }
+        .modal-options { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 24px; justify-content: center; }
+        .modal-option {
+            padding: 10px 20px;
+            height: 40px;
+            border: 2px solid var(--peach-pale);
+            border-radius: 14px;
+            cursor: pointer;
+            font-size: 15px;
+            background: var(--cream-card);
+            color: var(--brown-deep);
+            line-height: 1.5;
+            transition: all 0.2s ease;
+        }
+        .modal-option:hover {
+            background: var(--peach-pale);
+            transform: translateY(-1px);
+        }
+        .modal-option.active {
+            background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+            color: #FFFFFF;
+            border-color: transparent;
+            box-shadow: 0 4px 14px rgba(255, 181, 167, 0.4);
+        }
+        .modal-buttons { display: flex; gap: 12px; }
+        .modal-btn {
+            flex: 1;
+            padding: 10px 20px;
+            height: 48px;
+            border: none;
+            border-radius: 16px;
+            font-family: inherit;
+            font-size: 16px;
+            line-height: 1.5;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            letter-spacing: 1px;
+        }
+        .modal-btn.cancel {
+            background: var(--cream-bg);
+            color: var(--brown-deep);
+            border: 2px solid var(--peach-pale);
+            box-shadow: none;
+        }
+        .modal-btn.cancel:hover {
+            background: var(--peach-pale);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-soft);
+        }
+        .modal-btn.confirm {
+            background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+            color: #FFFFFF;
+            box-shadow: 0 4px 14px rgba(255, 181, 167, 0.4);
+        }
+        .modal-btn.confirm:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 22px rgba(255, 181, 167, 0.5);
+        }
+
+        /* ===== 错误 ===== */
+        .error { color: var(--danger); font-size: 14px; margin-top: 8px; padding-left: 4px; animation: shake 0.4s ease; }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-4px); }
+            75% { transform: translateX(4px); }
+        }
+
+        /* ===== 确认卡片 ===== */
+        .confirmation-card {
+            background: var(--cream-card);
+            border: 2px solid var(--peach-pale);
+            border-left: 4px solid var(--peach);
+            border-radius: 18px;
+            padding: 20px;
+            margin-bottom: 14px;
+            box-shadow: var(--shadow-soft);
+            animation: cardSlideIn 0.35s ease-out;
+        }
+
+        @keyframes cardSlideIn {
+            from { opacity: 0; transform: translateX(-12px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
         .confirmation-card .card-title {
             font-size: 16px;
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 15px;
+            color: var(--brown-deep);
+            margin-bottom: 14px;
+            letter-spacing: 0.5px;
         }
         .confirmation-card .card-info {
             display: flex;
             flex-direction: column;
             gap: 8px;
-            margin-bottom: 15px;
+            margin-bottom: 16px;
         }
         .confirmation-card .info-item {
             display: flex;
             align-items: center;
             font-size: 14px;
+            color: var(--brown-mid);
         }
         .confirmation-card .info-label {
             width: 60px;
-            color: #888;
+            color: var(--brown-light);
             flex-shrink: 0;
         }
         .confirmation-card .info-value {
-            color: #333;
-            font-weight: 500;
+            color: var(--brown-deep);
         }
         .confirmation-card .card-actions {
             display: flex;
@@ -170,47 +684,137 @@
         }
         .confirmation-card .action-btn {
             flex: 1;
-            padding: 10px;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 600;
+            padding: 8px 14px;
+            height: 38px;
+            border: 2px solid var(--peach-pale);
+            border-radius: 12px;
+            font-family: inherit;
+            font-size: 13px;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.25s ease;
+            line-height: 1.5;
+            background: var(--cream-card);
+            letter-spacing: 0.5px;
         }
         .confirmation-card .action-btn.primary {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+            color: #FFFFFF;
+            border-color: transparent;
+            box-shadow: 0 4px 12px rgba(255, 159, 122, 0.35);
+        }
+        .confirmation-card .action-btn.primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(255, 159, 122, 0.45);
         }
         .confirmation-card .action-btn.warning {
-            background: #fff3cd;
-            color: #856404;
-            border: 1px solid #ffeeba;
+            color: var(--brown-deep);
+            background: var(--cream-bg);
+        }
+        .confirmation-card .action-btn.warning:hover {
+            background: var(--peach-pale);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-soft);
         }
         .confirmation-card .action-btn.danger {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+            color: var(--danger);
+            border-color: #FFB3B3;
+            background: #FFF5F5;
         }
-        .confirmation-card .action-btn:hover {
-            opacity: 0.9;
+        .confirmation-card .action-btn.danger:hover {
+            background: var(--danger);
+            color: #FFFFFF;
+            border-color: transparent;
             transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(255, 107, 107, 0.35);
         }
         .confirmation-card .card-timer {
-            margin-top: 10px;
+            margin-top: 12px;
             text-align: center;
-            font-size: 12px;
-            color: #999;
+            font-size: 13px;
+            color: var(--brown-mid);
         }
         .confirmation-card .card-timer.warning {
-            color: #e74c3c;
-            font-weight: 600;
+            color: var(--danger);
+            font-weight: normal;
+            animation: timerBlink 1s ease-in-out infinite;
+        }
+
+        @keyframes timerBlink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        /* ===== 卡片列表项（多确认卡片用） ===== */
+        .card-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+        .card-list-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            background: var(--cream-bg);
+            border-radius: 10px;
+            border: 1px solid var(--peach-pale);
+            font-size: 14px;
+        }
+        .item-number { color: var(--peach); margin-right: 8px; font-weight: normal; }
+        .item-title { flex: 1; color: var(--brown-deep); }
+        .item-time { color: var(--brown-mid); font-size: 13px; }
+        .item-actions { display: flex; gap: 6px; margin-left: 10px; }
+        .mini-btn {
+            padding: 4px 10px;
+            height: 28px;
+            border-radius: 8px;
+            border: none;
+            font-family: inherit;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            letter-spacing: 0;
+        }
+        .mini-btn.confirm {
+            background: linear-gradient(135deg, #6BCB77 0%, #8DD996 100%);
+            color: #FFFFFF;
+            box-shadow: 0 2px 6px rgba(107, 203, 119, 0.3);
+        }
+        .mini-btn.confirm:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(107, 203, 119, 0.4); }
+        .mini-btn.cancel {
+            background: linear-gradient(135deg, #FF6B6B 0%, #FF8E8E 100%);
+            color: #FFFFFF;
+            box-shadow: 0 2px 6px rgba(255, 107, 107, 0.3);
+        }
+        .mini-btn.cancel:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(255, 107, 107, 0.4); }
+
+        /* ===== 编辑表单 ===== */
+        .edit-form .form-item { margin-bottom: 14px; }
+        .edit-form .form-label {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--brown-deep);
+            font-size: 14px;
+            padding-left: 4px;
+        }
+        .edit-form .form-input {
+            width: 100%;
+            padding: 10px 14px;
+            background: var(--cream-bg);
+            color: var(--brown-deep);
+            border: 2px solid var(--brown-pale);
+            border-radius: 12px;
+            font-family: inherit;
+            font-size: 14px;
+            height: 42px;
+            outline: none;
+            transition: all 0.25s ease;
+        }
+        .edit-form .form-input:focus {
+            border-color: var(--peach);
+            background: #FFFFFF;
+            box-shadow: 0 0 0 4px rgba(255, 159, 122, 0.12);
         }
     </style>
 </head>
 <body>
     <header class="app-header">
-        <span id="headerTitle">💬 生活提醒助手</span>
+        <span id="headerTitle">🍑 生活提醒助手</span>
     </header>
 
     <main class="content-area">
@@ -231,7 +835,7 @@
         <div id="page-calendar" class="tab-page">
             <div class="card">
                 <div class="calendar-header">
-                    <h3>📅 日程日历</h3>
+                    <h3>🌷 日程日历</h3>
                     <div class="mode-switch">
                         <button class="mode-btn active" data-mode="month">📆 月查询</button>
                         <button class="mode-btn" data-mode="week">📋 周查询</button>
@@ -265,7 +869,7 @@
         <div id="page-profile" class="tab-page">
             <div class="card">
                 <div class="profile-card">
-                    <div class="avatar-circle">👤</div>
+                    <div class="avatar-circle">🐰</div>
                     <div class="user-name" id="profileNickname">用户</div>
                     <div class="user-phone" id="profilePhone">138****8888</div>
                 </div>
@@ -1180,6 +1784,17 @@
             rotatePrompt();
             setInterval(rotatePrompt, 3000);
             connectWebSocket();
+
+            // 回车发送消息
+            var chatInput = document.getElementById('chatInput');
+            if (chatInput) {
+                chatInput.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        sendMessage();
+                    }
+                });
+            }
         });
 
         var prompts = [
@@ -1206,17 +1821,17 @@
             });
 
             document.querySelectorAll('.tab-page').forEach(function(page) {
-                page.style.display = 'none';
+                page.classList.remove('active');
             });
             var targetPage = document.getElementById('page-' + tabName);
             if (targetPage) {
-                targetPage.style.display = 'block';
+                targetPage.classList.add('active');
             }
 
             var titles = {
-                'chat': '💬 生活提醒助手',
-                'calendar': '📅 日历',
-                'profile': '👤 我的'
+                'chat': '🍑 生活提醒助手',
+                'calendar': '🌷 日历',
+                'profile': '🍑 我的'
             };
             document.getElementById('headerTitle').textContent = titles[tabName] || '生活提醒助手';
 

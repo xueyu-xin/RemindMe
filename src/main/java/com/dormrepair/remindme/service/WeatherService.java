@@ -382,9 +382,10 @@ public class WeatherService {
     private String resolveLocation(Long userId, Double latitude, Double longitude, String location) {
         // 优先级1：经纬度
         if (latitude != null && longitude != null) {
-            String latLon = latitude + "," + longitude;
-            log.info("使用经纬度查询: lat={}, lon={}, locationStr={}", latitude, longitude, latLon);
-            return latLon;
+            // 和风天气API要求 location 格式为"经度,纬度"（longitude,latitude）
+            String lonLat = longitude + "," + latitude;
+            log.info("使用经纬度查询: lat={}, lon={}, locationStr={}", latitude, longitude, lonLat);
+            return lonLat;
         }
 
         // 优先级2：location参数（城市名）

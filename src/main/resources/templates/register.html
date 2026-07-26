@@ -5,43 +5,258 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>注册 - 校园生活提醒助手</title>
     <style>
+        /* ===== 猫啃什锦黑（可爱圆润中文字体） ===== */
+        @font-face {
+            font-family: 'MaoKenShiJinHei';
+            src: url('/fonts/MaoKenShiJinHei-2.ttf') format('truetype');
+            font-weight: normal;
+            font-display: swap;
+        }
+
+        /* ===== 猫啃猪圆体（正文用，圆润柔和） ===== */
+        @font-face {
+            font-family: 'MaoKenZhuYuanTi';
+            src: url('/fonts/MaoKenZhuYuanTi-MaokenZhuyuanTi-2.ttf') format('truetype');
+            font-weight: normal;
+            font-display: swap;
+        }
+
+        /* ===== 奶油蜜桃色彩令牌 ===== */
+        :root {
+            --cream-bg: #FFF5F5;
+            --cream-card: #FFFFFF;
+            --peach: #FFB5A7;
+            --peach-light: #FFCAC0;
+            --peach-soft: #FFDFD7;
+            --peach-pale: #FFF0EC;
+            --brown-deep: #5C4033;
+            --brown-mid: #8B7355;
+            --brown-light: #B59D85;
+            --brown-pale: #F5E6E0;
+            --danger: #FF7B89;
+            --shadow-soft: 0 4px 20px rgba(255, 181, 167, 0.15);
+            --shadow-hover: 0 8px 28px rgba(255, 181, 167, 0.25);
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-        .container { background: white; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); padding: 40px; width: 100%; max-width: 400px; }
-        h1 { text-align: center; margin-bottom: 8px; color: #333; font-size: 24px; }
-        p { text-align: center; color: #666; margin-bottom: 30px; font-size: 14px; }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; color: #555; font-weight: 500; font-size: 14px; }
-        input { width: 100%; padding: 12px 16px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 15px; transition: border-color 0.3s; }
-        input:focus { outline: none; border-color: #667eea; }
-        .code-group { display: flex; gap: 10px; }
-        .code-group input { flex: 1; }
-        .code-group button { flex: 0 0 100px; padding: 12px; background: #f0f0f0; color: #333; border: 2px solid #e0e0e0; border-radius: 8px; cursor: pointer; font-size: 14px; transition: all 0.3s; }
-        .code-group button:hover:not(:disabled) { background: #e0e0e0; }
-        .code-group button:disabled { opacity: 0.5; cursor: not-allowed; }
-        button.submit { width: 100%; padding: 14px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; transition: opacity 0.3s; }
-        button.submit:hover:not(:disabled) { opacity: 0.9; }
-        button.submit:disabled { opacity: 0.7; }
-        .footer-link { text-align: center; margin-top: 20px; font-size: 14px; color: #666; }
-        .footer-link a { color: #667eea; text-decoration: none; font-weight: 500; }
-        .footer-link a:hover { text-decoration: underline; }
-        .error { color: #e74c3c; font-size: 13px; margin-top: 6px; display: none; }
-        
-        #toast { display: none; padding: 12px 24px; border-radius: 8px; position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 9999; font-size: 14px; font-weight: 500; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+
+        body {
+            font-family: 'MaoKenZhuYuanTi', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            background: linear-gradient(180deg, #FFF5F5 0%, #FFE4E1 100%);
+            color: var(--brown-deep);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 15px;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            padding: 24px;
+        }
+
+        .auth-container {
+            background: var(--cream-card);
+            border-radius: 28px;
+            box-shadow: var(--shadow-soft);
+            padding: 48px 40px 40px;
+            width: 100%;
+            max-width: 420px;
+            border: 2px solid var(--peach-pale);
+            animation: floatUp 0.6s ease-out;
+        }
+
+        @keyframes floatUp {
+            from { opacity: 0; transform: translateY(24px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .auth-container h1 {
+            text-align: center;
+            font-family: 'MaoKenShiJinHei', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            margin-bottom: 8px;
+            color: var(--brown-deep);
+            font-size: 28px;
+            font-weight: normal;
+            letter-spacing: 2px;
+        }
+
+        .auth-container .subtitle {
+            text-align: center;
+            color: var(--brown-mid);
+            margin-bottom: 32px;
+            font-size: 14px;
+            line-height: 1.8;
+        }
+
+        .auth-container .form-group { margin-bottom: 20px; }
+
+        .auth-container label {
+            display: block;
+            margin-bottom: 10px;
+            color: var(--brown-deep);
+            font-size: 15px;
+            padding-left: 4px;
+        }
+
+        .auth-container input {
+            width: 100%;
+            padding: 12px 18px;
+            background: var(--cream-bg);
+            color: var(--brown-deep);
+            border: 2px solid var(--brown-pale);
+            border-radius: 14px;
+            font-family: inherit;
+            font-size: 15px;
+            line-height: 1.6;
+            height: 48px;
+            transition: all 0.25s ease;
+            outline: none;
+        }
+
+        .auth-container input:hover { border-color: var(--peach-soft); background: #FFFCF8; }
+
+        .auth-container input:focus {
+            border-color: var(--peach);
+            background: #FFFFFF;
+            box-shadow: 0 0 0 4px rgba(255, 181, 167, 0.12);
+        }
+
+        .auth-container input::placeholder { color: var(--brown-light); }
+
+        .auth-container .code-group { display: flex; gap: 10px; }
+
+        .auth-container .code-group input { flex: 1; }
+
+        .auth-container .code-group button {
+            flex: 0 0 120px;
+            height: 48px;
+            padding: 12px 16px;
+            background: var(--peach-pale);
+            color: var(--brown-deep);
+            border: 2px solid var(--peach-soft);
+            border-radius: 14px;
+            font-family: 'MaoKenShiJinHei', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            line-height: 1.4;
+            box-shadow: none;
+            letter-spacing: 0;
+        }
+
+        .auth-container .code-group button:hover:not(:disabled) {
+            background: var(--peach-soft);
+            transform: translateY(-1px);
+        }
+
+        .auth-container .code-group button:active:not(:disabled) { transform: translateY(0); }
+
+        .auth-container .code-group button:disabled {
+            background: var(--brown-pale);
+            color: var(--brown-light);
+            border-color: var(--brown-pale);
+            cursor: not-allowed;
+            opacity: 0.8;
+        }
+
+        .auth-container .submit-btn {
+            width: 100%;
+            padding: 12px 24px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+            color: #FFFFFF;
+            border: none;
+            border-radius: 14px;
+            font-family: 'MaoKenShiJinHei', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+            font-size: 16px;
+            letter-spacing: 2px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            box-shadow: 0 4px 12px rgba(255, 181, 167, 0.35);
+            margin-top: 8px;
+        }
+
+        .auth-container .submit-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(255, 181, 167, 0.45);
+        }
+
+        .auth-container .submit-btn:active:not(:disabled) {
+            transform: translateY(0);
+            box-shadow: 0 2px 8px rgba(255, 181, 167, 0.3);
+        }
+
+        .auth-container .submit-btn:disabled {
+            background: var(--peach-soft);
+            cursor: not-allowed;
+            opacity: 0.7;
+            box-shadow: none;
+        }
+
+        .auth-container .links {
+            text-align: center;
+            margin-top: 24px;
+            font-size: 14px;
+            color: var(--brown-mid);
+        }
+
+        .auth-container .links a {
+            color: var(--peach);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .auth-container .links a:hover { color: var(--peach-light); }
+
+        .auth-container .error {
+            color: var(--danger);
+            font-size: 13px;
+            margin-top: 8px;
+            padding-left: 4px;
+            display: none;
+            animation: shake 0.4s ease;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-4px); }
+            75% { transform: translateX(4px); }
+        }
+
+        #toast {
+            display: none;
+            padding: 12px 24px;
+            background: var(--brown-deep);
+            color: #FFFFFF;
+            border-radius: 12px;
+            position: fixed;
+            top: 32px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 9999;
+            font-size: 14px;
+            box-shadow: var(--shadow-hover);
+            animation: toastIn 0.35s ease-out;
+        }
+
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateX(-50%) translateY(-12px); }
+            to { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>校园生活提醒助手</h1>
-        <p>创建新账号</p>
-        
+    <div class="auth-container">
+        <h1>🍑 校园生活提醒助手</h1>
+        <p class="subtitle">创建新账号</p>
+
         <form id="registerForm">
             <div class="form-group">
                 <label for="phone">手机号</label>
                 <input type="tel" id="phone" placeholder="请输入手机号" maxlength="11" required>
                 <div class="error" id="phoneError"></div>
             </div>
-            
+
             <div class="form-group">
                 <label for="code">验证码</label>
                 <div class="code-group">
@@ -50,29 +265,29 @@
                 </div>
                 <div class="error" id="codeError"></div>
             </div>
-            
+
             <div class="form-group">
                 <label for="password">密码</label>
                 <input type="password" id="password" placeholder="请输入密码（8位以上，含字母+数字）" required>
                 <div class="error" id="passwordError"></div>
             </div>
-            
+
             <div class="form-group">
                 <label for="confirmPassword">确认密码</label>
                 <input type="password" id="confirmPassword" placeholder="请再次输入密码" required>
                 <div class="error" id="confirmError"></div>
             </div>
-            
-            <button type="submit" id="registerBtn" class="submit">注册</button>
+
+            <button type="submit" class="submit-btn" id="registerBtn">注册</button>
         </form>
-        
-        <div class="footer-link">
+
+        <div class="links">
             已有账号？<a href="/login">去登录 →</a>
         </div>
     </div>
-    
+
     <div id="toast"></div>
-    
+
     <script>
         var phoneInput = document.getElementById('phone');
         var codeInput = document.getElementById('code');
@@ -86,7 +301,7 @@
         function showToast(message, isSuccess) {
             toast.textContent = message;
             toast.style.display = 'block';
-            toast.style.background = isSuccess ? '#4CAF50' : '#f44336';
+            toast.style.background = isSuccess ? '#8ED4A6' : '#FF7B89';
             toast.style.color = '#fff';
             setTimeout(function() {
                 toast.style.display = 'none';
@@ -103,7 +318,7 @@
 
         sendCodeBtn.addEventListener('click', function() {
             var phone = phoneInput.value.trim();
-            
+
             document.querySelectorAll('.error').forEach(function(el) {
                 el.style.display = 'none';
             });
@@ -125,10 +340,10 @@
             .then(function(data) {
                 if (data.success) {
                     showToast('验证码已发送，请查看控制台', true);
-                    
+
                     var countdown = 60;
                     sendCodeBtn.textContent = countdown + 's';
-                    
+
                     var timer = setInterval(function() {
                         countdown--;
                         sendCodeBtn.textContent = countdown + 's';
@@ -205,7 +420,7 @@
             .then(function(data) {
                 registerBtn.disabled = false;
                 registerBtn.textContent = '注册';
-                
+
                 if (data.success) {
                     showToast('注册成功！即将跳转登录', true);
                     setTimeout(function() {

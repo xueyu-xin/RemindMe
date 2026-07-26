@@ -319,7 +319,17 @@ public class RagService {
 
     @AgentTool(
             name = "add_private_memory",
-            description = "将用户提供的个人信息存储到私有知识库中，包括个人信息、活动、计划、习惯等。"
+            description = """
+                    将用户提供的任何关于自己的信息存储到私有知识库中，包括但不限于：
+                    - 个人信息（如"我是大三学生"、"我是计算机专业"）
+                    - 饮食偏好（如"我喜欢吃苹果"）
+                    - 课程安排（如"每周三下午有高数课"）
+                    - 长期计划（如"我要考研"）
+                    - 考试安排（如"6月有四级考试"）
+                    - 日常习惯（如"我每天跑步"）
+                    - 兴趣爱好（如"我喜欢打篮球"）
+
+                    注意：只要用户提供了关于自己的事实信息，都应该调用此工具存储。"""
     )
     public String addPrivateMemoryForAgent(Long userId, String content, MemoryCategory category) {
         log.info("Agent调用添加私有记忆: userId={}, category={}", userId, category);
