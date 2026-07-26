@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.service;
 
+import com.dormrepair.remindme.agent.AgentTool;
 import com.dormrepair.remindme.dto.request.LoginRequest;
 import com.dormrepair.remindme.dto.request.RegisterRequest;
 import com.dormrepair.remindme.dto.response.LoginResponse;
@@ -11,6 +12,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -68,5 +71,143 @@ public class UserService {
     @Transactional
     public User save(User user) {
         return userRepository.save(user);
+    }
+
+    // ==================== Agent工具 ====================
+
+    /**
+     * 获取用户偏好设置
+     * <p>
+     * 用户询问默认城市、默认提前量、时区时调用
+     * </p>
+     */
+    @AgentTool(name = "get_user_preferences", description = "获取用户偏好设置，用户询问默认城市、默认提前量、时区时调用")
+    public Map<String, Object> getUserPreferences(Long userId) {
+        log.info("Agent调用获取用户偏好: userId={}", userId);
+
+        Map<String, Object> result = new HashMap<>();
+
+        Optional<User> userOpt = userRepository.findById(userId);
+        if (userOpt.isEmpty()) {
+            result.put("success", false);
+            result.put("error", "用户不存在: userId=" + userId);
+            return result;
+        }
+
+        User user = userOpt.get();
+        result.put("success", true);
+        result.put("nickname", user.getNickname());
+        result.put("city", user.getCity());
+        result.put("defaultAdvanceMinutes", user.getDefaultAdvanceMinutes());
+        result.put("timezone", "Asia/Shanghai");
+        result.put("remindInterval", user.getRemindInterval());
+        result.put("enablePeriodReminder", user.getEnablePeriodReminder());
+
+        return result;
+    }
+
+    /**
+     * 修改用户偏好设置
+     * <p>
+     * 用户要求更改默认城市、默认提前量、昵称时调用
+     * </p>
+     *
+     * @param userId     用户ID（系统自动填充）
+     * @param preference 偏好项名称：city / defaultAdvanceMinutes / nickname
+     * @param value      新值
+     * @return 修改结果
+     */
+    @AgentTool(name = "set_user_preferences", description = "修改用户偏好设置，用户要求更改默认城市、默认提前量、昵称时调用")
+    @Transactional
+    public Map<String, Object> setUserPreferences(Long userId, String preference, String value) {
+        log.info("Agent调用修改用户偏好: userId={}, preference={}, value={}", userId, preference, value);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("preference", preference);
+        result.put("newValue", value);
+
+        // 验证用户是否存在
+        Optional<User> userOpt = userRepository.findById(userId);
+        if (userOpt.isEmpty()) {
+            result.put("success", false);
+            result.put("error", "用户不存在: userId=" + userId);
+            return result;
+        }
+
+        User user = userOpt.get();
+
+        // 验证 preference 是否支持
+        if (preference == null || preference.trim().isEmpty()) {
+            result.put("success", false);
+            result.put("error", "偏好项不能为空，支持：city、defaultAdvanceMinutes、nickname");
+            return result;
+        }
+
+        preference = preference.trim();
+        String fieldDisplayName;
+
+        switch (preference) {
+            case "city":
+                if (value == null || value.trim().isEmpty()) {
+                    result.put("success", false);
+                    result.put("error", "城市名称不能为空");
+                    return result;
+                }
+                user.setCity(value.trim());
+                fieldDisplayName = "默认城市";
+                break;
+
+            case "defaultAdvanceMinutes":
+                int advanceMinutes;
+                try {
+                    advanceMinutes = Integer.parseInt(value);
+                } catch (NumberFormatException e) {
+                    result.put("success", false);
+                    result.put("error", "默认提前量必须为整数");
+                    return result;
+                }
+                if (advanceMinutes < 0 || advanceMinutes > 1440) {
+                    result.put("success", false);
+                    result.put("error", "默认提前量范围为 0-1440 分钟");
+                    return result;
+                }
+                user.setDefaultAdvanceMinutes(advanceMinutes);
+                fieldDisplayName = "默认提前量";
+                break;
+
+            case "nickname":
+                if (value == null || value.trim().isEmpty()) {
+                    result.put("success", false);
+                    result.put("error", "昵称不能为空");
+                    return result;
+                }
+                user.setNickname(value.trim());
+                fieldDisplayName = "昵称";
+                break;
+
+            default:
+                result.put("success", false);
+                result.put("error", "不支持的偏好项: " + preference + "，支持：city、defaultAdvanceMinutes、nickname");
+                return result;
+        }
+
+        userRepository.save(user);
+
+        result.put("success", true);
+        result.put("message", "已修改" + fieldDisplayName + "为：" + value);
+        result.put("field", preference);
+        return result;
+    }
+
+    /**
+     * 更新用户默认城市
+     */
+    @Transactional
+    public void updateDefaultCity(Long userId, String city) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在: " + userId));
+        user.setCity(city);
+        userRepository.save(user);
+        log.info("已更新用户 {} 的默认城市为: {}", userId, city);
     }
 }

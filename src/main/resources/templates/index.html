@@ -96,6 +96,13 @@
         .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center; }
         .modal-overlay.show { display: flex; }
         .modal-content { background: white; border-radius: 12px; padding: 24px; width: 90%; max-width: 320px; }
+        .city-picker { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+        .city-selects { display: flex; gap: 6px; }
+        .city-selects select { flex: 1; min-width: 0; padding: 10px 6px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 13px; }
+        .location-btn { width: 100%; padding: 10px; margin-bottom: 8px; border: none; border-radius: 8px; background: #e8f0fe; color: #1a73e8; font-size: 14px; cursor: pointer; transition: background 0.2s; }
+        .location-btn:hover { background: #d2e3fc; }
+        .location-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .location-status { font-size: 12px; color: #666; margin-bottom: 12px; min-height: 16px; }
         .modal-title { font-size: 18px; font-weight: 600; color: #333; margin-bottom: 20px; }
         .modal-input { width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 15px; margin-bottom: 12px; }
         .modal-input:focus { outline: none; border-color: #667eea; }
@@ -279,8 +286,8 @@
                             <span class="settings-arrow">›</span>
                         </span>
                     </div>
-                    <div class="settings-item" onclick="showEditModal('city', '默认城市')">
-                        <span class="settings-label">默认城市</span>
+                    <div class="settings-item" onclick="showCityModal()">
+                        <span class="settings-label">当前位置</span>
                         <span class="settings-value">
                             <span id="valueCity">广州</span>
                             <span class="settings-arrow">›</span>
@@ -337,6 +344,15 @@
                 <div class="modal-title" id="modalTitle">编辑</div>
                 <input type="text" class="modal-input" id="modalInput" placeholder="">
                 <div class="modal-options" id="modalOptions"></div>
+                <div class="city-picker" id="modalCityPicker" style="display:none;">
+                    <button class="location-btn" id="getLocationBtn" onclick="getLocationInModal()">📍 获取当前位置</button>
+                    <div class="location-status" id="locationStatus"></div>
+                    <div class="city-selects">
+                        <select id="provinceSelect"></select>
+                        <select id="citySelect"></select>
+                        <select id="districtSelect"></select>
+                    </div>
+                </div>
                 <div class="modal-buttons">
                     <button class="modal-btn cancel" onclick="hideModal()">取消</button>
                     <button class="modal-btn confirm" onclick="confirmModal()">确认</button>
@@ -411,6 +427,44 @@
                 console.error('WebSocket连接失败:', error);
                 setTimeout(connectWebSocket, 5000);
             });
+        }
+
+        /**
+         * 根据标签名查找确认卡片中对应的值
+         * @param {string} label - 标签文本（如"标题"、"时间"、"地点"、"优先级"）
+         * @returns {string|null} 对应的值，未找到返回 null
+         */
+        function getCardFieldValue(label) {
+            var card = document.getElementById('confirmationCard');
+            if (!card) return null;
+
+            var infoItems = card.querySelectorAll('.info-item');
+            for (var i = 0; i < infoItems.length; i++) {
+                var labelEl = infoItems[i].querySelector('.info-label');
+                if (labelEl && labelEl.textContent === label) {
+                    var valueEl = infoItems[i].querySelector('.info-value');
+                    return valueEl ? valueEl.textContent : null;
+                }
+            }
+            return null;
+        }
+
+        /**
+         * 从当前显示的确认卡片中提取完整数据
+         * @returns {Object|null} 包含 title/remindTime/location/priority/sessionId 的对象，卡片不存在返回 null
+         */
+        function getCurrentCardData() {
+            var card = document.getElementById('confirmationCard');
+            if (!card) return null;
+
+            var data = {
+                title: getCardFieldValue('标题'),
+                remindTime: getCardFieldValue('时间'),
+                location: getCardFieldValue('地点'),
+                priority: getCardFieldValue('优先级'),
+                sessionId: card.getAttribute('data-session-id')
+            };
+            return data;
         }
 
         function showConfirmationCard(card) {
@@ -1209,10 +1263,148 @@
             loadReminders();
         }
 
+        function isAskingLocation(text) {
+            var keywords = ['我在哪', '定位', '当前位置', '我在哪里', '位置', '地址', '在哪儿', '在哪'];
+            return keywords.some(function(kw) { return text.includes(kw); });
+        }
+
+        async function sendChatRequest(text, latitude, longitude) {
+            try {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) {
+                    headers['Authorization'] = 'Bearer ' + token;
+                }
+
+                var body = { text: text, userId: currentUserId };
+                if (latitude !== undefined && longitude !== undefined) {
+                    body.latitude = latitude;
+                    body.longitude = longitude;
+                }
+
+                const response = await fetch('/api/chat/send', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(body)
+                });
+
+                const result = await response.json();
+
+                if (result.needConfirmation) {
+                    // 兼容 Agent 模式（result.sessionId）和非 Agent 模式（result.data.sessionId）
+                    var sessionId = null;
+                    if (result.data && result.data.sessionId) {
+                        sessionId = result.data.sessionId;
+                    } else if (result.sessionId) {
+                        sessionId = result.sessionId;
+                    }
+
+                    // 构建 card.data，确保包含 sessionId（showConfirmationCard 依赖 card.data.sessionId）
+                    var cardData = result.data || {};
+                    if (sessionId && !cardData.sessionId) {
+                        cardData.sessionId = sessionId;
+                    }
+
+                    var card = {
+                        type: 'confirmation_card',
+                        message: result.message || '📋 我帮你解析了提醒信息，请确认：',
+                        data: cardData,
+                        actions: [
+                            { id: 'confirm', label: '✅ 确认', style: 'primary' },
+                            { id: 'edit', label: '✏️ 修改', style: 'warning' },
+                            { id: 'cancel', label: '❌ 取消', style: 'danger' }
+                        ],
+                        timeout: 180,
+                        expiresAt: new Date(Date.now() + 15000).toISOString()
+                    };
+
+                    // 双保险：提前设置 currentConfirmationSessionId
+                    if (sessionId) {
+                        currentConfirmationSessionId = sessionId;
+                    }
+
+                    showConfirmationCard(card);
+                } else if (result.address) {
+                    // 位置查询响应：显示地址并更新设置页
+                    addMessage('bot', result.message || ('📍 ' + result.address));
+                    var valueCityEl = document.getElementById('valueCity');
+                    if (valueCityEl) valueCityEl.textContent = result.address;
+                    document.getElementById('confirmationContainer').innerHTML = '';
+                    currentConfirmationSessionId = null;
+                    renderCalendar();
+                } else if (result.success) {
+                    addMessage('bot', result.message);
+                    document.getElementById('confirmationContainer').innerHTML = '';
+                    currentConfirmationSessionId = null;
+                    renderCalendar();
+                    // 位置相关回复时刷新设置页城市显示
+                    if (result.message && (result.message.indexOf('📍') !== -1 || result.message.indexOf('城市') !== -1 || result.message.indexOf('位置') !== -1)) {
+                        loadProfile && loadProfile();
+                    }
+                } else if (result.title) {
+                    var msg = '✅ 已解析：' + result.title;
+                    if (result.remindTime) {
+                        msg += '\n时间：' + result.remindTime;
+                    } else {
+                        msg += '\n（⚠️ 未识别到时间，请手动指定）';
+                    }
+                    if (result.location) {
+                        msg += '\n地点：' + result.location;
+                    }
+                    if (result.intentType) {
+                        msg += '\n意图：' + result.intentType;
+                    }
+                    addMessage('bot', msg);
+
+                    if (result.remindTime) {
+                        createReminder(result.title, result.remindTime, result.location, result.priority);
+                    }
+                } else {
+                    var errMsg = result.message || '解析失败，请重试';
+                    if (errMsg.indexOf('未设置当前位置') !== -1) {
+                        errMsg = '😅 你还没有设置当前位置，请在设置页面配置哦～';
+                    }
+                    addMessage('bot', '❌ ' + errMsg);
+                }
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误，请重试');
+            }
+        }
+
         async function sendMessage() {
             var input = document.getElementById('chatInput');
             var text = input.value.trim();
             if (!text) return;
+
+            // 位置问法检测
+            if (isAskingLocation(text)) {
+                addMessage('user', text);
+                input.value = '';
+
+                if (!navigator.geolocation) {
+                    addMessage('bot', '😅 你的浏览器不支持定位功能哦～');
+                    await sendChatRequest(text);
+                    return;
+                }
+
+                addMessage('bot', '📍 正在获取你的位置...');
+                navigator.geolocation.getCurrentPosition(
+                    async function(position) {
+                        var lat = position.coords.latitude;
+                        var lng = position.coords.longitude;
+                        await sendChatRequest(text, lat, lng);
+                    },
+                    async function(err) {
+                        var msg = '定位失败';
+                        if (err.code === 1) msg = '😢 定位权限被拒绝，将使用默认位置';
+                        else if (err.code === 2) msg = '⚠️ 无法获取位置，将使用默认位置';
+                        else if (err.code === 3) msg = '⚠️ 定位超时，将使用默认位置';
+                        addMessage('bot', msg);
+                        await sendChatRequest(text);
+                    }
+                );
+                return;
+            }
 
             addMessage('user', text);
             input.value = '';
@@ -1258,98 +1450,50 @@
                         return;
                     }
 
-                    if (/^(修改|改成|改为|重新|换一下|改一下)$/.test(text)) {
-                        document.getElementById('confirmationContainer').innerHTML = '';
-                        addMessage('bot', '✏️ 请重新输入提醒内容：');
-                        return;
-                    }
-
-                    const reparseResponse = await fetch('/api/reminders/parse', {
-                        method: 'POST',
-                        headers: headers,
-                        body: JSON.stringify({ input: text, userId: currentUserId })
+                    // 智能修改关键词检测
+                    var editKeywords = ['修改', '改成', '改为', '调整为', '变更为', '换成', '改一下', '调整'];
+                    var isEditIntent = editKeywords.some(function(keyword) {
+                        return text.includes(keyword);
                     });
-                    const reparseResult = await reparseResponse.json();
 
-                    if (reparseResult.title && reparseResult.remindTime) {
-                        const editResponse = await fetch('/api/confirmations/' + currentConfirmationSessionId + '/edit?userId=' + currentUserId, {
+                    if (isEditIntent) {
+                        // 从当前确认卡片中提取完整数据
+                        var currentData = getCurrentCardData();
+                        if (!currentData) {
+                            addMessage('bot', '❌ 当前没有可修改的确认卡片，请先创建提醒');
+                            return;
+                        }
+
+                        // 确保必要字段存在
+                        if (!currentData.title) {
+                            addMessage('bot', '❌ 无法提取卡片数据，请重试');
+                            return;
+                        }
+
+                        // 调用智能修改接口
+                        const editResponse = await fetch('/api/confirmations/' + currentConfirmationSessionId + '/smart-edit?userId=' + currentUserId, {
                             method: 'POST',
                             headers: headers,
                             body: JSON.stringify({
-                                input: text,
-                                parsedData: {
-                                    title: reparseResult.title,
-                                    remindTime: reparseResult.remindTime,
-                                    intentType: reparseResult.intentType,
-                                    location: reparseResult.location,
-                                    priority: reparseResult.priority,
-                                    advanceMinutes: 10,
-                                    confidence: 0.95
-                                }
+                                userInput: text,
+                                currentData: currentData
                             })
                         });
                         const editResult = await editResponse.json();
                         if (editResult.success) {
-                            addMessage('bot', '✏️ 已更新提醒信息，请确认');
+                            addMessage('bot', editResult.message);
                         } else {
                             addMessage('bot', '❌ ' + editResult.message);
                         }
-                    } else {
-                        addMessage('bot', '❌ ' + (reparseResult.message || '解析失败，请重试'));
+                        return;
                     }
-                    return;
+
+                    // 非修改指令的输入，直接发送到聊天接口处理
                 }
 
-                const response = await fetch('/api/chat/send', {
-                    method: 'POST',
-                    headers: headers,
-                    body: JSON.stringify({ text: text, userId: currentUserId })
-                });
-                
-                const result = await response.json();
-
-                if (result.needConfirmation) {
-                    var card = {
-                        type: 'confirmation_card',
-                        message: '📋 我帮你解析了提醒信息，请确认：',
-                        data: result.data,
-                        actions: [
-                            { id: 'confirm', label: '✅ 确认', style: 'primary' },
-                            { id: 'edit', label: '✏️ 修改', style: 'warning' },
-                            { id: 'cancel', label: '❌ 取消', style: 'danger' }
-                        ],
-                        timeout: 180,
-                        expiresAt: new Date(Date.now() + 15000).toISOString()
-                    };
-                    showConfirmationCard(card);
-                } else if (result.success) {
-                    addMessage('bot', result.message);
-                    document.getElementById('confirmationContainer').innerHTML = '';
-                    currentConfirmationSessionId = null;
-                    renderCalendar();
-                } else if (result.title) {
-                    var msg = '✅ 已解析：' + result.title;
-                    if (result.remindTime) {
-                        msg += '\n时间：' + result.remindTime;
-                    } else {
-                        msg += '\n（⚠️ 未识别到时间，请手动指定）';
-                    }
-                    if (result.location) {
-                        msg += '\n地点：' + result.location;
-                    }
-                    if (result.intentType) {
-                        msg += '\n意图：' + result.intentType;
-                    }
-                    addMessage('bot', msg);
-
-                    if (result.remindTime) {
-                        createReminder(result.title, result.remindTime, result.location, result.priority);
-                    }
-                } else {
-                    addMessage('bot', '❌ ' + (result.message || '解析失败，请重试'));
-                }
-            } catch (e) { 
-                addMessage('bot', '❌ 网络错误，请重试'); 
+                await sendChatRequest(text);
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误，请重试');
             }
         }
 
@@ -1948,6 +2092,7 @@
             document.getElementById('modalTitle').textContent = title;
             document.getElementById('modalInput').style.display = 'block';
             document.getElementById('modalOptions').style.display = 'none';
+            document.getElementById('modalCityPicker').style.display = 'none';
 
             var value = '';
             if (field === 'nickname') value = document.getElementById('valueNickname').textContent;
@@ -1965,6 +2110,7 @@
             document.getElementById('modalTitle').textContent = '性别';
             document.getElementById('modalInput').style.display = 'none';
             document.getElementById('modalOptions').style.display = 'flex';
+            document.getElementById('modalCityPicker').style.display = 'none';
 
             var currentValue = document.getElementById('valueGender').textContent;
             var options = [
@@ -1988,6 +2134,7 @@
             document.getElementById('modalTitle').textContent = '默认提前量';
             document.getElementById('modalInput').style.display = 'none';
             document.getElementById('modalOptions').style.display = 'flex';
+            document.getElementById('modalCityPicker').style.display = 'none';
 
             var currentValue = parseInt(document.getElementById('valueAdvance').textContent);
             var options = [5, 10, 15, 30, 60];
@@ -2001,6 +2148,177 @@
             document.getElementById('modalOverlay').classList.add('show');
         }
 
+        function showCityModal() {
+            currentEditField = 'city';
+            currentEditType = 'city';
+            document.getElementById('modalTitle').textContent = '选择当前位置';
+            document.getElementById('modalInput').style.display = 'none';
+            document.getElementById('modalOptions').style.display = 'none';
+            document.getElementById('modalCityPicker').style.display = 'flex';
+            document.getElementById('locationStatus').textContent = '';
+
+            var provSel = document.getElementById('provinceSelect');
+            var citySel = document.getElementById('citySelect');
+            var distSel = document.getElementById('districtSelect');
+
+            // 省市区数据
+            var areaData = {
+                '北京市': {'北京市': ['东城区','西城区','朝阳区','海淀区','丰台区','石景山区','通州区','顺义区','昌平区','大兴区','房山区','门头沟区','平谷区','怀柔区','密云区','延庆区']},
+                '天津市': {'天津市': ['和平区','河东区','河西区','南开区','河北区','红桥区','东丽区','西青区','津南区','北辰区','武清区','宝坻区','滨海新区','宁河区','静海区','蓟州区']},
+                '上海市': {'上海市': ['黄浦区','徐汇区','长宁区','静安区','普陀区','虹口区','杨浦区','浦东新区','闵行区','宝山区','嘉定区','金山区','松江区','青浦区','奉贤区','崇明区']},
+                '重庆市': {'重庆市': ['渝中区','江北区','南岸区','九龙坡区','沙坪坝区','大渡口区','渝北区','巴南区','北碚区','万州区','涪陵区','永川区','合川区','江津区','綦江区']},
+                '广东省': {'广州市': ['天河区','越秀区','海珠区','荔湾区','白云区','黄埔区','番禺区','花都区','南沙区','增城区','从化区'],'深圳市': ['福田区','罗湖区','南山区','宝安区','龙岗区','盐田区','龙华区','坪山区','光明区','大鹏新区'],'珠海市': ['香洲区','斗门区','金湾区'],'佛山市': ['禅城区','南海区','顺德区','三水区','高明区'],'东莞市': ['东莞市'],'中山市': ['中山市'],'惠州市': ['惠城区','惠阳区','博罗县','惠东县','龙门县'],'汕头市': ['金平区','龙湖区','濠江区','潮阳区','潮南区','澄海区','南澳县']},
+                '浙江省': {'杭州市': ['上城区','拱墅区','西湖区','滨江区','萧山区','余杭区','富阳区','临安区','临平区','钱塘区'],'宁波市': ['海曙区','江北区','北仑区','镇海区','鄞州区','奉化区','余姚市','慈溪市'],'温州市': ['鹿城区','龙湾区','瓯海区','洞头区','瑞安市','乐清市'],'嘉兴市': ['南湖区','秀洲区','海宁市','平湖市','桐乡市'],'绍兴市': ['越城区','柯桥区','上虞区','诸暨市'],'金华市': ['婺城区','金东区','义乌市','东阳市','永康市']},
+                '江苏省': {'南京市': ['玄武区','秦淮区','建邺区','鼓楼区','栖霞区','雨花台区','江宁区','浦口区','六合区','溧水区','高淳区'],'苏州市': ['姑苏区','虎丘区','吴中区','相城区','吴江区','工业园区','常熟市','张家港市','昆山市','太仓市'],'无锡市': ['梁溪区','锡山区','惠山区','滨湖区','新吴区','江阴市','宜兴市'],'常州市': ['天宁区','钟楼区','新北区','武进区','金坛区','溧阳市'],'南通市': ['崇川区','通州区','海门区','如皋市','启东市','海安市'],'徐州市': ['云龙区','鼓楼区','贾汪区','泉山区','铜山区','新沂市','邳州市']},
+                '山东省': {'济南市': ['历下区','市中区','槐荫区','天桥区','历城区','长清区','章丘区','济阳区','莱芜区'],'青岛市': ['市南区','市北区','黄岛区','崂山区','李沧区','城阳区','即墨区','胶州市','平度市','莱西市'],'烟台市': ['芝罘区','福山区','牟平区','莱山区','蓬莱区'],'潍坊市': ['奎文区','潍城区','寒亭区','坊子区','青州市','诸城市'],'临沂市': ['兰山区','罗庄区','河东区']},
+                '四川省': {'成都市': ['锦江区','青羊区','金牛区','武侯区','成华区','龙泉驿区','青白江区','新都区','温江区','双流区','郫都区','天府新区'],'绵阳市': ['涪城区','游仙区','安州区'],'德阳市': ['旌阳区','广汉市','什邡市','绵竹市'],'南充市': ['顺庆区','高坪区','嘉陵区'],'宜宾市': ['翠屏区','南溪区','叙州区']},
+                '湖北省': {'武汉市': ['江岸区','江汉区','硚口区','汉阳区','武昌区','青山区','洪山区','东西湖区','汉南区','蔡甸区','江夏区','黄陂区','新洲区'],'宜昌市': ['西陵区','伍家岗区','点军区','猇亭区','夷陵区'],'襄阳市': ['襄城区','樊城区','襄州区'],'黄石市': ['黄石港区','西塞山区','下陆区','铁山区']},
+                '湖南省': {'长沙市': ['芙蓉区','天心区','岳麓区','开福区','雨花区','望城区','长沙县'],'株洲市': ['荷塘区','芦淞区','石峰区','天元区'],'湘潭市': ['雨湖区','岳塘区'],'衡阳市': ['雁峰区','珠晖区','石鼓区','蒸湘区','南岳区']},
+                '福建省': {'福州市': ['鼓楼区','台江区','仓山区','马尾区','晋安区','长乐区'],'厦门市': ['思明区','海沧区','湖里区','集美区','同安区','翔安区'],'泉州市': ['鲤城区','丰泽区','洛江区','泉港区'],'漳州市': ['芗城区','龙文区']},
+                '安徽省': {'合肥市': ['蜀山区','庐阳区','包河区','瑶海区'],'芜湖市': ['镜湖区','弋江区','鸠江区','湾沚区','繁昌区'],'蚌埠市': ['龙子湖区','蚌山区','禹会区','淮上区'],'马鞍山市': ['花山区','雨山区','博望区']},
+                '河南省': {'郑州市': ['金水区','二七区','中原区','管城区','惠济区','上街区'],'洛阳市': ['老城区','西工区','瀍河区','涧西区','吉利区'],'开封市': ['鼓楼区','龙亭区','顺河区','禹王台区'],'南阳市': ['卧龙区','宛城区']},
+                '河北省': {'石家庄市': ['长安区','桥西区','新华区','井陉矿区','裕华区','藁城区','鹿泉区','栾城区'],'唐山市': ['路南区','路北区','古冶区','开平区','丰南区','丰润区'],'保定市': ['竞秀区','莲池区','满城区','清苑区','徐水区'],'廊坊市': ['安次区','广阳区']},
+                '辽宁省': {'沈阳市': ['和平区','沈河区','大东区','皇姑区','铁西区','苏家屯区','浑南区','于洪区'],'大连市': ['中山区','西岗区','沙河口区','甘井子区','旅顺口区','金州区'],'鞍山市': ['铁东区','铁西区','立山区','千山区']},
+                '吉林省': {'长春市': ['南关区','宽城区','朝阳区','二道区','绿园区','双阳区','九台区'],'吉林市': ['昌邑区','龙潭区','船营区','丰满区']},
+                '黑龙江省': {'哈尔滨市': ['道里区','南岗区','道外区','平房区','松北区','香坊区','呼兰区','阿城区','双城区'],'齐齐哈尔市': ['龙沙区','建华区','铁锋区']},
+                '江西省': {'南昌市': ['东湖区','西湖区','青云谱区','青山湖区','新建区','红谷滩区'],'赣州市': ['章贡区','南康区','赣县区'],'九江市': ['浔阳区','濂溪区','柴桑区']},
+                '广西壮族自治区': {'南宁市': ['兴宁区','青秀区','江南区','西乡塘区','良庆区','邕宁区','武鸣区'],'柳州市': ['城中区','鱼峰区','柳南区','柳北区'],'桂林市': ['秀峰区','叠彩区','象山区','七星区']},
+                '云南省': {'昆明市': ['五华区','盘龙区','官渡区','西山区','东川区','呈贡区','晋宁区'],'曲靖市': ['麒麟区','沾益区','马龙区']},
+                '贵州省': {'贵阳市': ['南明区','云岩区','花溪区','乌当区','白云区','观山湖区'],'遵义市': ['红花岗区','汇川区','播州区']},
+                '山西省': {'太原市': ['小店区','迎泽区','杏花岭区','尖草坪区','万柏林区','晋源区'],'大同市': ['平城区','云冈区','新荣区','云州区']},
+                '陕西省': {'西安市': ['新城区','碑林区','莲湖区','灞桥区','未央区','雁塔区','阎良区','临潼区','长安区','高陵区','鄠邑区'],'宝鸡市': ['渭滨区','金台区','陈仓区']},
+                '海南省': {'海口市': ['秀英区','龙华区','琼山区','美兰区'],'三亚市': ['海棠区','吉阳区','天涯区','崖州区']},
+                '甘肃省': {'兰州市': ['城关区','七里河区','西固区','安宁区','红古区']},
+                '青海省': {'西宁市': ['城东区','城中区','城西区','城北区']},
+                '内蒙古自治区': {'呼和浩特市': ['新城区','回民区','玉泉区','赛罕区'],'包头市': ['东河区','昆都仑区','青山区']},
+                '新疆维吾尔自治区': {'乌鲁木齐市': ['天山区','沙依巴克区','新市区','水磨沟区','头屯河区','达坂城区'],'克拉玛依市': ['独山子区','克拉玛依区','白碱滩区']},
+                '宁夏回族自治区': {'银川市': ['兴庆区','金凤区','西夏区'],'石嘴山市': ['大武口区','惠农区']},
+                '西藏自治区': {'拉萨市': ['城关区','堆龙德庆区']},
+                '香港特别行政区': {'香港岛': ['中西区','湾仔区','东区','南区'],'九龙': ['油尖旺区','深水埗区','九龙城区','黄大仙区','观塘区'],'新界': ['荃湾区','屯门区','元朗区','北区','大埔区','西贡区','沙田区','葵青区','离岛区']},
+                '澳门特别行政区': {'澳门': ['花地玛堂区','圣安多尼堂区','大堂区','望德堂区','风顺堂区','嘉模堂区','圣方济各堂区']},
+                '台湾省': {'台北市': ['中正区','大同区','中山区','万华区','信义区','松山区','大安区','南港区','北投区','内湖区','士林区','文山区'],'高雄市': ['盐埕区','鼓山区','左营区','楠梓区','三民区','新兴区','前金区','苓雅区','前镇区','旗津区','小港区']}
+            };
+
+            // 解析当前值
+            var currentCity = document.getElementById('valueCity').textContent.trim();
+            var defProv = '', defCity = '', defDist = '';
+            if (currentCity && currentCity.indexOf('-') !== -1) {
+                var parts = currentCity.split('-');
+                defProv = parts[0] || '';
+                defCity = parts[1] || '';
+                defDist = parts[2] || '';
+            }
+
+            // 填充省份
+            provSel.innerHTML = '<option value="">请选择</option>';
+            for (var p in areaData) {
+                provSel.innerHTML += '<option value="' + p + '"' + (p === defProv ? ' selected' : '') + '>' + p + '</option>';
+            }
+
+            // 填充城市
+            function fillCities(provName, selCity) {
+                citySel.innerHTML = '<option value="">请选择</option>';
+                distSel.innerHTML = '<option value="">请选择</option>';
+                if (provName && areaData[provName]) {
+                    for (var c in areaData[provName]) {
+                        citySel.innerHTML += '<option value="' + c + '"' + (c === selCity ? ' selected' : '') + '>' + c + '</option>';
+                    }
+                }
+                fillDistricts(provName, citySel.value, defDist);
+            }
+
+            // 填充区县
+            function fillDistricts(provName, cityName, selDist) {
+                distSel.innerHTML = '<option value="">请选择</option>';
+                if (provName && cityName && areaData[provName] && areaData[provName][cityName]) {
+                    areaData[provName][cityName].forEach(function(d) {
+                        distSel.innerHTML += '<option value="' + d + '"' + (d === selDist ? ' selected' : '') + '>' + d + '</option>';
+                    });
+                }
+            }
+
+            // 绑定联动事件（先移除旧事件再绑定）
+            provSel.onchange = function() { fillCities(this.value, ''); };
+            citySel.onchange = function() { fillDistricts(provSel.value, this.value, ''); };
+
+            // 初始化选中值
+            fillCities(defProv, defCity);
+
+            document.getElementById('modalOverlay').classList.add('show');
+        }
+
+        function getLocationInModal() {
+            var btn = document.getElementById('getLocationBtn');
+            var status = document.getElementById('locationStatus');
+
+            if (!navigator.geolocation) {
+                status.textContent = '😅 你的浏览器不支持定位功能';
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = '📍 定位中...';
+            status.textContent = '';
+
+            navigator.geolocation.getCurrentPosition(async function(position) {
+                try {
+                    var lat = position.coords.latitude;
+                    var lng = position.coords.longitude;
+                    var token = localStorage.getItem('token');
+                    var userId = localStorage.getItem('userId');
+                    var headers = { 'Content-Type': 'application/json' };
+                    if (token) headers['Authorization'] = 'Bearer ' + token;
+
+                    var resp = await fetch('/api/user/location?userId=' + userId, {
+                        method: 'PUT',
+                        headers: headers,
+                        body: JSON.stringify({ latitude: lat, longitude: lng })
+                    });
+                    var data = await resp.json();
+
+                    if (data.success && data.address) {
+                        var parts = data.address.split('-');
+                        var provSel = document.getElementById('provinceSelect');
+                        var citySel = document.getElementById('citySelect');
+                        var distSel = document.getElementById('districtSelect');
+
+                        if (parts.length >= 2) {
+                            // 选省份，触发联动填充城市
+                            provSel.value = parts[0];
+                            if (provSel.onchange) provSel.onchange();
+
+                            // 选城市，触发联动填充区县
+                            citySel.value = parts[1];
+                            if (citySel.onchange) citySel.onchange();
+
+                            // 选区县
+                            if (parts.length >= 3) {
+                                distSel.value = parts[2];
+                            }
+                            status.textContent = '✅ 已定位到：' + data.address;
+                        } else {
+                            status.textContent = '⚠️ 定位结果格式异常：' + data.address;
+                        }
+                    } else {
+                        status.textContent = '⚠️ 定位失败：' + (data.message || '未知错误');
+                    }
+                } catch (err) {
+                    status.textContent = '⚠️ 请求出错：' + err.message;
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = '📍 获取当前位置';
+                }
+            }, function(err) {
+                var msg = '定位失败';
+                if (err.code === 1) msg = '😢 你拒绝了定位权限，请在浏览器设置中允许';
+                else if (err.code === 2) msg = '⚠️ 无法获取位置信息，请稍后再试';
+                else if (err.code === 3) msg = '⚠️ 定位超时，请稍后再试';
+                status.textContent = msg;
+                btn.disabled = false;
+                btn.textContent = '📍 获取当前位置';
+            });
+        }
+
         function selectOption(el) {
             document.querySelectorAll('.modal-option').forEach(function(e) { e.classList.remove('active'); });
             el.classList.add('active');
@@ -2008,6 +2326,7 @@
 
         function hideModal() {
             document.getElementById('modalOverlay').classList.remove('show');
+            document.getElementById('modalCityPicker').style.display = 'none';
         }
 
         function confirmModal() {
@@ -2018,6 +2337,12 @@
             if (currentEditType === 'input') {
                 value = document.getElementById('modalInput').value.trim();
                 if (!value) return;
+            } else if (currentEditType === 'city') {
+                var province = document.getElementById('provinceSelect').value;
+                var city = document.getElementById('citySelect').value;
+                var district = document.getElementById('districtSelect').value;
+                if (!province || !city) return;
+                value = province + '-' + city + '-' + (district || '');
             } else {
                 var selected = document.querySelector('.modal-option.active');
                 if (!selected) return;

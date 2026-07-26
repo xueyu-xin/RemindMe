@@ -3,9 +3,9 @@ server:
 
 spring:
   datasource:
-    url: jdbc:mysql://localhost:3306/reminder?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://localhost:3307/reminder?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
     username: root
-    password: 123456
+    password: password
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 10
@@ -87,3 +87,7 @@ agent:
   enabled: true  # Agent 开关，设为 false 时回退到原有逻辑
   max-history: 10  # 最多保留的对话历史条数
   timeout-seconds: 15  # Agent 处理超时时间
+
+amap:
+  api:
+    key: ${AMAP_API_KEY:}

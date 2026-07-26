@@ -13,6 +13,7 @@ import jakarta.annotation.PostConstruct;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -129,8 +130,10 @@ public class ToolRegistry {
 
             properties.put(paramName, property);
             
-            // 所有非userId参数都设为必填（由工具定义决定是否必填）
-            required.add(paramName);
+            // 根据参数描述判断是否必填：如果描述中包含"(必填)"则设为必填，否则为可选
+            if (description.contains("（必填）") || description.contains("(必填)")) {
+                required.add(paramName);
+            }
         }
 
         return ToolDefinition.Parameters.builder()
@@ -145,49 +148,72 @@ public class ToolRegistry {
      */
     private String getParameterDescription(String methodName, String paramName) {
         // 工具参数描述映射
-        Map<String, Map<String, String>> paramDescriptions = Map.of(
-            "createReminderForAgent", Map.of(
-                "userId", "用户ID（系统自动填充）",
-                "title", "提醒事项的标题（必填）",
-                "remindTime", "提醒时间，格式为 yyyy-MM-dd HH:mm:ss（必填）",
-                "location", "提醒地点（可选）",
-                "priority", "优先级，可选值 LOW/NORMAL/HIGH（默认NORMAL）"
-            ),
-            "queryRemindersForAgent", Map.of(
-                "userId", "用户ID（系统自动填充）",
-                "date", "查询日期，格式为 yyyy-MM-dd（默认今天）"
-            ),
-            "updateReminderForAgent", Map.of(
-                "userId", "用户ID（系统自动填充）",
-                "reminderId", "提醒ID（必填）",
-                "title", "标题（可选）",
-                "remindTime", "提醒时间，格式为 yyyy-MM-dd HH:mm:ss（可选）",
-                "location", "地点（可选）"
-            ),
-            "cancelReminderForAgent", Map.of(
-                "userId", "用户ID（系统自动填充）",
-                "reminderId", "提醒ID（必填）"
-            ),
-            "queryWeatherNowForAgent", Map.of(
-                "userId", "用户ID（系统自动填充）",
-                "location", "LocationID（如101010100）或经纬度（如116.41,39.92）"
-            ),
-            "queryWeatherForecastForAgent", Map.of(
-                "userId", "用户ID（系统自动填充）",
-                "location", "LocationID或经纬度",
-                "days", "预报天数（3/7/10/15/30，默认7天）"
-            ),
-            "queryAirQualityForAgent", Map.of(
-                "userId", "用户ID（系统自动填充）",
-                "latitude", "纬度",
-                "longitude", "经度"
-            ),
-            "queryWeatherAlertForAgent", Map.of(
-                "userId", "用户ID（系统自动填充）",
-                "latitude", "纬度",
-                "longitude", "经度"
-            )
-        );
+        Map<String, Map<String, String>> paramDescriptions = new HashMap<>();
+        paramDescriptions.put("createReminderForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "title", "提醒事项的标题（必填）",
+            "remindTime", "提醒时间，格式为 yyyy-MM-dd HH:mm:ss（必填）",
+            "location", "提醒地点（可选）",
+            "priority", "优先级，可选值 LOW/NORMAL/HIGH（默认NORMAL）"
+        ));
+        paramDescriptions.put("queryRemindersForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "date", "查询日期，格式为 yyyy-MM-dd（默认今天）"
+        ));
+        paramDescriptions.put("updateReminderForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "reminderId", "提醒ID（必填）",
+            "title", "标题（可选）",
+            "remindTime", "提醒时间，格式为 yyyy-MM-dd HH:mm:ss（可选）",
+            "location", "地点（可选）"
+        ));
+        paramDescriptions.put("cancelReminderForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "reminderId", "提醒ID（必填）"
+        ));
+        paramDescriptions.put("queryWeatherNowForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "location", "城市名（可选）",
+            "latitude", "纬度（可选，优先使用）",
+            "longitude", "经度（可选，优先使用）"
+        ));
+        paramDescriptions.put("queryWeatherForecastForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "location", "城市名（可选）",
+            "days", "预报天数（3/7/10/15/30，默认7天）",
+            "latitude", "纬度（可选，优先使用）",
+            "longitude", "经度（可选，优先使用）"
+        ));
+        paramDescriptions.put("queryAirQualityForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "latitude", "纬度",
+            "longitude", "经度"
+        ));
+        paramDescriptions.put("queryWeatherAlertForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "latitude", "纬度",
+            "longitude", "经度"
+        ));
+        paramDescriptions.put("calculateDate", Map.of(
+            "expression", "日期表达式（必填），如：3天后、2天前、2周后、下周一、下周三"
+        ));
+        paramDescriptions.put("getUserPreferences", Map.of(
+            "userId", "用户ID（系统自动填充）"
+        ));
+        paramDescriptions.put("setUserPreferences", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "preference", "偏好项名称（必填），可选值：city、defaultAdvanceMinutes、nickname",
+            "value", "新值（必填），defaultAdvanceMinutes需为整数"
+        ));
+        paramDescriptions.put("getReminderDetail", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "reminderId", "提醒ID（必填）"
+        ));
+        paramDescriptions.put("getLocation", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "latitude", "纬度（可选，有GPS坐标时传入）",
+            "longitude", "经度（可选，有GPS坐标时传入）"
+        ));
 
         Map<String, String> descriptions = paramDescriptions.get(methodName);
         if (descriptions != null && descriptions.containsKey(paramName)) {

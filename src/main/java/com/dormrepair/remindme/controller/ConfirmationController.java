@@ -2,6 +2,7 @@ package com.dormrepair.remindme.controller;
 
 import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.service.ConfirmationService;
+import com.dormrepair.remindme.service.LLMService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -18,6 +19,7 @@ import java.util.Map;
 public class ConfirmationController {
 
     private final ConfirmationService confirmationService;
+    private final LLMService llmService;
 
     @PostMapping("/{sessionId}/confirm")
     public ResponseEntity<Map<String, Object>> confirm(
@@ -172,6 +174,118 @@ public class ConfirmationController {
             error.put("message", e.getMessage());
             return ResponseEntity.badRequest().body(error);
         }
+    }
+
+    /**
+     * 智能修改接口
+     * <p>
+     * 解析用户修改意图，自动更新对应字段并刷新确认会话
+     * </p>
+     */
+    @PostMapping("/{sessionId}/smart-edit")
+    public ResponseEntity<Map<String, Object>> smartEdit(
+            @PathVariable String sessionId,
+            @RequestParam Long userId,
+            @RequestBody Map<String, Object> body) {
+        try {
+            String userInput = (String) body.get("userInput");
+            @SuppressWarnings("unchecked")
+            Map<String, Object> currentData = (Map<String, Object>) body.get("currentData");
+
+            if (userInput == null || userInput.trim().isEmpty()) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("success", false);
+                error.put("message", "缺少用户输入");
+                return ResponseEntity.badRequest().body(error);
+            }
+            if (currentData == null || currentData.isEmpty()) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("success", false);
+                error.put("message", "缺少当前卡片数据");
+                return ResponseEntity.badRequest().body(error);
+            }
+
+            // 调用 LLM 解析修改意图
+            LLMService.EditIntent editIntent = llmService.parseEditIntent(userInput, currentData);
+            log.info("修改意图解析结果: field={}, newValue={}, reason={}",
+                    editIntent.getField(), editIntent.getNewValue(), editIntent.getReason());
+
+            // 无法识别修改意图
+            if ("unknown".equals(editIntent.getField())) {
+                Map<String, Object> result = new HashMap<>();
+                result.put("success", false);
+                result.put("message", "无法识别修改意图，请明确说明要修改的内容（如：改成下午三点、地点改为会议室、改成开会）");
+                return ResponseEntity.ok(result);
+            }
+
+            // 根据解析结果更新对应字段
+            String fieldName = editIntent.getField();
+            String newValue = editIntent.getNewValue();
+            String fieldDisplayName = getFieldDisplayName(fieldName);
+
+            // 复制 currentData 并更新对应字段
+            Map<String, Object> updatedData = new HashMap<>(currentData);
+            switch (fieldName) {
+                case "time":
+                    updatedData.put("remindTime", newValue);
+                    break;
+                case "location":
+                    updatedData.put("location", newValue);
+                    break;
+                case "title":
+                    updatedData.put("title", newValue);
+                    break;
+                case "priority":
+                    updatedData.put("priority", newValue);
+                    break;
+                default:
+                    Map<String, Object> error = new HashMap<>();
+                    error.put("success", false);
+                    error.put("message", "不支持修改的字段类型：" + fieldName);
+                    return ResponseEntity.ok(error);
+            }
+
+            // 确保必要字段存在
+            updatedData.putIfAbsent("priority", "NORMAL");
+            updatedData.putIfAbsent("advanceMinutes", 10);
+            updatedData.putIfAbsent("intentType", "REMINDER");
+            updatedData.put("confidence", 0.95);
+
+            // 调用 reparse 更新会话（后端会自动推送更新后的卡片）
+            confirmationService.reparse(sessionId, userId, userInput, updatedData);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("message", "✏️ 已修改" + fieldDisplayName + "为：" + newValue);
+            result.put("field", fieldName);
+            result.put("newValue", newValue);
+            return ResponseEntity.ok(result);
+
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        } catch (Exception e) {
+            log.error("智能修改失败: sessionId={}, userId={}, error={}", sessionId, userId, e.getMessage(), e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "修改失败，请重试");
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    /**
+     * 获取字段中文显示名
+     */
+    private String getFieldDisplayName(String field) {
+        return switch (field) {
+            case "time" -> "时间";
+            case "location" -> "地点";
+            case "title" -> "标题";
+            case "priority" -> "优先级";
+            default -> field;
+        };
     }
 
     @PostMapping("/action")

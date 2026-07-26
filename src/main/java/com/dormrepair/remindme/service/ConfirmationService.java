@@ -24,6 +24,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -41,6 +42,8 @@ public class ConfirmationService {
     private final ObjectMapper objectMapper;
     private final WebSocketPushService webSocketPushService;
     private final EventPublisher eventPublisher;
+    private final WeatherService weatherService;
+    private final LLMService llmService;
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
@@ -61,7 +64,7 @@ public class ConfirmationService {
         LocalDateTime parsedTime = null;
         String remindTimeStr = (String) parsedData.get("remindTime");
         if (remindTimeStr != null) {
-            parsedTime = LocalDateTime.parse(remindTimeStr, FORMATTER);
+            parsedTime = parseTimeFlexible(remindTimeStr);
         }
 
         ConfirmationSession session = ConfirmationSession.builder()
@@ -166,7 +169,7 @@ public class ConfirmationService {
         LocalDateTime parsedTime = null;
         String remindTimeStr = (String) newParsedData.get("remindTime");
         if (remindTimeStr != null) {
-            parsedTime = LocalDateTime.parse(remindTimeStr, FORMATTER);
+            parsedTime = parseTimeFlexible(remindTimeStr);
         }
 
         session.setOriginalInput(newInput);
@@ -238,6 +241,41 @@ public class ConfirmationService {
         }
     }
 
+    /**
+     * 灵活解析时间字符串，支持多种格式
+     *
+     * @param timeStr 时间字符串
+     * @return 解析后的 LocalDateTime
+     * @throws DateTimeParseException 如果所有格式都无法解析
+     */
+    private LocalDateTime parseTimeFlexible(String timeStr) {
+        if (timeStr == null || timeStr.isBlank()) {
+            return null;
+        }
+
+        List<DateTimeFormatter> formatters = Arrays.asList(
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"),
+            DateTimeFormatter.ISO_LOCAL_DATE_TIME,
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss"),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm")
+        );
+
+        for (DateTimeFormatter formatter : formatters) {
+            try {
+                return LocalDateTime.parse(timeStr, formatter);
+            } catch (DateTimeParseException e) {
+                continue;
+            }
+        }
+
+        throw new DateTimeParseException(
+            "无法解析时间字符串: " + timeStr + "，支持的格式包括: yyyy-MM-dd HH:mm:ss, yyyy-MM-ddTHH:mm:ss",
+            timeStr,
+            0
+        );
+    }
+
     private ConfirmationSession findValidSession(String sessionId, Long userId) {
         return confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                 .filter(s -> s.getStatus() == SessionStatus.PENDING)
@@ -249,7 +287,7 @@ public class ConfirmationService {
         Reminder reminder = new Reminder();
         reminder.setUserId(userId);
         reminder.setTitle((String) parsedData.get("title"));
-        reminder.setRemindTime(LocalDateTime.parse((String) parsedData.get("remindTime"), FORMATTER));
+        reminder.setRemindTime(parseTimeFlexible((String) parsedData.get("remindTime")));
         reminder.setPriority(Priority.valueOf(
                 ((String) parsedData.getOrDefault("priority", "NORMAL")).toUpperCase()));
         reminder.setLocation((String) parsedData.get("location"));
@@ -319,6 +357,11 @@ public class ConfirmationService {
 
     @Transactional
     public void pushExecuteCard(Reminder reminder) {
+        pushExecuteCard(reminder, null);
+    }
+
+    @Transactional
+    public void pushExecuteCard(Reminder reminder, String weatherSuggestion) {
         String sessionId = UUID.randomUUID().toString();
 
         ConfirmationSession session = ConfirmationSession.builder()
@@ -347,12 +390,13 @@ public class ConfirmationService {
         parsedData.put("advanceMinutes", reminder.getAdvanceMinutes());
         parsedData.put("attempt", reminder.getConfirmAttempts());
         parsedData.put("maxAttempts", 3);
+        parsedData.put("weatherSuggestion", weatherSuggestion);
 
         ConfirmationCardResponse card = buildExecuteCard(session, parsedData);
         pushConfirmationCard(reminder.getUserId(), card);
 
-        log.info("推送阶段二提醒执行卡片: sessionId={}, reminderId={}, userId={}", 
-                sessionId, reminder.getId(), reminder.getUserId());
+        log.info("推送阶段二提醒执行卡片: sessionId={}, reminderId={}, userId={}, weatherSuggestion={}", 
+                sessionId, reminder.getId(), reminder.getUserId(), weatherSuggestion);
     }
 
     @Transactional
@@ -452,7 +496,14 @@ public class ConfirmationService {
                 .priority((String) parsedData.get("priority"))
                 .location((String) parsedData.get("location"))
                 .advanceMinutes((Integer) parsedData.get("advanceMinutes"))
+                .weatherSuggestion((String) parsedData.get("weatherSuggestion"))
                 .build();
+
+        String message = "🔔 叮！该执行提醒了：";
+        String weatherSuggestion = (String) parsedData.get("weatherSuggestion");
+        if (weatherSuggestion != null && !weatherSuggestion.isBlank()) {
+            message = weatherSuggestion + "\n" + message;
+        }
 
         List<Action> actions = Arrays.asList(
                 Action.builder().id("confirm").label("✅ 知道了").style("primary").build(),
@@ -462,7 +513,7 @@ public class ConfirmationService {
 
         return ConfirmationCardResponse.builder()
                 .type("execute_card")
-                .message("🔔 叮！该执行提醒了：")
+                .message(message)
                 .data(data)
                 .actions(actions)
                 .timeout(session.getIntervalMinutes() * 60)

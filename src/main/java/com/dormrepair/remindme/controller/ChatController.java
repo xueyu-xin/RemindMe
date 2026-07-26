@@ -47,10 +47,20 @@ public class ChatController {
 
         text = text.trim();
 
+        // 提取可选的GPS坐标
+        Double latitude = request.containsKey("latitude") ? toDouble(request.get("latitude")) : null;
+        Double longitude = request.containsKey("longitude") ? toDouble(request.get("longitude")) : null;
+
         // Agent模式：如果启用Agent，调用AgentService处理
         if (agentEnabled) {
             try {
-                AgentResponse agentResponse = agentService.processRequest(userId, text);
+                Map<String, Object> context = null;
+                if (latitude != null && longitude != null) {
+                    context = new HashMap<>();
+                    context.put("latitude", latitude);
+                    context.put("longitude", longitude);
+                }
+                AgentResponse agentResponse = agentService.processRequest(userId, text, context);
                 
                 Map<String, Object> response = new HashMap<>();
                 
@@ -72,6 +82,8 @@ public class ChatController {
                             response.put("type", "confirmation_required");
                             response.put("message", agentResponse.getContent());
                             response.put("needConfirmation", true);
+                            response.put("sessionId", agentResponse.getSessionId());
+                            response.put("data", agentResponse.getConfirmationData());
                             break;
                         default:
                             response.put("success", true);
@@ -165,7 +177,7 @@ public class ChatController {
                 parsedData.put("intentType", result.intentType());
                 parsedData.put("location", result.location());
                 parsedData.put("priority", result.priority());
-                parsedData.put("advanceMinutes", 10);
+                parsedData.put("advanceMinutes", result.advanceMinutes() != null ? result.advanceMinutes() : 10);
                 parsedData.put("confidence", 0.95);
 
                 if (pendingSession != null && "INFO_CONFIRM".equals(pendingSession.getStage())) {
@@ -215,13 +227,14 @@ public class ChatController {
 
         Map<String, Object> parsedData = new HashMap<>();
         parsedData.put("title", result.title());
-        // 如果时间为null，使用默认时间（当前时间+10分钟）
-        LocalDateTime remindTime = result.remindTime() != null ? result.remindTime() : LocalDateTime.now().plusMinutes(10);
+        // 如果时间为null，使用默认时间（当前时间+默认提前量）
+        Integer advance = result.advanceMinutes() != null ? result.advanceMinutes() : 10;
+        LocalDateTime remindTime = result.remindTime() != null ? result.remindTime() : LocalDateTime.now().plusMinutes(advance);
         parsedData.put("remindTime", remindTime.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
         parsedData.put("intentType", result.intentType());
         parsedData.put("location", result.location());
         parsedData.put("priority", result.priority());
-        parsedData.put("advanceMinutes", 10);
+        parsedData.put("advanceMinutes", advance);
         parsedData.put("confidence", 0.95);
 
         if ("REMINDER".equals(result.intentType()) && userId != null) {
@@ -270,5 +283,15 @@ public class ChatController {
 
     private boolean isLater(String text) {
         return text.matches("^(稍后|等下|过会|再等|稍等|过一会儿)$");
+    }
+
+    private Double toDouble(Object value) {
+        if (value == null) return null;
+        if (value instanceof Number) return ((Number) value).doubleValue();
+        if (value instanceof String) {
+            try { return Double.parseDouble(((String) value).trim()); }
+            catch (NumberFormatException e) { return null; }
+        }
+        return null;
     }
 }

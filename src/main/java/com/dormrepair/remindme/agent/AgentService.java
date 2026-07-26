@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -37,7 +38,12 @@ public class AgentService {
     /**
      * 最大迭代次数（防止无限循环）
      */
-    private static final int MAX_ITERATIONS = 3;
+    private static final int MAX_ITERATIONS = 5;
+
+    /**
+     * 最大工具调用次数（控制工具链长度）
+     */
+    private static final int MAX_TOOL_CALLS = 3;
 
     /**
      * 处理用户请求的主入口
@@ -47,11 +53,35 @@ public class AgentService {
      * @return Agent响应
      */
     public AgentResponse processRequest(Long userId, String userInput) {
+        return processRequest(userId, userInput, null);
+    }
+
+    /**
+     * 处理用户请求（带上下文）
+     *
+     * @param userId 用户ID
+     * @param userInput 用户输入
+     * @param context 额外上下文（如GPS坐标），可为null
+     * @return Agent响应
+     */
+    public AgentResponse processRequest(Long userId, String userInput, Map<String, Object> context) {
         log.info("Agent开始处理请求: userId={}, userInput={}", userId, userInput);
 
         try {
             // 保存用户输入到对话历史
             conversationMemory.addUserMessage(userId, userInput);
+
+            // 如果有位置上下文，作为系统消息注入对话历史
+            if (context != null && context.containsKey("latitude") && context.containsKey("longitude")) {
+                Double lat = (Double) context.get("latitude");
+                Double lng = (Double) context.get("longitude");
+                String locationInfo = String.format(
+                        "用户当前GPS坐标：纬度 %s，经度 %s，请调用 get_location 工具将坐标转换为地址",
+                        lat, lng
+                );
+                conversationMemory.addSystemMessage(userId, locationInfo);
+                log.info("请求包含GPS坐标: lat={}, lng={}", lat, lng);
+            }
 
             // 获取对话历史
             List<Message> history = conversationMemory.getHistory(userId);
@@ -63,10 +93,11 @@ public class AgentService {
             String llmResponse = null;
             Object lastToolResult = null;
             int iteration = 0;
+            int toolCallCount = 0;
 
             while (iteration < MAX_ITERATIONS) {
                 iteration++;
-                log.debug("ReAct循环第 {} 次迭代", iteration);
+                log.debug("ReAct循环第 {} 次迭代，已调用工具 {} 次", iteration, toolCallCount);
 
                 // 思考：调用LLM
                 llmResponse = llmService.chatWithTools(userInput, tools, history);
@@ -76,28 +107,62 @@ public class AgentService {
 
                 if (llmToolCall == null) {
                     // 直接回复用户，循环结束
-                    log.info("LLM直接回复，结束循环");
+                    log.info("LLM直接回复，结束循环（迭代次数: {}, 工具调用次数: {}）", iteration, toolCallCount);
+                    conversationMemory.addAssistantMessage(userId, llmResponse);
+                    return buildAgentResponse(llmResponse, lastToolResult);
+                }
+
+                // 检查是否达到最大工具调用次数
+                if (toolCallCount >= MAX_TOOL_CALLS) {
+                    log.warn("达到最大工具调用次数 {}，跳过工具调用", MAX_TOOL_CALLS);
                     conversationMemory.addAssistantMessage(userId, llmResponse);
                     return buildAgentResponse(llmResponse, lastToolResult);
                 }
 
                 // 行动：执行工具调用
-                log.info("LLM决定调用工具: {}", llmToolCall.getToolName());
+                log.info("LLM决定调用工具({}/{}) : {}", toolCallCount + 1, MAX_TOOL_CALLS, llmToolCall.getToolName());
                 ToolCall toolCall = ToolCall.of(llmToolCall.getToolName(), llmToolCall.getArguments());
                 String toolResult = executeToolCall(userId, toolCall);
+                toolCallCount++;
 
                 // 保存工具调用和结果到对话历史
                 conversationMemory.addToolCall(userId, llmToolCall.getToolName(), llmToolCall.getArguments());
-                conversationMemory.addToolResult(userId, llmToolCall.getToolName(), toolResult, true);
 
-                // 更新历史和用户输入（将工具结果作为新的输入）
-                userInput = "工具执行结果: " + toolResult;
+                // 检查工具执行是否成功
+                boolean toolSuccess = true;
+                try {
+                    Map<String, Object> resultMap = objectMapper.readValue(toolResult, Map.class);
+                    if (!Boolean.TRUE.equals(resultMap.get("success"))) {
+                        toolSuccess = false;
+                        log.warn("工具执行失败: {}", resultMap.get("error"));
+                    }
+                } catch (Exception e) {
+                    // JSON解析失败，视为成功（可能是其他格式）
+                }
+                conversationMemory.addToolResult(userId, llmToolCall.getToolName(), toolResult, toolSuccess);
+
+                // 检查工具执行结果是否包含sessionId（create_reminder工具触发确认流程）
+                AgentResponse confirmationResponse = buildConfirmationResponse(toolResult);
+                if (confirmationResponse != null) {
+                    log.info("工具结果包含sessionId，构建CONFIRMATION响应: toolName={}", llmToolCall.getToolName());
+                    return confirmationResponse;
+                }
+
+                // 如果工具执行失败，退出循环
+                if (!toolSuccess) {
+                    log.info("工具执行失败，结束循环");
+                    conversationMemory.addAssistantMessage(userId, llmResponse);
+                    return buildAgentResponse(llmResponse, toolResult);
+                }
+
+                // 更新历史（工具结果已添加到对话历史中，不再修改userInput）
+                // LLM下次迭代时会通过对话历史看到工具执行结果
                 history = conversationMemory.getHistory(userId);
                 lastToolResult = toolResult;
             }
 
             // 达到最大迭代次数，返回最后一次响应
-            log.warn("达到最大迭代次数 {}，返回最后响应", MAX_ITERATIONS);
+            log.warn("达到最大迭代次数 {}，返回最后响应（工具调用次数: {}）", MAX_ITERATIONS, toolCallCount);
             conversationMemory.addAssistantMessage(userId, llmResponse);
             return buildAgentResponse(llmResponse, lastToolResult);
 
@@ -137,6 +202,17 @@ public class AgentService {
             if (result instanceof Map) {
                 // 如果返回值已经是 Map，直接序列化（如 ReminderService）
                 resultJson = serializeResult(result);
+                // 解析结果中的sessionId（create_reminder工具触发确认流程）
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> resultMap = (Map<String, Object>) result;
+                    if (Boolean.TRUE.equals(resultMap.get("success")) && resultMap.containsKey("sessionId")) {
+                        log.info("工具执行结果包含sessionId，标记为需要确认: toolName={}, sessionId={}",
+                                toolCall.getToolName(), resultMap.get("sessionId"));
+                    }
+                } catch (Exception e) {
+                    log.warn("解析工具结果sessionId失败: {}", e.getMessage());
+                }
             } else {
                 // 如果返回值是 DTO 对象，包装一层（如 WeatherService）
                 resultJson = "{\"success\": true, \"data\": " + serializeResult(result) + "}";
@@ -188,6 +264,15 @@ public class AgentService {
             return AgentResponse.toolCall(toolCall.getToolName(), toolCall.getArguments());
         }
 
+        // 检查工具执行结果是否包含sessionId（create_reminder工具触发确认流程）
+        if (toolResult != null) {
+            AgentResponse confirmationResponse = buildConfirmationResponse(toolResult);
+            if (confirmationResponse != null) {
+                log.info("工具结果包含sessionId，返回CONFIRMATION类型响应");
+                return confirmationResponse;
+            }
+        }
+
         // 检查是否包含错误信息
         if (llmOutput != null && llmOutput.contains("error")) {
             return AgentResponse.error(llmOutput);
@@ -199,6 +284,59 @@ public class AgentService {
             response.setToolResult(toolResult);
         }
         return response;
+    }
+
+    /**
+     * 从工具执行结果中构建CONFIRMATION响应
+     * <p>
+     * 检查工具结果是否包含sessionId（create_reminder工具返回），
+     * 如果包含则构建CONFIRMATION类型的响应
+     * </p>
+     *
+     * @param toolResult 工具执行结果（JSON字符串或Map）
+     * @return CONFIRMATION响应，如果不包含sessionId则返回null
+     */
+    private AgentResponse buildConfirmationResponse(Object toolResult) {
+        if (toolResult == null) {
+            return null;
+        }
+
+        try {
+            Map<String, Object> resultMap;
+            if (toolResult instanceof String) {
+                resultMap = objectMapper.readValue((String) toolResult, Map.class);
+            } else if (toolResult instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> castedMap = (Map<String, Object>) toolResult;
+                resultMap = castedMap;
+            } else {
+                return null;
+            }
+
+            // 检查是否是成功的工具结果且包含sessionId
+            if (!Boolean.TRUE.equals(resultMap.get("success")) || !resultMap.containsKey("sessionId")) {
+                return null;
+            }
+
+            String sessionId = (String) resultMap.get("sessionId");
+            String title = (String) resultMap.get("title");
+            String remindTime = (String) resultMap.get("remindTime");
+            String location = (String) resultMap.get("location");
+
+            Map<String, Object> confirmationData = new HashMap<>();
+            confirmationData.put("title", title);
+            confirmationData.put("remindTime", remindTime);
+            confirmationData.put("location", location);
+            if (resultMap.containsKey("priority")) {
+                confirmationData.put("priority", resultMap.get("priority"));
+            }
+
+            String content = "📋 我帮你解析了提醒信息，请确认：";
+            return AgentResponse.confirmation(sessionId, content, confirmationData);
+        } catch (Exception e) {
+            log.warn("解析工具结果构建CONFIRMATION响应失败: {}", e.getMessage());
+            return null;
+        }
     }
 
     /**
