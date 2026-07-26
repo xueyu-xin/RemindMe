@@ -177,7 +177,7 @@ public class ChatController {
                 parsedData.put("intentType", result.intentType());
                 parsedData.put("location", result.location());
                 parsedData.put("priority", result.priority());
-                parsedData.put("advanceMinutes", 10);
+                parsedData.put("advanceMinutes", result.advanceMinutes() != null ? result.advanceMinutes() : 10);
                 parsedData.put("confidence", 0.95);
 
                 if (pendingSession != null && "INFO_CONFIRM".equals(pendingSession.getStage())) {
@@ -227,13 +227,14 @@ public class ChatController {
 
         Map<String, Object> parsedData = new HashMap<>();
         parsedData.put("title", result.title());
-        // 如果时间为null，使用默认时间（当前时间+10分钟）
-        LocalDateTime remindTime = result.remindTime() != null ? result.remindTime() : LocalDateTime.now().plusMinutes(10);
+        // 如果时间为null，使用默认时间（当前时间+默认提前量）
+        Integer advance = result.advanceMinutes() != null ? result.advanceMinutes() : 10;
+        LocalDateTime remindTime = result.remindTime() != null ? result.remindTime() : LocalDateTime.now().plusMinutes(advance);
         parsedData.put("remindTime", remindTime.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
         parsedData.put("intentType", result.intentType());
         parsedData.put("location", result.location());
         parsedData.put("priority", result.priority());
-        parsedData.put("advanceMinutes", 10);
+        parsedData.put("advanceMinutes", advance);
         parsedData.put("confidence", 0.95);
 
         if ("REMINDER".equals(result.intentType()) && userId != null) {

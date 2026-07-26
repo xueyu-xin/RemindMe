@@ -173,12 +173,16 @@ public class ToolRegistry {
         ));
         paramDescriptions.put("queryWeatherNowForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
-            "location", "LocationID（如101010100）或经纬度（如116.41,39.92）"
+            "location", "城市名（可选）",
+            "latitude", "纬度（可选，优先使用）",
+            "longitude", "经度（可选，优先使用）"
         ));
         paramDescriptions.put("queryWeatherForecastForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
-            "location", "LocationID或经纬度",
-            "days", "预报天数（3/7/10/15/30，默认7天）"
+            "location", "城市名（可选）",
+            "days", "预报天数（3/7/10/15/30，默认7天）",
+            "latitude", "纬度（可选，优先使用）",
+            "longitude", "经度（可选，优先使用）"
         ));
         paramDescriptions.put("queryAirQualityForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",

@@ -32,6 +32,7 @@ public class ConfirmationCardResponse {
         private String location;
         private Integer advanceMinutes;
         private Double confidence;
+        private String weatherSuggestion;
     }
 
     @Data

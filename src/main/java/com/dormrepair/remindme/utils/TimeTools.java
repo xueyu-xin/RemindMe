@@ -74,14 +74,26 @@ public class TimeTools {
         expression = expression.trim();
         LocalDate today = TimeUtils.now().toLocalDate();
         LocalDate calculatedDate = null;
+        LocalDateTime calculatedDateTime = null;
         String description = null;
 
+        // X分钟后
+        Matcher minutesAfterMatcher = Pattern.compile("^(\\d+)分钟后$").matcher(expression);
+        if (minutesAfterMatcher.matches()) {
+            int minutes = Integer.parseInt(minutesAfterMatcher.group(1));
+            calculatedDateTime = TimeUtils.now().plusMinutes(minutes);
+            calculatedDate = calculatedDateTime.toLocalDate();
+            description = minutes + "分钟后";
+        }
+
         // X天后
-        Matcher daysAfterMatcher = Pattern.compile("^(\\d+)天后$").matcher(expression);
-        if (daysAfterMatcher.matches()) {
-            int days = Integer.parseInt(daysAfterMatcher.group(1));
-            calculatedDate = today.plusDays(days);
-            description = days + "天后";
+        if (calculatedDate == null) {
+            Matcher daysAfterMatcher = Pattern.compile("^(\\d+)天后$").matcher(expression);
+            if (daysAfterMatcher.matches()) {
+                int days = Integer.parseInt(daysAfterMatcher.group(1));
+                calculatedDate = today.plusDays(days);
+                description = days + "天后";
+            }
         }
 
         // X天前
@@ -125,11 +137,15 @@ public class TimeTools {
         // 无法解析
         if (calculatedDate == null) {
             result.put("success", false);
-            result.put("error", "无法解析表达式: " + expression + "，支持格式：X天后、X天前、X周后、下周一至下周日");
+            result.put("error", "无法解析表达式: " + expression + "，支持格式：X分钟后、X天后、X天前、X周后、下周一至下周日");
             return result;
         }
 
-        LocalDateTime calculatedDateTime = calculatedDate.atTime(TimeUtils.now().toLocalTime());
+        // 如果是分钟后，已经有了完整的DateTime；否则构建DateTime
+        if (calculatedDateTime == null) {
+            calculatedDateTime = calculatedDate.atTime(TimeUtils.now().toLocalTime());
+        }
+
         result.put("success", true);
         result.put("calculatedDate", calculatedDate.format(DATE_FORMATTER));
         result.put("calculatedDateTime", calculatedDateTime.format(FORMATTER));

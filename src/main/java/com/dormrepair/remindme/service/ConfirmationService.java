@@ -42,6 +42,8 @@ public class ConfirmationService {
     private final ObjectMapper objectMapper;
     private final WebSocketPushService webSocketPushService;
     private final EventPublisher eventPublisher;
+    private final WeatherService weatherService;
+    private final LLMService llmService;
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
@@ -355,6 +357,11 @@ public class ConfirmationService {
 
     @Transactional
     public void pushExecuteCard(Reminder reminder) {
+        pushExecuteCard(reminder, null);
+    }
+
+    @Transactional
+    public void pushExecuteCard(Reminder reminder, String weatherSuggestion) {
         String sessionId = UUID.randomUUID().toString();
 
         ConfirmationSession session = ConfirmationSession.builder()
@@ -383,12 +390,13 @@ public class ConfirmationService {
         parsedData.put("advanceMinutes", reminder.getAdvanceMinutes());
         parsedData.put("attempt", reminder.getConfirmAttempts());
         parsedData.put("maxAttempts", 3);
+        parsedData.put("weatherSuggestion", weatherSuggestion);
 
         ConfirmationCardResponse card = buildExecuteCard(session, parsedData);
         pushConfirmationCard(reminder.getUserId(), card);
 
-        log.info("推送阶段二提醒执行卡片: sessionId={}, reminderId={}, userId={}", 
-                sessionId, reminder.getId(), reminder.getUserId());
+        log.info("推送阶段二提醒执行卡片: sessionId={}, reminderId={}, userId={}, weatherSuggestion={}", 
+                sessionId, reminder.getId(), reminder.getUserId(), weatherSuggestion);
     }
 
     @Transactional
@@ -488,7 +496,14 @@ public class ConfirmationService {
                 .priority((String) parsedData.get("priority"))
                 .location((String) parsedData.get("location"))
                 .advanceMinutes((Integer) parsedData.get("advanceMinutes"))
+                .weatherSuggestion((String) parsedData.get("weatherSuggestion"))
                 .build();
+
+        String message = "🔔 叮！该执行提醒了：";
+        String weatherSuggestion = (String) parsedData.get("weatherSuggestion");
+        if (weatherSuggestion != null && !weatherSuggestion.isBlank()) {
+            message = weatherSuggestion + "\n" + message;
+        }
 
         List<Action> actions = Arrays.asList(
                 Action.builder().id("confirm").label("✅ 知道了").style("primary").build(),
@@ -498,7 +513,7 @@ public class ConfirmationService {
 
         return ConfirmationCardResponse.builder()
                 .type("execute_card")
-                .message("🔔 叮！该执行提醒了：")
+                .message(message)
                 .data(data)
                 .actions(actions)
                 .timeout(session.getIntervalMinutes() * 60)

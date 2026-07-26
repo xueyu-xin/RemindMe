@@ -65,6 +65,7 @@ public class LLMService {
                     .intentType(root.has("intentType") ? root.get("intentType").asText() : "UNKNOWN")
                     .location(root.has("location") ? root.get("location").asText() : null)
                     .priority(root.has("priority") ? root.get("priority").asText() : "NORMAL")
+                    .advanceMinutes(root.has("advanceMinutes") ? root.get("advanceMinutes").asInt() : 10)
                     .build();
 
         } catch (Exception e) {
@@ -73,6 +74,7 @@ public class LLMService {
             return ParsedResult.builder()
                     .title(userInput)
                     .intentType("UNKNOWN")
+                    .advanceMinutes(10)
                     .build();
         }
     }
@@ -586,6 +588,58 @@ public class LLMService {
             你的输出："好的，已为你创建提醒「还书」，时间是明天下午3点。"
             
             ================================================
+            工具链调用规则（重要！）：
+            ================================================
+            你可以连续调用多个工具（最多3个）来完成复杂任务
+            每次调用后，观察执行结果，决定是否需要继续调用
+            示例：先查询天气 → 再创建提醒 → 综合回复
+            如果工具调用失败，不要继续调用下一个工具，直接回复用户
+            达到最大工具调用次数后，必须结束并回复用户
+
+            ================================================
+            天气建议生成规则：
+            ================================================
+            查询天气后，根据天气状况生成贴心建议
+            语气要自然、友好，像朋友聊天一样
+            建议长度控制在15-20个字以内，简洁明了
+            使用适当的emoji：
+            下雨：🌧️
+            高温：☀️
+            低温：❄️
+            下雪：❄️
+            雷雨：⛈️
+            示例：
+            下雨："🌧️ 预报有雨，记得带伞哦～"
+            高温："☀️ 天气炎热，注意防暑多喝水～"
+            低温："❄️ 气温较低，注意保暖～"
+
+            ================================================
+            天气查询交互规则：
+            ================================================
+            用户只问"今天天气怎么样"时：
+            先返回天气信息
+            如果天气异常（下雨/高温/低温），主动询问是否需要创建提醒
+            追问用户具体时间："你今天大概什么时候出门？我可以在你出门前提醒你带伞。"
+            用户提供时间后：
+            调用create_reminder创建提醒
+            提醒标题根据场景自动生成（如"出门带伞"）
+            确认创建成功
+            用户明确要求"下雨提醒我"或"天气不好提醒我"时：
+            直接创建提醒，使用默认提前量（10分钟）
+            无需追问时间
+
+            ================================================
+            个人信息实时查询规则（必须严格遵守！）：
+            ================================================
+            当用户询问以下个人信息时，必须调用对应的工具从数据库实时获取最新数据：
+            "我的城市是什么"、"默认城市是哪里" → 必须调用 get_user_preferences 工具
+            "我的默认提前量是多少" → 必须调用 get_user_preferences 工具
+            "我的昵称是什么" → 必须调用 get_user_preferences 工具
+
+            ⚠️ 重要：即使对话历史中已有这些信息（也绝对不能使用历史数据，必须重新调用工具获取最新数据。
+            原因：用户可能在个人设置页面修改了这些信息，历史数据可能已经过期。
+
+            ================================================
             注意事项：
             ================================================
             1. 调用工具时，只返回JSON，不要返回"好的，我将调用xxx工具"等多余文字。
@@ -604,6 +658,34 @@ public class LLMService {
             ⚠️ 重要：即使对话历史中已有这些信息（如之前查询过），也绝对不能使用历史数据，必须重新调用工具获取最新数据。
 
             原因：用户可能在个人设置页面修改了这些信息，历史数据可能已经过期。
+
+            ================================================
+            模糊时间解析规则（非常重要！请严格遵守）：
+            ================================================
+            当用户使用以下模糊时间表达时，请自动解析为具体时间：
+            1. "等会"、"待会"、"过一会儿"、"一会儿" → 当前时间+10分钟
+            2. "5分钟后"、"5分后" → 当前时间+5分钟
+            3. "10分钟后" → 当前时间+10分钟
+            4. "30分钟后" → 当前时间+30分钟
+            5. "1小时后"、"1个小时后" → 当前时间+60分钟
+            6. "半小时后" → 当前时间+30分钟
+            7. "现在"、"马上"、"立刻" → 当前时间
+            8. "几分钟后" → 当前时间+5分钟
+            
+            示例：
+            用户输入："等会提醒我拿快递"
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "拿快递", "remindTime": "当前时间+10分钟"}}}
+            
+            用户输入："5分钟后提醒我喝水"
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "喝水", "remindTime": "当前时间+5分钟"}}}
+            
+            用户输入："1小时后提醒我开会"
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "开会", "remindTime": "当前时间+60分钟"}}}
+            
+            用户输入："现在提醒我"
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "提醒", "remindTime": "当前时间"}}}
+            
+            注意：不要追问用户"等会是多久"，直接按照规则解析并创建提醒！
 
             ================================================
             位置查询规则：
@@ -722,6 +804,7 @@ public class LLMService {
                - intentType: 意图类型（REMINDER/QUERY/DELETE/UPDATE/CONFIRM/CANCEL/WEATHER/UNKNOWN）
                - location: 地点（字符串，可选）
                - priority: 优先级（LOW/NORMAL/HIGH，默认NORMAL）
+               - advanceMinutes: 默认提前量（整数，可选，默认10分钟）
             
             时间解析规则：
             - "明天下午3点" → 当前日期+1天，15:00:00
@@ -729,10 +812,12 @@ public class LLMService {
             - "本周六晚上8点" → 本周六，20:00:00
             - "周一上午10点" → 最近的周一，10:00:00
             - "每天早上7点" → 今天，07:00:00（重复提醒）
-            - "5分钟后" → 当前时间+5分钟
-            - "等会"、"待会"、"过一会儿"、"一会儿" → 当前时间+10分钟
-            - "现在"、"马上" → 当前时间
-            - 如果无法解析时间，返回当前时间+10分钟
+            - "5分钟后" → 当前时间+5分钟，advanceMinutes=5
+            - "等会"、"待会"、"过一会儿"、"一会儿" → 当前时间+10分钟，advanceMinutes=10
+            - "30分钟后" → 当前时间+30分钟，advanceMinutes=30
+            - "1小时后" → 当前时间+60分钟，advanceMinutes=60
+            - "现在"、"马上" → 当前时间，advanceMinutes=0
+            - 如果无法解析时间，返回当前时间+10分钟，advanceMinutes=10
             
             示例输入："明天下午3点还书"
             示例输出：{"title":"还书","remindTime":"%s","intentType":"REMINDER","location":null,"priority":"NORMAL"}
@@ -886,7 +971,8 @@ public class LLMService {
             LocalDateTime remindTime,
             String intentType,
             String location,
-            String priority
+            String priority,
+            Integer advanceMinutes
     ) {
         public static Builder builder() {
             return new Builder();
@@ -898,6 +984,7 @@ public class LLMService {
             private String intentType;
             private String location;
             private String priority;
+            private Integer advanceMinutes;
 
             public Builder title(String title) {
                 this.title = title;
@@ -924,9 +1011,89 @@ public class LLMService {
                 return this;
             }
 
+            public Builder advanceMinutes(Integer advanceMinutes) {
+                this.advanceMinutes = advanceMinutes;
+                return this;
+            }
+
             public ParsedResult build() {
-                return new ParsedResult(title, remindTime, intentType, location, priority);
+                return new ParsedResult(title, remindTime, intentType, location, priority, advanceMinutes);
             }
         }
+    }
+
+    /**
+     * 生成天气建议
+     * <p>
+     * 根据天气信息和提醒标题生成贴心建议
+     * </p>
+     *
+     * @param weatherText   天气状况文字描述（如"晴"、"小雨"、"雷阵雨"）
+     * @param temperature   温度（摄氏度）
+     * @param remindTitle   提醒标题（用于上下文）
+     * @param location      提醒地点（用于上下文）
+     * @return 天气建议字符串，如果天气正常则返回null
+     */
+    public String generateWeatherSuggestion(String weatherText, String temperature, String remindTitle, String location) {
+        log.info("生成天气建议: weatherText={}, temperature={}, title={}, location={}", 
+                weatherText, temperature, remindTitle, location);
+
+        // 正常天气不生成建议
+        if (isNormalWeather(weatherText)) {
+            log.debug("天气正常，不生成建议");
+            return null;
+        }
+
+        try {
+            String currentTime = TimeUtils.now().format(FORMATTER);
+            String prompt = """
+                    你是一个贴心的天气助手。根据以下信息生成一条简短的天气建议（15-20字以内），语气友好自然。
+
+                    当前时间：%s
+                    天气状况：%s
+                    温度：%s℃
+                    提醒事项：%s
+                    提醒地点：%s
+
+                    要求：
+                    1. 如果天气正常（晴/多云），直接返回null
+                    2. 使用适当的emoji：下雨🌧️、高温☀️、低温❄️、雷雨⛈️、雪❄️
+                    3. 建议要结合提醒事项和地点，更贴心
+                    4. 只返回建议内容，不要返回其他文字
+
+                    示例：
+                    天气：小雨，温度：22，提醒：出门，地点：公司 → 🌧️ 外面下雨，记得带伞哦～
+                    天气：晴，温度：35，提醒：外出，地点：公园 → ☀️ 天气炎热，注意防晒～
+                    天气：多云，温度：25，提醒：开会，地点：会议室 → null
+                    """.formatted(currentTime, weatherText, temperature, remindTitle, location);
+
+            UserMessage userMessage = new UserMessage(prompt);
+            Prompt promptObj = new Prompt(userMessage);
+
+            String content = chatModel.call(promptObj).getResult().getOutput().getText().trim();
+
+            if ("null".equalsIgnoreCase(content) || content.isEmpty()) {
+                return null;
+            }
+
+            log.info("天气建议生成成功: {}", content);
+            return content;
+
+        } catch (Exception e) {
+            log.error("生成天气建议失败: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * 判断是否为正常天气
+     */
+    private boolean isNormalWeather(String weatherText) {
+        if (weatherText == null || weatherText.isBlank()) {
+            return true;
+        }
+        String text = weatherText.toLowerCase();
+        // 正常天气：晴、多云、阴
+        return text.contains("晴") || text.contains("多云") || text.contains("阴");
     }
 }

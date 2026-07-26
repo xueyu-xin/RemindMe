@@ -38,7 +38,12 @@ public class AgentService {
     /**
      * 最大迭代次数（防止无限循环）
      */
-    private static final int MAX_ITERATIONS = 3;
+    private static final int MAX_ITERATIONS = 5;
+
+    /**
+     * 最大工具调用次数（控制工具链长度）
+     */
+    private static final int MAX_TOOL_CALLS = 3;
 
     /**
      * 处理用户请求的主入口
@@ -88,10 +93,11 @@ public class AgentService {
             String llmResponse = null;
             Object lastToolResult = null;
             int iteration = 0;
+            int toolCallCount = 0;
 
             while (iteration < MAX_ITERATIONS) {
                 iteration++;
-                log.debug("ReAct循环第 {} 次迭代", iteration);
+                log.debug("ReAct循环第 {} 次迭代，已调用工具 {} 次", iteration, toolCallCount);
 
                 // 思考：调用LLM
                 llmResponse = llmService.chatWithTools(userInput, tools, history);
@@ -101,25 +107,52 @@ public class AgentService {
 
                 if (llmToolCall == null) {
                     // 直接回复用户，循环结束
-                    log.info("LLM直接回复，结束循环");
+                    log.info("LLM直接回复，结束循环（迭代次数: {}, 工具调用次数: {}）", iteration, toolCallCount);
+                    conversationMemory.addAssistantMessage(userId, llmResponse);
+                    return buildAgentResponse(llmResponse, lastToolResult);
+                }
+
+                // 检查是否达到最大工具调用次数
+                if (toolCallCount >= MAX_TOOL_CALLS) {
+                    log.warn("达到最大工具调用次数 {}，跳过工具调用", MAX_TOOL_CALLS);
                     conversationMemory.addAssistantMessage(userId, llmResponse);
                     return buildAgentResponse(llmResponse, lastToolResult);
                 }
 
                 // 行动：执行工具调用
-                log.info("LLM决定调用工具: {}", llmToolCall.getToolName());
+                log.info("LLM决定调用工具({}/{}) : {}", toolCallCount + 1, MAX_TOOL_CALLS, llmToolCall.getToolName());
                 ToolCall toolCall = ToolCall.of(llmToolCall.getToolName(), llmToolCall.getArguments());
                 String toolResult = executeToolCall(userId, toolCall);
+                toolCallCount++;
 
                 // 保存工具调用和结果到对话历史
                 conversationMemory.addToolCall(userId, llmToolCall.getToolName(), llmToolCall.getArguments());
-                conversationMemory.addToolResult(userId, llmToolCall.getToolName(), toolResult, true);
+
+                // 检查工具执行是否成功
+                boolean toolSuccess = true;
+                try {
+                    Map<String, Object> resultMap = objectMapper.readValue(toolResult, Map.class);
+                    if (!Boolean.TRUE.equals(resultMap.get("success"))) {
+                        toolSuccess = false;
+                        log.warn("工具执行失败: {}", resultMap.get("error"));
+                    }
+                } catch (Exception e) {
+                    // JSON解析失败，视为成功（可能是其他格式）
+                }
+                conversationMemory.addToolResult(userId, llmToolCall.getToolName(), toolResult, toolSuccess);
 
                 // 检查工具执行结果是否包含sessionId（create_reminder工具触发确认流程）
                 AgentResponse confirmationResponse = buildConfirmationResponse(toolResult);
                 if (confirmationResponse != null) {
                     log.info("工具结果包含sessionId，构建CONFIRMATION响应: toolName={}", llmToolCall.getToolName());
                     return confirmationResponse;
+                }
+
+                // 如果工具执行失败，退出循环
+                if (!toolSuccess) {
+                    log.info("工具执行失败，结束循环");
+                    conversationMemory.addAssistantMessage(userId, llmResponse);
+                    return buildAgentResponse(llmResponse, toolResult);
                 }
 
                 // 更新历史（工具结果已添加到对话历史中，不再修改userInput）
@@ -129,7 +162,7 @@ public class AgentService {
             }
 
             // 达到最大迭代次数，返回最后一次响应
-            log.warn("达到最大迭代次数 {}，返回最后响应", MAX_ITERATIONS);
+            log.warn("达到最大迭代次数 {}，返回最后响应（工具调用次数: {}）", MAX_ITERATIONS, toolCallCount);
             conversationMemory.addAssistantMessage(userId, llmResponse);
             return buildAgentResponse(llmResponse, lastToolResult);
 
