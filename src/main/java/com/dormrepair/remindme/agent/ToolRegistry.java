@@ -214,6 +214,34 @@ public class ToolRegistry {
             "latitude", "纬度（可选，有GPS坐标时传入）",
             "longitude", "经度（可选，有GPS坐标时传入）"
         ));
+        // RAG 工具参数描述
+        paramDescriptions.put("retrievePrivateKnowledgeForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "query", "查询关键词，如'我明天有什么课'、'我是什么专业'",
+            "topK", "返回结果数量。传null时根据用户记忆总数动态计算（<20条→5，20-100条→10，>100条→15）；传具体值时使用该值"
+        ));
+        paramDescriptions.put("addPrivateMemoryForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "content", "要存储的记忆内容，如'用户是大三计算机专业学生'",
+            "category", "记忆分类，可选值：PERSONAL_INFO / ACTIVITY / EVENT / COURSE / PLAN / EXAM_SCHEDULE / DAILY_ROUTINE / HEALTH_CONDITION / DIET_PREFERENCE / HABIT / INTEREST / LANGUAGE_STYLE / OTHER"
+        ));
+        paramDescriptions.put("updatePrivateMemoryForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "memoryId", "要更新的记忆ID",
+            "newContent", "新的记忆内容"
+        ));
+        paramDescriptions.put("deletePrivateMemoryForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "memoryId", "要删除的记忆ID"
+        ));
+        paramDescriptions.put("getAllPrivateMemoriesForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）"
+        ));
+        paramDescriptions.put("retrievePublicKnowledgeForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "query", "查询关键词，如'夏天省电'、'考试技巧'",
+            "topK", "返回结果数量，默认为5"
+        ));
 
         Map<String, String> descriptions = paramDescriptions.get(methodName);
         if (descriptions != null && descriptions.containsKey(paramName)) {
