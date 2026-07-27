@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org">
 <head>
     <meta charset="UTF-8">
@@ -727,6 +727,12 @@
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(255, 107, 107, 0.35);
         }
+        .confirmation-card .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
         .confirmation-card .card-timer {
             margin-top: 12px;
             text-align: center;
@@ -1003,6 +1009,7 @@
 
         var stompClient = null;
         var currentConfirmationSessionId = null;
+        var isProcessing = false; // 防重复点击标志
 
         function connectWebSocket() {
             var socket = new SockJS('/ws?user-id=' + currentUserId);
@@ -1312,6 +1319,13 @@
         }
 
         async function handleSingleConfirm(sessionId) {
+            if (isProcessing) return;
+            isProcessing = true;
+            
+            // 禁用所有按钮
+            var buttons = document.querySelectorAll('.action-btn, .mini-btn');
+            buttons.forEach(function(btn) { btn.disabled = true; });
+            
             try {
                 var headers = { 'Content-Type': 'application/json' };
                 var token = localStorage.getItem('token');
@@ -1334,6 +1348,9 @@
                 // 卡片关闭由WebSocket消息 card_confirmed 处理
             } catch (e) {
                 addMessage('bot', '❌ 网络错误');
+            } finally {
+                isProcessing = false;
+                buttons.forEach(function(btn) { btn.disabled = false; });
             }
         }
 
@@ -1371,6 +1388,13 @@
         }
 
         async function handleSingleCancel(sessionId) {
+            if (isProcessing) return;
+            isProcessing = true;
+            
+            // 禁用所有按钮
+            var buttons = document.querySelectorAll('.action-btn, .mini-btn');
+            buttons.forEach(function(btn) { btn.disabled = true; });
+            
             try {
                 var headers = { 'Content-Type': 'application/json' };
                 var token = localStorage.getItem('token');
@@ -1393,6 +1417,9 @@
                 // 卡片关闭由WebSocket消息处理
             } catch (e) {
                 addMessage('bot', '❌ 网络错误');
+            } finally {
+                isProcessing = false;
+                buttons.forEach(function(btn) { btn.disabled = false; });
             }
         }
 
@@ -1423,6 +1450,13 @@
         }
 
         async function handleMultiItemConfirm(sessionId) {
+            if (isProcessing) return;
+            isProcessing = true;
+            
+            // 禁用所有按钮
+            var buttons = document.querySelectorAll('.action-btn, .mini-btn');
+            buttons.forEach(function(btn) { btn.disabled = true; });
+            
             try {
                 var headers = { 'Content-Type': 'application/json' };
                 var token = localStorage.getItem('token');
@@ -1445,10 +1479,20 @@
                 // 卡片关闭由WebSocket消息 card_confirmed 处理
             } catch (e) {
                 addMessage('bot', '❌ 网络错误');
+            } finally {
+                isProcessing = false;
+                buttons.forEach(function(btn) { btn.disabled = false; });
             }
         }
 
         async function handleMultiItemCancel(sessionId) {
+            if (isProcessing) return;
+            isProcessing = true;
+            
+            // 禁用所有按钮
+            var buttons = document.querySelectorAll('.action-btn, .mini-btn');
+            buttons.forEach(function(btn) { btn.disabled = true; });
+            
             try {
                 var headers = { 'Content-Type': 'application/json' };
                 var token = localStorage.getItem('token');
@@ -1471,10 +1515,20 @@
                 // 卡片关闭由WebSocket消息处理
             } catch (e) {
                 addMessage('bot', '❌ 网络错误');
+            } finally {
+                isProcessing = false;
+                buttons.forEach(function(btn) { btn.disabled = false; });
             }
         }
 
         async function handleConfirmAll() {
+            if (isProcessing) return;
+            isProcessing = true;
+            
+            // 禁用所有按钮
+            var buttons = document.querySelectorAll('.action-btn, .mini-btn');
+            buttons.forEach(function(btn) { btn.disabled = true; });
+            
             try {
                 var headers = { 'Content-Type': 'application/json' };
                 var token = localStorage.getItem('token');
@@ -1496,10 +1550,20 @@
                 // 卡片关闭由WebSocket消息 card_confirmed / batch_confirm_result 处理
             } catch (e) {
                 addMessage('bot', '❌ 网络错误');
+            } finally {
+                isProcessing = false;
+                buttons.forEach(function(btn) { btn.disabled = false; });
             }
         }
 
         async function handleCancelAll() {
+            if (isProcessing) return;
+            isProcessing = true;
+            
+            // 禁用所有按钮
+            var buttons = document.querySelectorAll('.action-btn, .mini-btn');
+            buttons.forEach(function(btn) { btn.disabled = true; });
+            
             try {
                 var headers = { 'Content-Type': 'application/json' };
                 var token = localStorage.getItem('token');
@@ -1523,6 +1587,9 @@
                 }
             } catch (e) {
                 addMessage('bot', '❌ 网络错误');
+            } finally {
+                isProcessing = false;
+                buttons.forEach(function(btn) { btn.disabled = false; });
             }
         }
 
@@ -1540,7 +1607,10 @@
                 if (timerText) {
                     if (remaining <= 0) {
                         clearInterval(timerInterval);
-                        timerText.textContent = '⏳ 确认已超时，系统正在自动处理...';
+                        timerText.textContent = '⏳ 确认已超时，请重新输入';
+                        // 禁用卡片上的所有按钮
+                        var buttons = document.querySelectorAll('.action-btn, .mini-btn');
+                        buttons.forEach(function(btn) { btn.disabled = true; });
                     } else {
                         timerText.textContent = '⏰ ' + remaining + '秒后自动确认';
                         if (remaining <= 10) {
@@ -1552,6 +1622,13 @@
         }
 
         async function handleConfirmationAction(action, sessionId) {
+            if (isProcessing) return;
+            isProcessing = true;
+            
+            // 禁用所有按钮
+            var buttons = document.querySelectorAll('.action-btn, .mini-btn');
+            buttons.forEach(function(btn) { btn.disabled = true; });
+            
             if (timerInterval) clearInterval(timerInterval);
             
             var headers = { 'Content-Type': 'application/json' };
@@ -1593,10 +1670,20 @@
                 }
             } catch (e) {
                 addMessage('bot', '❌ 网络错误，请重试');
+            } finally {
+                isProcessing = false;
+                buttons.forEach(function(btn) { btn.disabled = false; });
             }
         }
 
         async function handleExecuteAction(action, sessionId) {
+            if (isProcessing) return;
+            isProcessing = true;
+            
+            // 禁用所有按钮
+            var buttons = document.querySelectorAll('.action-btn, .mini-btn');
+            buttons.forEach(function(btn) { btn.disabled = true; });
+            
             if (timerInterval) clearInterval(timerInterval);
             
             var headers = { 'Content-Type': 'application/json' };
@@ -1631,6 +1718,9 @@
                 }
             } catch (e) {
                 addMessage('bot', '❌ 网络错误，请重试');
+            } finally {
+                isProcessing = false;
+                buttons.forEach(function(btn) { btn.disabled = false; });
             }
         }
 

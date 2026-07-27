@@ -97,8 +97,30 @@ public class ConfirmationService {
 
     @Transactional
     public Map<String, Object> confirm(String sessionId, Long userId) {
-        ConfirmationSession session = findValidSession(sessionId, userId);
+        // 1. 先查找会话（不检查过期时间）
+        ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
 
+        // 2. 检查会话状态
+        SessionStatus status = session.getStatus();
+        if (status == SessionStatus.CONFIRMED) {
+            throw new IllegalArgumentException("该会话已确认，不能重复确认");
+        }
+        if (status == SessionStatus.CANCELLED) {
+            throw new IllegalArgumentException("该会话已取消，不能确认");
+        }
+        if (status == SessionStatus.EXPIRED) {
+            throw new IllegalArgumentException("该会话已过期，不能确认");
+        }
+
+        // 3. 检查是否过期
+        if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
+            session.setStatus(SessionStatus.EXPIRED);
+            confirmationRepository.save(session);
+            throw new IllegalArgumentException("该会话已过期，请重新创建");
+        }
+
+        // 4. 所有检查通过，正常执行确认逻辑
         Map<String, Object> parsedData = parseParsedData(session.getParsedData());
         Reminder reminder = createReminder(userId, parsedData, ConfirmStatus.CONFIRMED);
 
@@ -116,7 +138,6 @@ public class ConfirmationService {
         result.put("title", reminder.getTitle());
         result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
 
-        pushUserMessage(userId, "success", result);
         log.info("阶段一确认: sessionId={}, userId={}, reminderId={}", sessionId, userId, reminder.getId());
 
         // 发布提醒确认事件（通知Agent）
@@ -132,8 +153,30 @@ public class ConfirmationService {
 
     @Transactional
     public Map<String, Object> cancel(String sessionId, Long userId) {
-        ConfirmationSession session = findValidSession(sessionId, userId);
+        // 1. 先查找会话（不检查过期时间）
+        ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
 
+        // 2. 检查会话状态
+        SessionStatus status = session.getStatus();
+        if (status == SessionStatus.CONFIRMED) {
+            throw new IllegalArgumentException("该会话已确认，不能取消");
+        }
+        if (status == SessionStatus.CANCELLED) {
+            throw new IllegalArgumentException("该会话已取消，不能重复取消");
+        }
+        if (status == SessionStatus.EXPIRED) {
+            throw new IllegalArgumentException("该会话已过期，不能取消");
+        }
+
+        // 3. 检查是否过期
+        if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
+            session.setStatus(SessionStatus.EXPIRED);
+            confirmationRepository.save(session);
+            throw new IllegalArgumentException("该会话已过期，请重新创建");
+        }
+
+        // 4. 所有检查通过，正常执行取消逻辑
         session.setStatus(SessionStatus.CANCELLED);
         confirmationRepository.save(session);
 
@@ -199,8 +242,8 @@ public class ConfirmationService {
         for (ConfirmationSession session : expired) {
             if ("INFO_CONFIRM".equals(session.getStage())) {
                 try {
-                    // 使用 createReminderFromSession 触发 card_confirmed 推送
-                    Reminder reminder = createReminderFromSession(session);
+                    // 使用 createReminderFromSessionWithoutPush，不推送 card_confirmed（超时自动确认场景）
+                    Reminder reminder = createReminderFromSessionWithoutPush(session);
 
                     String autoMessage = buildAutoConfirmMessage(reminder);
 
@@ -427,7 +470,6 @@ public class ConfirmationService {
         } else {
             result.put("success", true);
             result.put("message", "⏰ 已推迟，" + session.getIntervalMinutes() + "分钟后再次提醒");
-            pushUserMessage(userId, "execute_later", result);
             log.info("阶段二稍后: sessionId={}, reminderId={}, attempt={}/{}", 
                     sessionId, reminder.getId(), newAttemptCount, session.getMaxAttempts());
         }
@@ -452,7 +494,6 @@ public class ConfirmationService {
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
         result.put("message", "✅ 提醒已完成");
-        pushUserMessage(userId, "execute_success", result);
 
         log.info("阶段二确认完成: sessionId={}, reminderId={}", sessionId, reminder.getId());
         return result;
@@ -475,7 +516,6 @@ public class ConfirmationService {
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
         result.put("message", "❌ 提醒已取消");
-        pushUserMessage(userId, "execute_cancelled", result);
 
         log.info("阶段二取消: sessionId={}, reminderId={}", sessionId, reminder.getId());
         return result;
@@ -732,6 +772,16 @@ public class ConfirmationService {
     }
 
     private Reminder createReminderFromSession(ConfirmationSession session) {
+        Reminder savedReminder = createReminderFromSessionWithoutPush(session);
+        
+        // 推送卡片确认消息，通知前端关闭卡片（用于手动确认场景）
+        pushCardConfirmed(session.getUserId(), session.getSessionId(), 
+                session.getParsedTitle(), session.getParsedTime());
+        
+        return savedReminder;
+    }
+    
+    private Reminder createReminderFromSessionWithoutPush(ConfirmationSession session) {
         Reminder reminder = new Reminder();
         reminder.setUserId(session.getUserId());
         reminder.setTitle(session.getParsedTitle());
@@ -761,12 +811,8 @@ public class ConfirmationService {
         session.setReminderId(savedReminder.getId());
         confirmationRepository.save(session);
 
-        log.info("从会话创建提醒: sessionId={}, userId={}, reminderId={}, title={}", 
+        log.info("从会话创建提醒(不推送): sessionId={}, userId={}, reminderId={}, title={}", 
                 session.getSessionId(), session.getUserId(), savedReminder.getId(), session.getParsedTitle());
-        
-        // 推送卡片确认消息，通知前端关闭卡片
-        pushCardConfirmed(session.getUserId(), session.getSessionId(), 
-                session.getParsedTitle(), session.getParsedTime());
         
         return savedReminder;
     }
