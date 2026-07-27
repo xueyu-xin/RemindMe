@@ -176,6 +176,13 @@
 			<artifactId>jackson-datatype-jsr310</artifactId>
 		</dependency>
 
+		<!-- lunar：农历、节日计算库 -->
+		<dependency>
+			<groupId>cn.6tail</groupId>
+			<artifactId>lunar</artifactId>
+			<version>1.7.7</version>
+		</dependency>
+
 	</dependencies>
 
 	<build>

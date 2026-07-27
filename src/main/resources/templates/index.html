@@ -324,6 +324,40 @@
             box-shadow: var(--shadow-soft);
         }
 
+        /* 错误消息和重试按钮样式 */
+        .error-msg-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            align-self: flex-start;
+        }
+        .retry-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            padding: 4px 8px;
+            border: none;
+            border-radius: 14px;
+            background: transparent;
+            color: #bbb;
+            font-size: 16px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+        .retry-btn .retry-text {
+            display: none;
+            font-size: 12px;
+        }
+        .retry-btn:hover {
+            background: var(--peach-pale);
+            color: var(--peach);
+        }
+        .retry-btn:hover .retry-text {
+            display: inline;
+        }
+
         /* ===== 提示栏 ===== */
         .prompt-bar {
             background: linear-gradient(135deg, var(--peach-pale) 0%, #FFF5F0 100%);
@@ -373,8 +407,50 @@
         .day.has-reminder .red-dot { display: block; }
         .red-dot { display: none; width: 7px; height: 7px; background: var(--pink-accent); border-radius: 50%; margin: 4px auto 0; box-shadow: 0 0 6px rgba(255, 143, 163, 0.5); }
         .day-number { display: block; line-height: 1; }
+        .day-festival { display: block; font-size: 10px; color: #e74c3c; margin-top: 2px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .day-lunar { display: block; font-size: 10px; color: var(--brown-light); margin-top: 2px; line-height: 1.2; }
+        .day-period { display: block; font-size: 11px; margin-top: 1px; line-height: 1; }
+
         .calendar-header { display: flex; justify-content: space-between; align-items: center; padding: 0 0 16px; }
         .calendar-header h3 { margin: 0; font-size: 20px; color: var(--brown-deep); letter-spacing: 1.5px; }
+        .calendar-title-wrap { display: flex; align-items: center; gap: 8px; position: relative; }
+        .period-help-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 13px;
+            height: 13px;
+            border: 1px solid var(--brown-light);
+            border-radius: 50%;
+            font-size: 9px;
+            color: var(--brown-light);
+            cursor: help;
+            line-height: 1;
+            font-family: sans-serif;
+            position: absolute;
+            top: -2px;
+            right: -18px;
+        }
+        .period-help-icon:hover {
+            border-color: var(--peach);
+            color: var(--peach);
+        }
+        .period-help-icon:hover::after {
+            content: '🌙 经期  🌸 排卵期';
+            position: absolute;
+            top: 50%;
+            left: 18px;
+            transform: translateY(-50%);
+            background: transparent;
+            color: var(--brown-light);
+            padding: 4px 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            white-space: nowrap;
+            z-index: 100;
+            font-family: 'MaoKenShiJinHei', sans-serif;
+            letter-spacing: 0.5px;
+        }
         .mode-switch { display: flex; gap: 6px; background: var(--cream-bg); padding: 6px; border-radius: 14px; border: 1px solid var(--peach-pale); }
         .mode-btn {
             padding: 8px 20px;
@@ -418,9 +494,7 @@
         }
         #calendarTitle { font-size: 16px; color: var(--brown-deep); letter-spacing: 1px; }
         #scheduleList { padding: 16px 0 0; border-top: 1px solid var(--peach-pale); overflow-y: auto; flex: 1; min-height: 0; }
-        .schedule-header { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-shrink: 0; }
-        #scheduleTitle { font-size: 15px; color: var(--brown-mid); }
-        #scheduleCount { font-size: 14px; color: var(--brown-light); }
+
         #scheduleItems { min-height: 80px; }
         .schedule-item {
             display: flex;
@@ -816,6 +890,130 @@
             background: #FFFFFF;
             box-shadow: 0 0 0 4px rgba(255, 159, 122, 0.12);
         }
+
+        /* ===== 时间轴日程视图 ===== */
+        .schedule-timeline {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 4px 0;
+        }
+        .schedule-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 6px 4px;
+            min-height: 36px;
+            border-bottom: 1px dashed var(--peach-pale);
+            border-radius: 8px;
+        }
+        .schedule-row:hover {
+            background: var(--peach-pale);
+        }
+        .schedule-row:last-child {
+            border-bottom: none;
+        }
+        .schedule-time-label {
+            width: 52px;
+            flex-shrink: 0;
+            font-size: 14px;
+            color: var(--brown-mid);
+            text-align: right;
+            font-family: 'MaoKenShiJinHei', monospace;
+            font-weight: normal;
+            letter-spacing: 0.5px;
+            padding-right: 4px;
+        }
+        .schedule-blocks {
+            flex: 1;
+            display: flex;
+            gap: 6px;
+            min-height: 30px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .schedule-block {
+            padding: 4px 12px;
+            border-radius: 10px;
+            font-size: 13px;
+            color: #FFFFFF;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+            font-family: 'MaoKenShiJinHei', sans-serif;
+            font-weight: normal;
+            letter-spacing: 0.3px;
+            height: 28px;
+            line-height: 20px;
+            transition: all 0.2s ease;
+            cursor: default;
+        }
+        .schedule-block:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(92, 64, 51, 0.12);
+        }
+        .schedule-block.multi {
+            flex: 1;
+            min-width: 0;
+            text-align: center;
+        }
+        .schedule-block.single {
+            display: inline-block;
+            width: auto;
+            max-width: 85%;
+        }
+        .schedule-block.urgent { background: var(--pink-accent); }
+        .schedule-block.high { background: var(--peach); }
+        .schedule-block.normal {
+            background: #F5C8C8;
+            color: var(--brown-deep);
+        }
+        .schedule-block.low { background: var(--success); }
+        .schedule-block.course { background: #C9B1D0; }
+        .schedule-block.default { background: var(--brown-light); }
+        .schedule-block.cancelled {
+            opacity: 0.5;
+            text-decoration: line-through;
+        }
+
+        /* 7列布局（周查询） */
+        .schedule-blocks-week {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 4px;
+            min-height: 30px;
+            align-items: center;
+        }
+        .schedule-cell {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 28px;
+        }
+        .schedule-block.empty {
+            background: transparent;
+            min-height: 28px;
+            min-width: 20px;
+            border: 1px dashed var(--peach-pale);
+            border-radius: 6px;
+            opacity: 0.3;
+        }
+        .schedule-block.week-single {
+            display: inline-block;
+            width: 100%;
+            text-align: center;
+            font-size: 12px;
+            padding: 2px 4px;
+            border-radius: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 100%;
+            height: 24px;
+            line-height: 20px;
+        }
     </style>
 </head>
 <body>
@@ -841,7 +1039,10 @@
         <div id="page-calendar" class="tab-page">
             <div class="card">
                 <div class="calendar-header">
-                    <h3>🌷 日程日历</h3>
+                    <div class="calendar-title-wrap">
+                        <h3>🌷 日程日历</h3>
+                        <span class="period-help-icon" id="periodHelpIcon" style="display:none;" title="">?</span>
+                    </div>
                     <div class="mode-switch">
                         <button class="mode-btn active" data-mode="month">📆 月查询</button>
                         <button class="mode-btn" data-mode="week">📋 周查询</button>
@@ -863,10 +1064,6 @@
                 </div>
                 <div id="calendarDays" class="calendar-grid"></div>
                 <div id="scheduleList">
-                    <div class="schedule-header">
-                        <span id="scheduleTitle">2026年7月 的日程</span>
-                        <span id="scheduleCount">（共 0 项）</span>
-                    </div>
                     <div id="scheduleItems"></div>
                 </div>
             </div>
@@ -1010,6 +1207,7 @@
         var stompClient = null;
         var currentConfirmationSessionId = null;
         var isProcessing = false; // 防重复点击标志
+        var lastUserInput = ''; // 保存用户输入，用于重试
 
         function connectWebSocket() {
             var socket = new SockJS('/ws?user-id=' + currentUserId);
@@ -1927,6 +2125,7 @@
 
             if (tabName === 'profile') loadProfile();
             if (tabName === 'calendar') {
+                loadProfile();
                 bindCalendarListeners();
                 renderCalendar();
             }
@@ -2080,6 +2279,7 @@
             var input = document.getElementById('chatInput');
             var text = input.value.trim();
             if (!text) return;
+            lastUserInput = text; // 保存用户输入，用于重试
 
             // 位置问法检测
             if (isAskingLocation(text)) {
@@ -2237,11 +2437,96 @@
 
         function addMessage(role, text) {
             const history = document.getElementById('chatHistory');
-            const msg = document.createElement('div');
-            msg.className = `chat-message ${role}`;
-            msg.innerHTML = text.replace(/\n/g, '<br>');
-            history.appendChild(msg);
+            
+            // 检测是否为网络错误消息，添加重试按钮（按钮在气泡外面）
+            if (role === 'bot' && (text.indexOf('网络错误') !== -1 || text.indexOf('请重试') !== -1)) {
+                var msgId = 'msg-' + Date.now();
+                var wrapper = document.createElement('div');
+                wrapper.className = 'error-msg-wrapper';
+                
+                var msg = document.createElement('div');
+                msg.className = `chat-message ${role}`;
+                msg.id = msgId;
+                msg.innerHTML = text.replace(/\n/g, '<br>');
+                
+                var btn = document.createElement('button');
+                btn.className = 'retry-btn';
+                btn.setAttribute('onclick', 'retryLastMessage(\'' + msgId + '\')');
+                btn.setAttribute('title', '重新发送');
+                btn.innerHTML = '🔄 <span class="retry-text">重试</span>';
+                
+                wrapper.appendChild(msg);
+                wrapper.appendChild(btn);
+                history.appendChild(wrapper);
+            } else {
+                const msg = document.createElement('div');
+                msg.className = `chat-message ${role}`;
+                msg.innerHTML = text.replace(/\n/g, '<br>');
+                history.appendChild(msg);
+            }
+            
             history.scrollTop = history.scrollHeight;
+        }
+
+        async function retryLastMessage(errorMsgId) {
+            if (!lastUserInput) {
+                addMessage('bot', '❌ 没有可重试的消息');
+                return;
+            }
+
+            // 清除之前的错误消息
+            if (errorMsgId) {
+                var errorEl = document.getElementById(errorMsgId);
+                if (errorEl) errorEl.remove();
+            }
+
+            // 重新发送请求
+            try {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) {
+                    headers['Authorization'] = 'Bearer ' + token;
+                }
+
+                if (currentConfirmationSessionId) {
+                    if (/^(确认|是的|好|ok|OK|嗯|行|可以|确定|是)$/.test(lastUserInput)) {
+                        const response = await fetch('/api/confirmations/' + currentConfirmationSessionId + '/confirm?userId=' + currentUserId, {
+                            method: 'POST',
+                            headers: headers
+                        });
+                        const result = await response.json();
+                        if (result.success) {
+                            addMessage('bot', result.message);
+                            document.getElementById('confirmationContainer').innerHTML = '';
+                            currentConfirmationSessionId = null;
+                            renderCalendar();
+                        } else {
+                            addMessage('bot', '❌ ' + result.message);
+                        }
+                        return;
+                    }
+
+                    if (/^(取消|算了|不|不要|否)$/.test(lastUserInput)) {
+                        const response = await fetch('/api/confirmations/' + currentConfirmationSessionId + '/cancel?userId=' + currentUserId, {
+                            method: 'POST',
+                            headers: headers
+                        });
+                        const result = await response.json();
+                        if (result.success) {
+                            addMessage('bot', result.message);
+                            document.getElementById('confirmationContainer').innerHTML = '';
+                            currentConfirmationSessionId = null;
+                        } else {
+                            addMessage('bot', '❌ ' + result.message);
+                        }
+                        return;
+                    }
+                }
+
+                await sendChatRequest(lastUserInput);
+            } catch (e) {
+                addMessage('bot', '❌ 网络错误，请重试');
+            }
         }
 
         function getTodayStr() {
@@ -2281,25 +2566,25 @@
                 })
                 .then(function(res) { return res.json(); })
                 .then(function(data) {
-                    var reminderDates = {};
+                    var dayInfo = {};
                     if (data && data.days) {
                         data.days.forEach(function(day) {
-                            if (day.hasReminder) {
-                                var dayDate = day.date;
-                                var dateStr;
-                                if (dayDate instanceof Date) {
-                                    var d = new Date(dayDate);
-                                    dateStr = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-                                } else if (typeof dayDate === 'string') {
-                                    dateStr = dayDate;
-                                } else {
-                                    dateStr = currentYear + '-' + String(currentMonth).padStart(2, '0') + '-' + String(day.day).padStart(2, '0');
-                                }
-                                reminderDates[dateStr] = true;
+                            var dayDate = day.date;
+                            var dateStr;
+                            if (typeof dayDate === 'string') {
+                                dateStr = dayDate;
+                            } else {
+                                dateStr = currentYear + '-' + String(currentMonth).padStart(2, '0') + '-' + String(day.date).padStart(2, '0');
                             }
+                            dayInfo[dateStr] = {
+                                hasReminder: day.hasReminder,
+                                festival: day.festival,
+                                lunarDate: day.lunarDate,
+                                periodStatus: day.periodStatus
+                            };
                         });
                     }
-                    buildCalendarGrid(currentYear, currentMonth, firstDay, daysInMonth, today, reminderDates);
+                    buildCalendarGrid(currentYear, currentMonth, firstDay, daysInMonth, today, dayInfo);
                     loadScheduleData();
                 })
                 .catch(function() {
@@ -2309,7 +2594,7 @@
             } else {
                 var weekRange = getTodayWeekRange(currentWeekOffset);
                 var tempDate = new Date(weekRange.monday);
-                var reminderDates = {};
+                var dayInfo = {};
                 var fetchPromises = [];
 
                 for (var i = 0; i < 7; i++) {
@@ -2324,8 +2609,14 @@
                             })
                             .then(function(res) { return res.json(); })
                             .then(function(data) {
-                                if (data && data.days && data.days[0] && data.days[0].hasReminder) {
-                                    reminderDates[date] = true;
+                                if (data && data.days && data.days[0]) {
+                                    var d = data.days[0];
+                                    dayInfo[date] = {
+                                        hasReminder: d.hasReminder,
+                                        festival: d.festival,
+                                        lunarDate: d.lunarDate,
+                                        periodStatus: d.periodStatus
+                                    };
                                 }
                             })
                         );
@@ -2334,7 +2625,7 @@
                 }
 
                 Promise.all(fetchPromises).then(function() {
-                    buildWeekGridWithReminders(today, reminderDates);
+                    buildWeekGridWithReminders(today, dayInfo);
                     loadScheduleData();
                 }).catch(function() {
                     buildWeekGridWithReminders(today, {});
@@ -2343,7 +2634,7 @@
             }
         }
 
-        function buildCalendarGrid(year, month, firstDay, daysInMonth, today, reminderDates) {
+        function buildCalendarGrid(year, month, firstDay, daysInMonth, today, dayInfo) {
             var container = document.getElementById('calendarDays');
             container.innerHTML = '';
 
@@ -2359,14 +2650,39 @@
                 dayDiv.className = 'day';
                 if (dateStr === today) { dayDiv.classList.add('today'); }
                 if (dateStr === selectedDate) { dayDiv.classList.add('selected'); }
-                if (reminderDates[dateStr]) { dayDiv.classList.add('has-reminder'); }
+
+                var info = dayInfo[dateStr] || {};
+                if (info.hasReminder) { dayDiv.classList.add('has-reminder'); }
+
 
                 var num = document.createElement('span');
                 num.className = 'day-number';
                 num.textContent = d;
                 dayDiv.appendChild(num);
 
-                if (reminderDates[dateStr]) {
+                // 节日（红色）
+                if (info.festival) {
+                    var festivalEl = document.createElement('span');
+                    festivalEl.className = 'day-festival';
+                    festivalEl.textContent = info.festival;
+                    dayDiv.appendChild(festivalEl);
+                } else if (info.lunarDate) {
+                    // 农历日期（灰色小字）
+                    var lunarEl = document.createElement('span');
+                    lunarEl.className = 'day-lunar';
+                    lunarEl.textContent = info.lunarDate;
+                    dayDiv.appendChild(lunarEl);
+                }
+
+                // 经期标记
+                if (info.periodStatus) {
+                    var periodEl = document.createElement('span');
+                    periodEl.className = 'day-period';
+                    periodEl.textContent = info.periodStatus === '经期' ? '🌙' : '🌸';
+                    dayDiv.appendChild(periodEl);
+                }
+
+                if (info.hasReminder) {
                     var dot = document.createElement('span');
                     dot.className = 'red-dot';
                     dayDiv.appendChild(dot);
@@ -2394,7 +2710,7 @@
             }
         }
 
-        function buildWeekGridWithReminders(today, reminderDates) {
+        function buildWeekGridWithReminders(today, dayInfo) {
             var container = document.getElementById('calendarDays');
             container.innerHTML = '';
 
@@ -2425,14 +2741,39 @@
                 dayDiv.className = 'day';
                 if (dateStr === today) { dayDiv.classList.add('today'); }
                 if (dateStr === selectedDate) { dayDiv.classList.add('selected'); }
-                if (reminderDates[dateStr]) { dayDiv.classList.add('has-reminder'); }
+
+                var info = dayInfo[dateStr] || {};
+                if (info.hasReminder) { dayDiv.classList.add('has-reminder'); }
+
 
                 var num = document.createElement('span');
                 num.className = 'day-number';
                 num.textContent = currentDate.getDate();
                 dayDiv.appendChild(num);
 
-                if (reminderDates[dateStr]) {
+                // 节日（红色）
+                if (info.festival) {
+                    var festivalEl = document.createElement('span');
+                    festivalEl.className = 'day-festival';
+                    festivalEl.textContent = info.festival;
+                    dayDiv.appendChild(festivalEl);
+                } else if (info.lunarDate) {
+                    // 农历日期（灰色小字）
+                    var lunarEl = document.createElement('span');
+                    lunarEl.className = 'day-lunar';
+                    lunarEl.textContent = info.lunarDate;
+                    dayDiv.appendChild(lunarEl);
+                }
+
+                // 经期标记
+                if (info.periodStatus) {
+                    var periodEl = document.createElement('span');
+                    periodEl.className = 'day-period';
+                    periodEl.textContent = info.periodStatus === '经期' ? '🌙' : '🌸';
+                    dayDiv.appendChild(periodEl);
+                }
+
+                if (info.hasReminder) {
                     var dot = document.createElement('span');
                     dot.className = 'red-dot';
                     dayDiv.appendChild(dot);
@@ -2519,7 +2860,6 @@
 
         function loadDaySchedule(userId, dateStr) {
             document.getElementById('calendarTitle').textContent = dateStr;
-            document.getElementById('scheduleTitle').textContent = dateStr + ' 的日程';
 
             fetch('/api/calendar/day?userId=' + userId + '&date=' + dateStr, {
                 headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
@@ -2542,17 +2882,16 @@
                     });
                 }
                 allScheduleData = allReminders;
-                renderScheduleList(allReminders);
+                renderMonthScheduleList(allReminders);
             })
             .catch(function() {
                 allScheduleData = [];
-                renderScheduleList([]);
+                renderMonthScheduleList([]);
             });
         }
 
         function loadMonthSchedule(userId) {
             document.getElementById('calendarTitle').textContent = currentYear + '年' + currentMonth + '月';
-            document.getElementById('scheduleTitle').textContent = currentYear + '年' + currentMonth + '月 的日程';
 
             fetch('/api/calendar/month?userId=' + userId + '&year=' + currentYear + '&month=' + currentMonth, {
                 headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
@@ -2579,11 +2918,11 @@
                     });
                 }
                 allScheduleData = allReminders;
-                renderScheduleList(allReminders);
+                renderMonthScheduleList(allReminders);
             })
             .catch(function() {
                 allScheduleData = [];
-                renderScheduleList([]);
+                renderMonthScheduleList([]);
             });
         }
 
@@ -2611,7 +2950,6 @@
             var sundayStr = sundayYear + '-' + String(sundayMonth).padStart(2, '0') + '-' + String(sundayDay).padStart(2, '0');
 
             document.getElementById('calendarTitle').textContent = mondayStr + ' ~ ' + sundayStr;
-            document.getElementById('scheduleTitle').textContent = '本周日程';
 
             var allReminders = [];
             var fetchPromises = [];
@@ -2656,49 +2994,170 @@
             });
         }
 
-        function renderScheduleList(reminders) {
-            var items = document.getElementById('scheduleItems');
-            var count = document.getElementById('scheduleCount');
-            var title = document.getElementById('scheduleTitle');
-
-            var filtered = reminders;
-            if (selectedDate && isValidDate(selectedDate)) {
-                title.textContent = selectedDate + ' 的日程';
-            } else if (viewMode === 'month') {
-                title.textContent = currentYear + '年' + currentMonth + '月 的日程';
-            } else {
-                title.textContent = '本周日程';
+        function determineBlockType(reminder) {
+            // 1. 检查是否是课程
+            if (reminder.source === 'COURSE' || reminder.type === 'course') {
+                return 'course';
             }
+            // 标题包含"课程"关键词作为备用识别
+            if (reminder.title && (reminder.title.indexOf('课程') !== -1 ||
+                                   reminder.title.indexOf('课') !== -1 ||
+                                   reminder.title.indexOf('上课') !== -1)) {
+                return 'course';
+            }
+            // 2. 根据优先级
+            var priority = (reminder.priority || 'NORMAL').toUpperCase();
+            var map = {
+                'URGENT': 'urgent',
+                'HIGH': 'high',
+                'NORMAL': 'normal',
+                'LOW': 'low'
+            };
+            return map[priority] || 'default';
+        }
 
-            filtered.sort(function(a, b) { return (a.remindTime || '').localeCompare(b.remindTime || ''); });
+        function getWeekDays() {
+            var weekRange = getTodayWeekRange(currentWeekOffset);
+            var monday = weekRange.monday;
+            var days = [];
+            for (var i = 0; i < 7; i++) {
+                var d = new Date(monday);
+                d.setDate(monday.getDate() + i);
+                var year = d.getFullYear();
+                var month = String(d.getMonth() + 1).padStart(2, '0');
+                var day = String(d.getDate()).padStart(2, '0');
+                days.push(year + '-' + month + '-' + day);
+            }
+            return days;
+        }
 
-            count.textContent = '（共 ' + filtered.length + ' 项）';
+        function renderMonthScheduleList(reminders) {
+            var items = document.getElementById('scheduleItems');
+            items.innerHTML = '';
 
-            if (filtered.length === 0) {
+            if (!reminders || reminders.length === 0) {
                 items.innerHTML = '<div class="empty-schedule">该时段暂无日程安排</div>';
                 return;
             }
 
-            items.innerHTML = '';
-            filtered.forEach(function(r) {
-                var item = document.createElement('div');
-                item.className = 'schedule-item';
+            var sorted = reminders.slice().sort(function(a, b) {
+                return (a.remindTime || '').localeCompare(b.remindTime || '');
+            });
 
-                var timeStr = r.remindTime ? r.remindTime.slice(11, 16) : '';
-                var tag = '';
-                
+            var timeline = document.createElement('div');
+            timeline.className = 'schedule-timeline';
+
+            sorted.forEach(function(r) {
+                var row = document.createElement('div');
+                row.className = 'schedule-row';
+
+                var timeLabel = document.createElement('div');
+                timeLabel.className = 'schedule-time-label';
+                timeLabel.textContent = r.remindTime ? r.remindTime.slice(11, 16) : '';
+                row.appendChild(timeLabel);
+
+                var blocks = document.createElement('div');
+                blocks.className = 'schedule-blocks';
+
+                var block = document.createElement('div');
+                var type = determineBlockType(r);
+                block.className = 'schedule-block ' + type + ' single';
+
                 if (r.status === 'CANCELLED') {
-                    tag = '<span class="schedule-tag cancelled">✖ 已取消</span>';
-                } else if (r.confirmStatus === 'PENDING') {
-                    tag = '<span class="schedule-tag pending">⏳ 待确认</span>';
+                    block.classList.add('cancelled');
                 }
 
-                var locationHtml = r.location ? '<div class="schedule-location">📍 ' + r.location + '</div>' : '';
+                block.textContent = r.title;
+                if (type === 'course') {
+                    block.textContent = '📖 ' + r.title;
+                }
 
-                item.innerHTML = '<div class="schedule-time">' + timeStr + '</div>' +
-                                '<div class="schedule-title">' + r.title + tag + locationHtml + '</div>';
-                items.appendChild(item);
+                block.title = r.title + (r.location ? ' @ ' + r.location : '');
+                blocks.appendChild(block);
+
+                row.appendChild(blocks);
+                timeline.appendChild(row);
             });
+
+            items.appendChild(timeline);
+        }
+
+        function renderScheduleList(reminders) {
+            var items = document.getElementById('scheduleItems');
+            items.innerHTML = '';
+
+            if (!reminders || reminders.length === 0) {
+                items.innerHTML = '<div class="empty-schedule">该时段暂无日程安排</div>';
+                return;
+            }
+
+            // 获取本周 7 天的日期（从周一到周日）
+            var weekDays = getWeekDays();
+
+            // 按时间分组，同时记录日期
+            var timeGroups = {};
+            reminders.forEach(function(r) {
+                var time = r.remindTime.slice(11, 16);
+                var dateStr = r.remindTime.slice(0, 10);
+                if (!timeGroups[time]) timeGroups[time] = {};
+                timeGroups[time][dateStr] = r;
+            });
+
+            var sortedTimes = Object.keys(timeGroups).sort();
+            var timeline = document.createElement('div');
+            timeline.className = 'schedule-timeline';
+
+            sortedTimes.forEach(function(time) {
+                var row = document.createElement('div');
+                row.className = 'schedule-row';
+
+                // 时间标签
+                var timeLabel = document.createElement('div');
+                timeLabel.className = 'schedule-time-label';
+                timeLabel.textContent = time;
+                row.appendChild(timeLabel);
+
+                // 7 列对应 7 天
+                var blocks = document.createElement('div');
+                blocks.className = 'schedule-blocks-week';
+
+                weekDays.forEach(function(dateStr) {
+                    var cell = document.createElement('div');
+                    cell.className = 'schedule-cell';
+
+                    var reminder = timeGroups[time] ? timeGroups[time][dateStr] : null;
+
+                    if (reminder) {
+                        var block = document.createElement('div');
+                        var type = determineBlockType(reminder);
+                        block.className = 'schedule-block ' + type + ' week-single';
+
+                        if (reminder.status === 'CANCELLED') {
+                            block.classList.add('cancelled');
+                        }
+
+                        block.textContent = reminder.title;
+                        if (type === 'course') {
+                            block.textContent = '📖 ' + reminder.title;
+                        }
+
+                        block.title = reminder.title + (reminder.location ? ' @ ' + reminder.location : '');
+                        cell.appendChild(block);
+                    } else {
+                        // 无日程：空白占位
+                        var empty = document.createElement('div');
+                        empty.className = 'schedule-block empty';
+                        cell.appendChild(empty);
+                    }
+
+                    blocks.appendChild(cell);
+                });
+
+                row.appendChild(blocks);
+                timeline.appendChild(row);
+            });
+
+            items.appendChild(timeline);
         }
 
         function switchMode(mode, btn) {
@@ -2764,6 +3223,7 @@
 
                 if (data.gender === 'FEMALE') {
                     document.getElementById('periodSettings').style.display = 'block';
+                    document.getElementById('periodHelpIcon').style.display = 'inline-flex';
                     document.getElementById('valueCycle').textContent = (data.cycleDays || 28) + '天';
 
                     var toggle = document.getElementById('togglePeriodReminder');
@@ -2785,8 +3245,8 @@
                 if (data.nextPeriodDate) {
                     document.getElementById('valueNextPeriod').textContent = data.nextPeriodDate;
                 }
-                if (data.status) {
-                    document.getElementById('valuePeriodStatus').textContent = data.status;
+                if (data.statusName) {
+                    document.getElementById('valuePeriodStatus').textContent = data.statusName;
                 }
             });
         }
@@ -3088,8 +3548,10 @@
                 document.getElementById('valueGender').textContent = genderMap[value] || '不公开';
                 if (value === 'FEMALE') {
                     document.getElementById('periodSettings').style.display = 'block';
+                    document.getElementById('periodHelpIcon').style.display = 'inline-flex';
                 } else {
                     document.getElementById('periodSettings').style.display = 'none';
+                    document.getElementById('periodHelpIcon').style.display = 'none';
                 }
             } else if (field === 'city') {
                 document.getElementById('valueCity').textContent = value;

@@ -45,7 +45,7 @@ public class AgentService {
     /**
      * 最大工具调用次数（控制工具链长度）
      */
-    private static final int MAX_TOOL_CALLS = 3;
+    private static final int MAX_TOOL_CALLS = 5;
 
     /**
      * 处理用户请求的主入口

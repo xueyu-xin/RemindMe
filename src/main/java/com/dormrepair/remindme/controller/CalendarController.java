@@ -8,6 +8,8 @@ import com.dormrepair.remindme.enums.ExecutionStatus;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.repository.UserRepository;
 import com.dormrepair.remindme.service.PeriodService;
+import com.nlf.calendar.Lunar;
+import com.nlf.calendar.Solar;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -16,8 +18,10 @@ import org.springframework.web.bind.annotation.*;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.time.ZoneId;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -128,10 +132,37 @@ public class CalendarController {
                            && r.getConfirmStatus().name().equals("CONFIRMED")
                            && r.getExecutionStatus() == ExecutionStatus.PENDING);
 
+        // 经期状态判断（按具体日期）
         String periodStatus = null;
-        if (user != null && user.getGender().name().equals("FEMALE")) {
-            PeriodStatusResponse status = periodService.calculatePeriodStatus(user);
-            periodStatus = status.getStatus();
+        if (user != null && user.getGender() != null && user.getGender().name().equals("FEMALE")) {
+            if (periodService.isMenstruating(user, date)) {
+                periodStatus = "经期";
+            } else if (periodService.isOvulating(user, date)) {
+                periodStatus = "排卵期";
+            }
+        }
+
+        // 农历日期和节日
+        String festival = null;
+        String lunarDate = null;
+        try {
+            Date utilDate = Date.from(date.atStartOfDay(ZoneId.systemDefault()).toInstant());
+            Solar solar = Solar.fromDate(utilDate);
+            Lunar lunar = solar.getLunar();
+
+            // 农历日期（如"初一"、"十五"）
+            lunarDate = lunar.getMonthInChinese() + "月" + lunar.getDayInChinese();
+
+            // 节日：优先农历节日，其次公历节日
+            var lunarFestivals = lunar.getFestivals();
+            var solarFestivals = solar.getFestivals();
+            if (lunarFestivals != null && !lunarFestivals.isEmpty()) {
+                festival = lunarFestivals.get(0);
+            } else if (solarFestivals != null && !solarFestivals.isEmpty()) {
+                festival = solarFestivals.get(0);
+            }
+        } catch (Exception e) {
+            log.warn("农历计算失败: date={}, error={}", date, e.getMessage());
         }
 
         List<CalendarResponse.ReminderItem> reminderItems = dayReminders.stream()
@@ -151,6 +182,8 @@ public class CalendarController {
                 hasPendingReminder,
                 dayReminders.size(),
                 periodStatus,
+                festival,
+                lunarDate,
                 reminderItems
         );
     }

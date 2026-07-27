@@ -30,6 +30,8 @@ public class CalendarResponse {
         private Boolean hasReminder;
         private Integer reminderCount;
         private String periodStatus;
+        private String festival;
+        private String lunarDate;
         private List<ReminderItem> reminders;
     }
 
