@@ -1,9 +1,9 @@
 package com.dormrepair.remindme.controller;
 
-import com.dormrepair.remindme.dto.weather.AirQualityResponse;
-import com.dormrepair.remindme.dto.weather.WeatherAlertResponse;
-import com.dormrepair.remindme.dto.weather.WeatherForecastResponse;
-import com.dormrepair.remindme.dto.weather.WeatherNowResponse;
+import com.dormrepair.remindme.dto.response.AirQualityResponse;
+import com.dormrepair.remindme.dto.response.WeatherAlertResponse;
+import com.dormrepair.remindme.dto.response.WeatherForecastResponse;
+import com.dormrepair.remindme.dto.response.WeatherNowResponse;
 import com.dormrepair.remindme.service.WeatherService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

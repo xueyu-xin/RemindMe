@@ -1,4 +1,4 @@
-package com.dormrepair.remindme.dto.weather;
+package com.dormrepair.remindme.dto.response;
 
 import lombok.Data;
 

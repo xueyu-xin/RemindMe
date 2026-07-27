@@ -2,11 +2,8 @@ package com.dormrepair.remindme.service;
 
 import com.dormrepair.remindme.agent.AgentTool;
 import com.dormrepair.remindme.config.WeatherConfig;
-import com.dormrepair.remindme.dto.weather.*;
-import com.fasterxml.jackson.databind.JsonNode;
+import com.dormrepair.remindme.dto.response.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -15,14 +12,18 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
 /**
  * 天气服务
  * <p>
- * 调用新版和风天气API，支持实时天气、天气预报、空气质量、天气预警
- * 使用原生 HttpURLConnection + GZIP 解压，避免 RestTemplate 的 gzip 问题
- * 通过和风天气城市搜索API（/geo/v2/city/lookup）将中文城市名转换为经纬度
+ * 调用新版和风天气API，支持实时天气、天气预报、空气质量、天气预警。
+ * 使用原生 HttpURLConnection + GZIP 解压，避免 RestTemplate 的 gzip 问题。
+ * </p>
+ * <p>
+ * 城市名 → 经纬度的转换逻辑已移至 {@link LocationService#resolveLocationToCoord}，
+ * 本服务只负责天气数据查询，接收标准化后的城市名或经纬度。
  * </p>
  */
 @Slf4j
@@ -33,242 +34,21 @@ public class WeatherService {
     private final WeatherConfig weatherConfig;
     private final ObjectMapper objectMapper;
     private final UserService userService;
-
-    /**
-     * 城市名 → 经纬度缓存（线程安全）
-     * 缓存键：城市名（如"广州"）
-     * 缓存值：经纬度（如"113.2644,23.1291"，格式为经度,纬度）
-     */
-    private final Map<String, String> coordCache = new ConcurrentHashMap<>();
-
-    // ==================== 城市名映射表 ====================
-
-    /**
-     * 省份 → 省会映射表
-     */
-    private static final Map<String, String> PROVINCE_CAPITAL_MAP = Map.ofEntries(
-            Map.entry("广东", "广州"), Map.entry("浙江", "杭州"), Map.entry("江苏", "南京"),
-            Map.entry("山东", "济南"), Map.entry("河南", "郑州"), Map.entry("湖北", "武汉"),
-            Map.entry("湖南", "长沙"), Map.entry("四川", "成都"), Map.entry("陕西", "西安"),
-            Map.entry("河北", "石家庄"), Map.entry("山西", "太原"), Map.entry("辽宁", "沈阳"),
-            Map.entry("吉林", "长春"), Map.entry("黑龙江", "哈尔滨"), Map.entry("安徽", "合肥"),
-            Map.entry("福建", "福州"), Map.entry("江西", "南昌"), Map.entry("海南", "海口"),
-            Map.entry("贵州", "贵阳"), Map.entry("云南", "昆明"), Map.entry("甘肃", "兰州"),
-            Map.entry("青海", "西宁"), Map.entry("台湾", "台北"), Map.entry("内蒙古", "呼和浩特"),
-            Map.entry("广西", "南宁"), Map.entry("西藏", "拉萨"), Map.entry("宁夏", "银川"),
-            Map.entry("新疆", "乌鲁木齐")
-    );
-
-    /**
-     * 自治区 → 首府映射表
-     */
-    private static final Map<String, String> REGION_CAPITAL_MAP = Map.ofEntries(
-            Map.entry("广西壮族", "南宁"), Map.entry("内蒙古", "呼和浩特"),
-            Map.entry("西藏", "拉萨"), Map.entry("宁夏回族", "银川"),
-            Map.entry("新疆维吾尔", "乌鲁木齐")
-    );
-
-    // ==================== 城市名标准化 ====================
-
-    /**
-     * 标准化城市名，处理多种格式
-     * <p>
-     * 处理顺序（优先级从高到低）：
-     * 1. null/空 → 返回"广州"
-     * 2. "省-市-区"格式 → 提取城市部分
-     * 3. 直辖市（北京/上海/天津/重庆）→ 去掉"市"后缀
-     * 4. 以"市"结尾 → 去掉"市"后缀
-     * 5. 以"省"结尾 → 转换为省会城市
-     * 6. 以"自治区"结尾 → 转换为首府城市
-     * 7. 包含"香港"/"澳门" → 返回对应城市名
-     * 8. 其他情况 → 返回原始值
-     * </p>
-     *
-     * @param location 原始城市名
-     * @return 标准化后的城市名
-     */
-    private String normalizeCityName(String location) {
-        // 1. null/空 → 返回"广州"
-        if (location == null || location.isBlank()) {
-            return "广州";
-        }
-
-        String normalized = location.trim();
-
-        // 2. "省-市-区"格式 → 提取城市部分
-        if (normalized.contains("-")) {
-            String[] parts = normalized.split("-");
-            if (parts.length >= 2) {
-                normalized = parts[1]; // 取市
-            }
-        }
-
-        // 3. 直辖市 → 去掉"市"后缀
-        String[] municipalities = {"北京", "上海", "天津", "重庆"};
-        for (String m : municipalities) {
-            if (normalized.startsWith(m) && normalized.length() > m.length()) {
-                log.debug("直辖市处理: {} → {}", location, m);
-                return m;
-            }
-        }
-
-        // 4. 以"市"结尾 → 去掉"市"后缀
-        if (normalized.endsWith("市") && normalized.length() > 1) {
-            String result = normalized.substring(0, normalized.length() - 1);
-            log.debug("去掉'市'后缀: {} → {}", location, result);
-            return result;
-        }
-
-        // 5. 以"省"结尾 → 转换为省会城市
-        if (normalized.endsWith("省")) {
-            String province = normalized.substring(0, normalized.length() - 1);
-            String capital = PROVINCE_CAPITAL_MAP.getOrDefault(province, province);
-            log.debug("省份转换: {} → {}", location, capital);
-            return capital;
-        }
-
-        // 6. 以"自治区"结尾 → 转换为首府城市
-        if (normalized.endsWith("自治区")) {
-            String region = normalized.substring(0, normalized.length() - 3);
-            String capital = REGION_CAPITAL_MAP.getOrDefault(region, region);
-            log.debug("自治区转换: {} → {}", location, capital);
-            return capital;
-        }
-
-        // 7. 特别行政区
-        if (normalized.contains("香港")) {
-            log.debug("香港特别行政区处理: {} → 香港", location);
-            return "香港";
-        }
-        if (normalized.contains("澳门")) {
-            log.debug("澳门特别行政区处理: {} → 澳门", location);
-            return "澳门";
-        }
-
-        // 8. 其他情况 → 返回原始值
-        return normalized;
-    }
-
-    // ==================== 和风城市搜索 ====================
-
-    /**
-     * 判断字符串是否为经纬度格式（如 "113.2644,23.1291"）
-     */
-    private boolean isCoordinate(String location) {
-        if (location == null || location.isBlank()) {
-            return false;
-        }
-        // 经纬度格式：数字,数字（如 113.2644,23.1291）
-        return location.matches("^[-+]?\\d+\\.?\\d*,[-+]?\\d+\\.?\\d*$");
-    }
-
-    /**
-     * 使用和风天气城市搜索API查询城市信息
-     * <p>
-     * API地址：/geo/v2/city/lookup
-     * 返回格式：{"code":"200","location":[{"name":"汕头","id":"101280501","lat":"23.3541","lon":"116.6819","type":"city"}]}
-     * </p>
-     *
-     * @param cityName 城市名（如"汕头"）
-     * @return 经纬度字符串（如"116.6819,23.3541"，格式为经度,纬度），查询失败返回null
-     */
-    private String searchCity(String cityName) {
-        try {
-            String url = buildUrl("/geo/v2/city/lookup")
-                    + "?location=" + encode(cityName)
-                    + "&range=cn"
-                    + "&number=1";
-
-            log.debug("调用和风城市搜索API: city={}, url={}", cityName, url);
-            String response = httpGet(url);
-
-            if (response != null) {
-                JsonNode root = objectMapper.readTree(response);
-                String code = root.has("code") ? root.get("code").asText() : "";
-
-                if ("200".equals(code)) {
-                    JsonNode locations = root.get("location");
-                    if (locations != null && locations.isArray() && locations.size() > 0) {
-                        JsonNode first = locations.get(0);
-                        String lon = first.has("lon") ? first.get("lon").asText() : "";
-                        String lat = first.has("lat") ? first.get("lat").asText() : "";
-                        String name = first.has("name") ? first.get("name").asText() : "";
-                        String type = first.has("type") ? first.get("type").asText() : "";
-
-                        if (lon != null && !lon.isBlank() && lat != null && !lat.isBlank()) {
-                            String coord = lon + "," + lat;
-                            log.info("和风城市搜索成功: {} → {} (name={}, type={})", cityName, coord, name, type);
-                            return coord;
-                        }
-                    }
-                } else {
-                    log.warn("和风城市搜索API返回失败: city={}, code={}", cityName, code);
-                }
-            }
-        } catch (Exception e) {
-            log.warn("调用和风城市搜索API失败: city={}, error={}", cityName, e.getMessage());
-        }
-
-        return null;
-    }
-
-    /**
-     * 使用和风天气城市搜索API将城市名转换为经纬度
-     * <p>
-     * 和风城市搜索API返回的经纬度格式为"经度,纬度"（如"116.6819,23.3541"），可直接用于天气查询
-     * </p>
-     *
-     * @param cityName 城市名（如"汕头"）
-     * @return 经纬度字符串（如"116.6819,23.3541"），转换失败返回原城市名
-     */
-    private String resolveLocationToCoord(String cityName) {
-        // 1. 已为经纬度格式，直接返回
-        if (isCoordinate(cityName)) {
-            log.debug("已是经纬度格式，直接返回: {}", cityName);
-            return cityName;
-        }
-
-        // 2. 城市名为空，返回"广州"
-        if (cityName == null || cityName.isBlank()) {
-            return "广州";
-        }
-
-        // 3. 查缓存
-        String cached = coordCache.get(cityName);
-        if (cached != null) {
-            log.debug("缓存命中: {} → {}", cityName, cached);
-            return cached;
-        }
-
-        // 4. 调用和风城市搜索API
-        String coord = searchCity(cityName);
-
-        if (coord != null && !coord.isBlank()) {
-            // 缓存结果
-            coordCache.put(cityName, coord);
-            return coord;
-        }
-
-        // 5. 转换失败，返回原城市名（降级处理）
-        log.warn("城市名转换失败，使用原城市名: {}", cityName);
-        return cityName;
-    }
+    private final LocationService locationService;
 
     // ==================== 核心接口 ====================
 
     /**
      * 获取实时天气
+     *
+     * @param location 标准化后的城市名或经纬度（如 "广州" 或 "113.2644,23.1291"）
      */
     public WeatherNowResponse getWeatherNow(String location) {
         log.info("查询实时天气: location={}", location);
 
-        // 标准化城市名
-        String normalizedLocation = normalizeCityName(location);
-        log.info("标准化后城市名: {} → {}", location, normalizedLocation);
-
-        // 将城市名转换为经纬度
-        String coord = resolveLocationToCoord(normalizedLocation);
-        log.info("经纬度转换: {} → {}", normalizedLocation, coord);
+        // 通过 LocationService 将城市名转换为经纬度
+        String coord = locationService.resolveLocationToCoord(location);
+        log.info("经纬度转换: {} → {}", location, coord);
 
         String url = buildUrl("/v7/weather/now")
                 + "?location=" + encode(coord)
@@ -287,17 +67,16 @@ public class WeatherService {
 
     /**
      * 获取天气预报
+     *
+     * @param location 标准化后的城市名或经纬度
+     * @param days     预报天数（3/7/10/15/30，默认7）
      */
     public WeatherForecastResponse getWeatherForecast(String location, Integer days) {
         log.info("查询天气预报: location={}, days={}", location, days);
 
-        // 标准化城市名
-        String normalizedLocation = normalizeCityName(location);
-        log.info("标准化后城市名: {} → {}", location, normalizedLocation);
-
-        // 将城市名转换为经纬度
-        String coord = resolveLocationToCoord(normalizedLocation);
-        log.info("经纬度转换: {} → {}", normalizedLocation, coord);
+        // 通过 LocationService 将城市名转换为经纬度
+        String coord = locationService.resolveLocationToCoord(location);
+        log.info("经纬度转换: {} → {}", location, coord);
 
         int forecastDays = days != null ? days : 7;
         String daysPath = switch (forecastDays) {
@@ -370,7 +149,8 @@ public class WeatherService {
     /**
      * 解析位置参数，优先级：经纬度 > location > 用户偏好城市
      * <p>
-     * 和风天气API经纬度格式：latitude,longitude（如 23.1291,113.2644）
+     * 注意：本方法返回的是"标准化后的城市名或经纬度"，由 {@link #getWeatherNow} 等方法
+     * 内部再通过 {@link LocationService#resolveLocationToCoord} 转换为经纬度。
      * </p>
      *
      * @param userId    用户ID（用于获取默认城市）
@@ -380,26 +160,17 @@ public class WeatherService {
      * @return 可用于查询的位置字符串（城市名或经纬度）
      */
     private String resolveLocation(Long userId, Double latitude, Double longitude, String location) {
-        // 优先级1：经纬度
+        // 优先级1：经纬度（和风天气API要求 location 格式为"经度,纬度"）
         if (latitude != null && longitude != null) {
-            // 和风天气API要求 location 格式为"经度,纬度"（longitude,latitude）
             String lonLat = longitude + "," + latitude;
             log.info("使用经纬度查询: lat={}, lon={}, locationStr={}", latitude, longitude, lonLat);
             return lonLat;
         }
 
-        // 优先级2：location参数（城市名）
+        // 优先级2：location参数（城市名，可能是"省-市-区"格式，直接透传由 LocationService 处理）
         if (location != null && !location.isBlank()) {
-            // 如果是"省-市-区"格式，提取市
-            String city = location;
-            if (city.contains("-")) {
-                String[] parts = city.split("-");
-                if (parts.length >= 2) {
-                    city = parts[1]; // 取市
-                }
-            }
-            log.info("使用城市名查询: location={}, city={}", location, city);
-            return city;
+            log.info("使用城市名查询: location={}", location);
+            return location;
         }
 
         // 优先级3：用户偏好城市
@@ -408,16 +179,8 @@ public class WeatherService {
                 Map<String, Object> preferences = userService.getUserPreferences(userId);
                 String userCity = (String) preferences.get("city");
                 if (userCity != null && !userCity.isBlank()) {
-                    // 如果是"省-市-区"格式，提取市
-                    String city = userCity;
-                    if (city.contains("-")) {
-                        String[] parts = city.split("-");
-                        if (parts.length >= 2) {
-                            city = parts[1]; // 取市
-                        }
-                    }
-                    log.info("使用用户默认城市查询: userId={}, city={}", userId, city);
-                    return city;
+                    log.info("使用用户默认城市查询: userId={}, city={}", userId, userCity);
+                    return userCity;
                 }
             } catch (Exception e) {
                 log.warn("获取用户偏好城市失败: userId={}, error={}", userId, e.getMessage());

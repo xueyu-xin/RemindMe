@@ -210,4 +210,39 @@ public class UserService {
         userRepository.save(user);
         log.info("已更新用户 {} 的默认城市为: {}", userId, city);
     }
+
+    /**
+     * 更新用户头像
+     *
+     * @param userId       用户ID
+     * @param avatarPath   头像相对路径（如 avatars/2026/07/28/xxx.png）
+     * @return 更新后的用户对象
+     */
+    @Transactional
+    public User updateAvatar(Long userId, String avatarPath) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在: " + userId));
+
+        // 记录旧头像路径，用于删除旧文件
+        String oldAvatar = user.getAvatar();
+
+        user.setAvatar(avatarPath);
+        User saved = userRepository.save(user);
+        log.info("已更新用户 {} 的头像为: {}", userId, avatarPath);
+
+        // 删除旧头像文件（如果不是默认头像）
+        if (oldAvatar != null && !oldAvatar.isEmpty() && oldAvatar.startsWith("avatars/")) {
+            try {
+                java.nio.file.Path oldFile = java.nio.file.Paths.get("uploads", oldAvatar).toAbsolutePath();
+                if (java.nio.file.Files.exists(oldFile)) {
+                    java.nio.file.Files.delete(oldFile);
+                    log.info("已删除旧头像: {}", oldAvatar);
+                }
+            } catch (Exception e) {
+                log.warn("删除旧头像失败: {}, 错误: {}", oldAvatar, e.getMessage());
+            }
+        }
+
+        return saved;
+    }
 }
