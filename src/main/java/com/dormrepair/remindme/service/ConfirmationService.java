@@ -184,7 +184,6 @@ public class ConfirmationService {
         result.put("success", true);
         result.put("message", "❌ 已取消创建提醒");
 
-        pushUserMessage(userId, "cancelled", result);
         log.info("取消确认会话: sessionId={}, userId={}", sessionId, userId);
 
         // 发布提醒取消事件（通知Agent）
@@ -465,7 +464,6 @@ public class ConfirmationService {
 
             result.put("success", true);
             result.put("message", "⏰ 已自动确认执行（3次稍后未响应）");
-            pushUserMessage(userId, "execute_auto_confirm", result);
             log.info("阶段二自动确认执行(3次稍后): sessionId={}, reminderId={}", sessionId, reminder.getId());
         } else {
             result.put("success", true);
