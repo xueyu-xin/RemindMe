@@ -96,10 +96,13 @@ public class AgentService {
             Object lastToolResult = null;
             int iteration = 0;
             int toolCallCount = 0;
+            
+            // 工具调用历史记录
+            List<String> toolHistory = new java.util.ArrayList<>();
 
             while (iteration < MAX_ITERATIONS) {
                 iteration++;
-                log.debug("ReAct循环第 {} 次迭代，已调用工具 {} 次", iteration, toolCallCount);
+                log.info("Agent执行进度: 第 {}/{} 步, 已调用工具: {}", iteration, MAX_ITERATIONS, toolHistory);
 
                 // 思考：调用LLM
                 llmResponse = llmService.chatWithTools(userInput, tools, history);
@@ -110,6 +113,7 @@ public class AgentService {
                 if (llmToolCall == null) {
                     // 直接回复用户，循环结束
                     log.info("LLM直接回复，结束循环（迭代次数: {}, 工具调用次数: {}）", iteration, toolCallCount);
+                    log.info("Agent执行完成: userId={}, 总步骤={}, 调用工具={}", userId, iteration, toolHistory);
                     conversationMemory.addAssistantMessage(userId, llmResponse);
                     return buildAgentResponse(llmResponse, lastToolResult);
                 }
@@ -117,6 +121,7 @@ public class AgentService {
                 // 检查是否达到最大工具调用次数
                 if (toolCallCount >= MAX_TOOL_CALLS) {
                     log.warn("达到最大工具调用次数 {}，跳过工具调用", MAX_TOOL_CALLS);
+                    log.info("Agent执行完成: userId={}, 总步骤={}, 调用工具={}", userId, iteration, toolHistory);
                     conversationMemory.addAssistantMessage(userId, llmResponse);
                     return buildAgentResponse(llmResponse, lastToolResult);
                 }
@@ -126,6 +131,10 @@ public class AgentService {
                 ToolCall toolCall = ToolCall.of(llmToolCall.getToolName(), llmToolCall.getArguments());
                 String toolResult = executeToolCall(userId, toolCall);
                 toolCallCount++;
+                
+                // 记录工具调用历史
+                toolHistory.add(llmToolCall.getToolName());
+                log.info("工具调用记录: {} → {}", toolCallCount, llmToolCall.getToolName());
 
                 // 保存工具调用和结果到对话历史
                 conversationMemory.addToolCall(userId, llmToolCall.getToolName(), llmToolCall.getArguments());
@@ -164,6 +173,7 @@ public class AgentService {
 
             // 达到最大迭代次数，返回最后一次响应
             log.warn("达到最大迭代次数 {}，返回最后响应（工具调用次数: {}）", MAX_ITERATIONS, toolCallCount);
+            log.info("Agent执行完成: userId={}, 总步骤={}, 调用工具={}", userId, iteration, toolHistory);
             conversationMemory.addAssistantMessage(userId, llmResponse);
             return buildAgentResponse(llmResponse, lastToolResult);
 
