@@ -1353,6 +1353,29 @@
             line-height: 20px;
             box-sizing: border-box;
         }
+
+        /* 周视图：日历与日程表对齐（占位 + 7列，和 schedule-row 结构一致） */
+        .calendar-grid.week-header-mode {
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+            padding: 8px 4px;
+        }
+        .calendar-grid.week-header-mode .week-placeholder {
+            width: 52px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            color: var(--brown-mid);
+        }
+        .calendar-grid.week-header-mode .week-days-wrap {
+            flex: 1;
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 4px;
+        }
     </style>
 </head>
 <body>
@@ -1392,7 +1415,7 @@
                     <span id="calendarTitle">2026年7月</span>
                     <button id="nextBtn">›</button>
                 </div>
-                <div class="calendar-grid">
+                <div class="calendar-grid" id="weekdayHeader">
                     <div class="weekday">日</div>
                     <div class="weekday">一</div>
                     <div class="weekday">二</div>
@@ -1527,7 +1550,7 @@
         </div>
         <div class="nav-item" data-tab="calendar" onclick="switchTab('calendar')">
             <span class="nav-icon">📅</span>
-            <span class="nav-label">日历</span>
+            <span class="nav-label">日程</span>
         </div>
         <div class="nav-item" data-tab="profile" onclick="switchTab('profile')">
             <span class="nav-icon">👤</span>
@@ -2875,7 +2898,7 @@
 
             var titles = {
                 'chat': '🍑 生活提醒助手',
-                'calendar': '🌷 日历',
+                'calendar': '🌷 日程',
                 'profile': '🍑 我的'
             };
             document.getElementById('headerTitle').textContent = titles[tabName] || '生活提醒助手';
@@ -3356,6 +3379,18 @@
                 currentMonth = now.getMonth() + 1;
             }
 
+            // 动态切换表头：月视图日开头，周视图周一开始 + 占位列
+            var header = document.getElementById('weekdayHeader');
+            if (header) {
+                if (viewMode === 'week') {
+                    header.classList.add('week-header-mode');
+                    header.innerHTML = '<div class="week-placeholder"> </div><div class="week-days-wrap"><div class="weekday">一</div><div class="weekday">二</div><div class="weekday">三</div><div class="weekday">四</div><div class="weekday">五</div><div class="weekday">六</div><div class="weekday">日</div></div>';
+                } else {
+                    header.classList.remove('week-header-mode');
+                    header.innerHTML = '<div class="weekday">日</div><div class="weekday">一</div><div class="weekday">二</div><div class="weekday">三</div><div class="weekday">四</div><div class="weekday">五</div><div class="weekday">六</div>';
+                }
+            }
+
             if (viewMode === 'month') {
                 var firstDay = new Date(currentYear, currentMonth - 1, 1).getDay();
                 var daysInMonth = new Date(currentYear, currentMonth, 0).getDate();
@@ -3438,6 +3473,7 @@
         function buildCalendarGrid(year, month, firstDay, daysInMonth, today, dayInfo) {
             var container = document.getElementById('calendarDays');
             container.innerHTML = '';
+            container.classList.remove('week-header-mode');
 
             for (var i = 0; i < firstDay; i++) {
                 var empty = document.createElement('div');
@@ -3524,6 +3560,7 @@
         function buildWeekGridWithReminders(today, dayInfo) {
             var container = document.getElementById('calendarDays');
             container.innerHTML = '';
+            container.classList.add('week-header-mode');
 
             var weekRange = getTodayWeekRange(currentWeekOffset);
 
@@ -3537,6 +3574,15 @@
                 mondayMonth = now.getMonth() + 1;
                 mondayDay = now.getDate();
             }
+
+            // 占位列（与日程表的时间标签对齐）
+            var placeholder = document.createElement('div');
+            placeholder.className = 'week-placeholder';
+            container.appendChild(placeholder);
+
+            // 7天日期容器
+            var daysWrap = document.createElement('div');
+            daysWrap.className = 'week-days-wrap';
 
             var currentDate = new Date(mondayYear, mondayMonth - 1, mondayDay);
 
@@ -3617,9 +3663,11 @@
                     };
                 })(dateStr));
 
-                container.appendChild(dayDiv);
+                daysWrap.appendChild(dayDiv);
                 currentDate.setDate(currentDate.getDate() + 1);
             }
+
+            container.appendChild(daysWrap);
         }
 
         function getWeekDateRange(year, month, offset) {
