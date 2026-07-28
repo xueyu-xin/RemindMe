@@ -305,4 +305,77 @@ public class ChatController {
         }
         return null;
     }
+
+    /**
+     * 查询用户聊天历史消息
+     * GET /api/chat/history?userId=1&limit=50
+     */
+    @GetMapping("/history")
+    public ResponseEntity<Map<String, Object>> getHistory(
+            @RequestParam(required = false) Long userId,
+            @RequestParam(required = false, defaultValue = "50") Integer limit) {
+        Map<String, Object> resp = new HashMap<>();
+        try {
+            if (userId == null) {
+                resp.put("success", false);
+                resp.put("message", "userId 不能为空");
+                return ResponseEntity.badRequest().body(resp);
+            }
+            int actualLimit = limit != null ? Math.min(limit, 100) : 50;
+            if (actualLimit <= 0) actualLimit = 50;
+
+            List<Map<String, Object>> history = dialogStatsService.queryMessageHistory(userId, actualLimit);
+            resp.put("success", true);
+            resp.put("data", history);
+            resp.put("count", history.size());
+            return ResponseEntity.ok(resp);
+        } catch (Exception e) {
+            log.error("查询聊天历史失败: userId={}", userId, e);
+            resp.put("success", false);
+            resp.put("message", "查询失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(resp);
+        }
+    }
+
+    /**
+     * 保存单条聊天消息（供前端异步调用）
+     * POST /api/chat/save-message
+     */
+    @PostMapping("/save-message")
+    public ResponseEntity<Map<String, Object>> saveMessage(@RequestBody Map<String, Object> request) {
+        Map<String, Object> resp = new HashMap<>();
+        try {
+            Long userId = request.containsKey("userId") ? Long.parseLong(String.valueOf(request.get("userId"))) : null;
+            String role = request.containsKey("role") ? String.valueOf(request.get("role")) : null;
+            String content = request.containsKey("content") ? String.valueOf(request.get("content")) : null;
+
+            if (userId == null) {
+                resp.put("success", false);
+                resp.put("message", "userId 不能为空");
+                return ResponseEntity.badRequest().body(resp);
+            }
+            if (!"user".equals(role) && !"bot".equals(role)) {
+                resp.put("success", false);
+                resp.put("message", "role 必须是 user 或 bot");
+                return ResponseEntity.badRequest().body(resp);
+            }
+            if (content == null || content.trim().isEmpty()) {
+                resp.put("success", false);
+                resp.put("message", "content 不能为空");
+                return ResponseEntity.badRequest().body(resp);
+            }
+
+            String sessionId = request.containsKey("sessionId") ? String.valueOf(request.get("sessionId")) : null;
+            dialogStatsService.saveMessage(userId, role, content.trim(), sessionId);
+
+            resp.put("success", true);
+            resp.put("message", "保存成功");
+            return ResponseEntity.ok(resp);
+        } catch (Exception e) {
+            log.error("保存聊天消息失败", e);
+            resp.put("success", false);
+            resp.put("message", "保存失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(resp);
+        }
+    }
 }

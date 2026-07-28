@@ -5,6 +5,7 @@ import com.dormrepair.remindme.enums.IntentType;
 import com.dormrepair.remindme.repository.UserDialogStatsRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,14 +29,71 @@ public class DialogStatsService {
 
     @Transactional
     public void recordDialog(Long userId, String input, IntentType intent) {
+        saveMessage(userId, "user", input, null);
+
+        // 补充意图解析信息（通过 inputText 字段所在记录更新）：取最新一条 user 记录回填
+        List<UserDialogStats> latest = dialogStatsRepository
+                .findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, 1));
+        if (!latest.isEmpty()) {
+            UserDialogStats stats = latest.get(0);
+            stats.setIntentType(intent);
+            stats.setProcessed(false);
+            dialogStatsRepository.save(stats);
+        }
+    }
+
+    /**
+     * 保存一条对话消息（用户或机器人）
+     *
+     * @param userId  用户ID
+     * @param role    角色：user / bot
+     * @param content 消息内容
+     * @param sessionId 会话ID（可为null）
+     */
+    @Transactional
+    public void saveMessage(Long userId, String role, String content, String sessionId) {
+        if (userId == null || role == null || content == null) {
+            return;
+        }
+        if (!"user".equals(role) && !"bot".equals(role)) {
+            log.warn("saveMessage 角色非法: role={}", role);
+            return;
+        }
+
         UserDialogStats stats = new UserDialogStats();
         stats.setUserId(userId);
-        stats.setInputText(input);
-        stats.setIntentType(intent);
+        stats.setRole(role);
+        stats.setContent(content);
+        stats.setSessionId(sessionId);
+        // 向后兼容：inputText 字段必须有值。用户消息填入 input，机器人消息也填 content
+        stats.setInputText(content);
         stats.setProcessed(false);
 
         dialogStatsRepository.save(stats);
-        log.debug("记录对话: userId={}, intent={}", userId, intent);
+        log.debug("保存消息: userId={}, role={}, len={}", userId, role, content.length());
+    }
+
+    /**
+     * 查询用户历史消息（按创建时间倒序，用于前端加载）
+     *
+     * @param userId 用户ID
+     * @param limit  返回条数上限（内部会限制最大200）
+     * @return 消息列表，每项包含 role、content、createdAt
+     */
+    public List<Map<String, Object>> queryMessageHistory(Long userId, int limit) {
+        if (userId == null) return Collections.emptyList();
+        int actualLimit = Math.max(1, Math.min(limit, 200));
+
+        List<UserDialogStats> list = dialogStatsRepository
+                .findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, actualLimit));
+
+        return list.stream().map(s -> {
+            Map<String, Object> m = new HashMap<>();
+            m.put("role", s.getRole() != null ? s.getRole() : "user");
+            m.put("content", s.getContent() != null ? s.getContent() : s.getInputText());
+            m.put("createdAt", s.getCreatedAt());
+            return m;
+        }).collect(Collectors.toList());
     }
 
     public List<String> generateDynamicPrompts(Long userId) {

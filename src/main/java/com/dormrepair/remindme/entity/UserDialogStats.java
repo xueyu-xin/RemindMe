@@ -18,7 +18,9 @@ import java.time.LocalDateTime;
  */
 @Data
 @Entity
-@Table(name = "user_dialog_stats")
+@Table(name = "user_dialog_stats", indexes = {
+        @Index(name = "idx_user_created", columnList = "user_id, created_at")
+})
 @EntityListeners(AuditingEntityListener.class)
 public class UserDialogStats {
 
@@ -29,6 +31,19 @@ public class UserDialogStats {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
+    /** 角色：user-用户消息, bot-机器人回复 */
+    @Column(name = "role", length = 8)
+    private String role;
+
+    /** 消息内容（新增存储字段，主存储） */
+    @Column(name = "content", columnDefinition = "TEXT")
+    private String content;
+
+    /** 会话ID，用于关联同一轮对话 */
+    @Column(name = "session_id", length = 64)
+    private String sessionId;
+
+    /** 原有字段：用户输入文本（保持向后兼容） */
     @Column(name = "input_text", nullable = false, columnDefinition = "TEXT")
     private String inputText;
 

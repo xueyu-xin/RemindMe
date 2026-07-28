@@ -1541,6 +1541,9 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.12/cropper.min.js"></script>
     <script>
         let currentUserId = parseInt(localStorage.getItem('userId')) || 1;
+        var chatHistoryLoaded = false;
+        // 待保存消息队列：用于避免短时间内重复存储同一条
+        var pendingSaveKeys = new Set();
         var currentYear, currentMonth;
         var selectedDate = null;
         var viewMode = 'month';
@@ -2834,6 +2837,9 @@
                     }
                 });
             }
+
+            // 加载聊天历史
+            setTimeout(loadChatHistory, 300);
         });
 
         var prompts = [
@@ -3164,8 +3170,9 @@
             }
         }
 
-        function addMessage(role, text) {
+        function addMessage(role, text, skipSave) {
             const history = document.getElementById('chatHistory');
+            if (!history) return;
             
             // 检测是否为网络错误消息，添加重试按钮（按钮在气泡外面）
             if (role === 'bot' && (text.indexOf('网络错误') !== -1 || text.indexOf('请重试') !== -1)) {
@@ -3195,6 +3202,69 @@
             }
             
             history.scrollTop = history.scrollHeight;
+
+            // 非跳过存储场景：异步保存消息到后端
+            if (!skipSave && text && text.trim().length > 0 && currentUserId) {
+                var saveKey = role + '|' + text.length + '|' + text.slice(0, 30) + '|' + Date.now();
+                if (pendingSaveKeys.has(saveKey)) return;
+                pendingSaveKeys.add(saveKey);
+                setTimeout(function() { pendingSaveKeys.delete(saveKey); }, 5000);
+
+                fetch('/api/chat/save-message', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: currentUserId,
+                        role: role,
+                        content: text.trim()
+                    })
+                }).catch(function(err) {
+                    // 静默失败，不影响用户使用
+                });
+            }
+        }
+
+        /**
+         * 加载用户聊天历史消息
+         */
+        function loadChatHistory() {
+            if (chatHistoryLoaded) return;
+            if (!currentUserId) return;
+            chatHistoryLoaded = true;
+
+            var history = document.getElementById('chatHistory');
+            if (history) {
+                var loading = document.createElement('div');
+                loading.className = 'chat-message bot loading-msg';
+                loading.textContent = '加载中...';
+                history.appendChild(loading);
+            }
+
+            fetch('/api/chat/history?userId=' + currentUserId + '&limit=50')
+                .then(function(res) { return res.json(); })
+                .then(function(resp) {
+                    // 先清空加载提示和默认空状态
+                    if (history) {
+                        var loadingEl = history.querySelector('.loading-msg');
+                        if (loadingEl) loadingEl.remove();
+                    }
+                    if (!resp || !resp.success || !resp.data || resp.data.length === 0) {
+                        return;
+                    }
+                    // 后端返回倒序（新→旧），前端需正序渲染（旧→新）
+                    var list = resp.data.slice().reverse();
+                    list.forEach(function(item) {
+                        var role = item.role === 'user' ? 'user' : 'bot';
+                        addMessage(role, item.content || '', true);
+                    });
+                })
+                .catch(function(err) {
+                    // 加载失败：移除加载提示即可，不打扰用户
+                    if (history) {
+                        var loadingEl = history.querySelector('.loading-msg');
+                        if (loadingEl) loadingEl.remove();
+                    }
+                });
         }
 
         async function retryLastMessage(errorMsgId) {
