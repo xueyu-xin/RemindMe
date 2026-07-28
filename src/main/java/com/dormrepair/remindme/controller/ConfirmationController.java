@@ -76,6 +76,51 @@ public class ConfirmationController {
         }
     }
 
+    @PostMapping("/{sessionId}/recurring/direct")
+    public ResponseEntity<Map<String, Object>> recurringDirect(
+            @PathVariable String sessionId,
+            @RequestParam Long userId) {
+        try {
+            Map<String, Object> result = confirmationService.confirmRecurringDirect(sessionId, userId);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        }
+    }
+
+    @PostMapping("/{sessionId}/recurring/skip")
+    public ResponseEntity<Map<String, Object>> recurringSkip(
+            @PathVariable String sessionId,
+            @RequestParam Long userId) {
+        try {
+            Map<String, Object> result = confirmationService.confirmRecurringSkip(sessionId, userId);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        }
+    }
+
+    @PostMapping("/{sessionId}/recurring/overwrite-all")
+    public ResponseEntity<Map<String, Object>> recurringOverwriteAll(
+            @PathVariable String sessionId,
+            @RequestParam Long userId) {
+        try {
+            Map<String, Object> result = confirmationService.confirmRecurringOverwriteAll(sessionId, userId);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        }
+    }
+
     @PostMapping("/{sessionId}/overwrite/{conflictId}")
     public ResponseEntity<Map<String, Object>> overwriteSingle(
             @PathVariable String sessionId,

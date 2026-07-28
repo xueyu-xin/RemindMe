@@ -98,6 +98,13 @@ public class LLMService {
         String content = response.getResult().getOutput().getText();
         log.info("工具调用对话响应: {}", content);
         
+        if (content == null || content.isBlank()) {
+            log.warn("LLM返回空响应！finishReason={}, tokensUsed={}",
+                    response.getResult().getMetadata() != null ? response.getResult().getMetadata().getFinishReason() : "unknown",
+                    response.getMetadata() != null && response.getMetadata().getUsage() != null
+                            ? response.getMetadata().getUsage().getTotalTokens() : "unknown");
+        }
+        
         return content;
     }
 
@@ -533,6 +540,23 @@ public class LLMService {
             3. 用户说的"下周每一天晚上七点我要去散步"属于"创建周期提醒"，必须调用 create_recurring_reminder
             4. 工具调用失败可以重试，但不能用文本回复替代工具调用
             5. 只有用户的意图不是创建提醒时（如闲聊、问天气），才允许直接文本回复
+
+            ================================================
+            禁止自行判断"已存在"规则：
+            ================================================
+            1. 用户要求"提醒我xxx"时，必须调用工具（create_reminder 或 create_recurring_reminder）
+            2. 即使你认为已经设置过了，也必须调用工具
+            3. 让后端返回真实结果，不要在对话中自行判断"已存在"
+            4. 示例错误："你之前已经设置过啦" → 禁止
+            5. 正确做法：调用工具，根据工具返回结果回复
+
+            ================================================
+            输出格式规则：
+            ================================================
+            1. 工具调用的 JSON 是内部协议，不要展示给用户
+            2. 如果工具调用失败，告诉用户"操作失败，请重试"
+            3. 禁止在回复中输出 {"tool_call": ...} 等原始 JSON
+            4. 所有回复必须是自然语言，用户可读
 
             ================================================
             RAG 工具使用说明：

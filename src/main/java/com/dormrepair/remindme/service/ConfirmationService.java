@@ -220,6 +220,110 @@ public class ConfirmationService {
         return result;
     }
 
+    /**
+     * 周期提醒-直接创建全部（不覆盖冲突，冲突日多条并存）
+     */
+    @Transactional
+    public Map<String, Object> confirmRecurringDirect(String sessionId, Long userId) {
+        ConfirmationSession session = findAndValidateSession(sessionId, userId);
+        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+        Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "direct");
+
+        session.setStatus(SessionStatus.CONFIRMED);
+        session.setStage("REMINDER_EXECUTE");
+        confirmationRepository.save(session);
+
+        Map<String, Object> result = new HashMap<>(createResult);
+        pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
+        log.info("周期提醒直接创建: sessionId={}, userId={}", sessionId, userId);
+        return result;
+    }
+
+    /**
+     * 周期提醒-创建无冲突部分（跳过冲突日）
+     */
+    @Transactional
+    public Map<String, Object> confirmRecurringSkip(String sessionId, Long userId) {
+        ConfirmationSession session = findAndValidateSession(sessionId, userId);
+        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+        Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "skip");
+
+        session.setStatus(SessionStatus.CONFIRMED);
+        session.setStage("REMINDER_EXECUTE");
+        confirmationRepository.save(session);
+
+        Map<String, Object> result = new HashMap<>(createResult);
+        pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
+        log.info("周期提醒跳过冲突创建: sessionId={}, userId={}", sessionId, userId);
+        return result;
+    }
+
+    /**
+     * 周期提醒-全部覆盖（删除冲突提醒，创建全部）
+     */
+    @Transactional
+    public Map<String, Object> confirmRecurringOverwriteAll(String sessionId, Long userId) {
+        ConfirmationSession session = findAndValidateSession(sessionId, userId);
+        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+        Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "overwrite");
+
+        session.setStatus(SessionStatus.CONFIRMED);
+        session.setStage("REMINDER_EXECUTE");
+        confirmationRepository.save(session);
+
+        Map<String, Object> result = new HashMap<>(createResult);
+        pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
+        log.info("周期提醒全部覆盖创建: sessionId={}, userId={}", sessionId, userId);
+        return result;
+    }
+
+    private ConfirmationSession findAndValidateSession(String sessionId, Long userId) {
+        ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+        SessionStatus status = session.getStatus();
+        if (status == SessionStatus.CONFIRMED) {
+            throw new IllegalArgumentException("该会话已确认，不能重复操作");
+        }
+        if (status == SessionStatus.CANCELLED) {
+            throw new IllegalArgumentException("该会话已取消");
+        }
+        if (status == SessionStatus.EXPIRED) {
+            throw new IllegalArgumentException("该会话已过期，请重新创建");
+        }
+        if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
+            session.setStatus(SessionStatus.EXPIRED);
+            confirmationRepository.save(session);
+            throw new IllegalArgumentException("该会话已过期，请重新创建");
+        }
+        return session;
+    }
+
+    private Map<String, Object> callRecurringGenerate(Map<String, Object> parsedData, Long userId, String mode) {
+        String title = (String) parsedData.get("title");
+        String remindTime = (String) parsedData.get("recurringRemindTime");
+        if (remindTime == null) {
+            String fullTime = (String) parsedData.get("remindTime");
+            if (fullTime != null && fullTime.length() > 10) {
+                remindTime = fullTime.substring(11);
+            }
+        }
+        String startDate = (String) parsedData.get("startDate");
+        String endDate = (String) parsedData.get("endDate");
+        String repeatType = (String) parsedData.get("repeatType");
+        String location = (String) parsedData.get("location");
+        String priority = (String) parsedData.getOrDefault("priority", "NORMAL");
+
+        return switch (mode) {
+            case "direct" -> recurringReminderService.generateAll(
+                    userId, title, remindTime, startDate, endDate, repeatType, location, priority);
+            case "skip" -> recurringReminderService.generateWithSkip(
+                    userId, title, remindTime, startDate, endDate, repeatType, location, priority);
+            case "overwrite" -> recurringReminderService.generateWithOverwrite(
+                    userId, title, remindTime, startDate, endDate, repeatType, location, priority);
+            default -> throw new IllegalArgumentException("未知的创建模式: " + mode);
+        };
+    }
+
     @Transactional
     public Map<String, Object> cancel(String sessionId, Long userId) {
         // 1. 先查找会话（不检查过期时间）
@@ -915,7 +1019,17 @@ public class ConfirmationService {
 
         List<Action> actions;
         String message;
-        if (isRecurring) {
+        if (isRecurring && hasConflict) {
+            // 周期提醒 + 有冲突：三个创建选项 + 修改
+            String conflictMsg = (String) parsedData.get("conflictMessage");
+            message = conflictMsg != null ? "⚠️ " + conflictMsg + "，请选择创建方式：" : "⚠️ 部分日期存在时间冲突，请选择创建方式：";
+            actions = Arrays.asList(
+                    Action.builder().id("confirm_direct").label("📝 直接创建").style("primary").build(),
+                    Action.builder().id("confirm_skip").label("✅ 创建无冲突部分").style("success").build(),
+                    Action.builder().id("overwrite_all").label("📝 全部覆盖").style("warning").build(),
+                    Action.builder().id("edit").label("✏️ 修改").style("warning").build()
+            );
+        } else if (isRecurring) {
             String repeatType = (String) parsedData.getOrDefault("repeatType", "DAILY");
             String repeatLabel = switch (repeatType) {
                 case "WEEKLY" -> "每周";

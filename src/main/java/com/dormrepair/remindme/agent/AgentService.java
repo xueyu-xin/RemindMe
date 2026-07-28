@@ -107,12 +107,36 @@ public class AgentService {
                 // 思考：调用LLM
                 llmResponse = llmService.chatWithTools(userInput, tools, history);
 
+                // 空响应重试：LLM 可能因提示词过长或超时返回空
+                if (llmResponse == null || llmResponse.isBlank()) {
+                    log.warn("LLM返回空响应，尝试简化重试 (iteration={})", iteration);
+                    // 简化重试：用精简提示词直接问 LLM
+                    String retryInput = "用户请求：" + userInput + "\n请调用合适的工具来处理。如果是创建提醒，调用 create_reminder 或 create_recurring_reminder。";
+                    llmResponse = llmService.chatWithTools(retryInput, tools, history);
+                    if (llmResponse == null || llmResponse.isBlank()) {
+                        log.error("LLM两次返回空响应，返回降级错误");
+                        String fallbackMsg = "抱歉，处理请求时出现问题，请稍后重试或换一种方式描述。";
+                        conversationMemory.addAssistantMessage(userId, fallbackMsg);
+                        return AgentResponse.text(fallbackMsg);
+                    }
+                    log.info("简化重试成功，LLM返回响应");
+                }
+
                 // 解析LLM响应
                 ToolCall llmToolCall = llmService.parseToolCall(llmResponse);
 
                 if (llmToolCall == null) {
                     // 直接回复用户，循环结束
                     log.info("LLM直接回复，结束循环（迭代次数: {}, 工具调用次数: {}）", iteration, toolCallCount);
+
+                    // 检查 LLM 输出是否包含未解析的 tool_call JSON 片段
+                    if (containsToolCallFragment(llmResponse)) {
+                        log.warn("LLM输出包含未解析的tool_call JSON片段，过滤后返回友好提示");
+                        String friendlyMsg = "操作失败，请重试或换一种方式描述。";
+                        conversationMemory.addAssistantMessage(userId, friendlyMsg);
+                        return AgentResponse.text(friendlyMsg);
+                    }
+
                     log.info("Agent执行完成: userId={}, 总步骤={}, 调用工具={}", userId, iteration, toolHistory);
                     conversationMemory.addAssistantMessage(userId, llmResponse);
                     return buildAgentResponse(llmResponse, lastToolResult);
@@ -162,7 +186,33 @@ public class AgentService {
                 // 检查工具结果是否标记任务完成（如 create_recurring_reminder 返回 shouldStop=true）
                 if (isTaskCompleted(toolResult)) {
                     log.info("工具结果标记任务完成（shouldStop=true），结束循环: toolName={}", llmToolCall.getToolName());
+                    // 双重保障：即使 buildConfirmationResponse 首次没检测到，再次尝试
+                    AgentResponse confirmResp = buildConfirmationResponse(toolResult);
+                    if (confirmResp != null) {
+                        log.info("shouldStop分支二次检测到sessionId，返回CONFIRMATION响应: toolName={}", llmToolCall.getToolName());
+                        return confirmResp;
+                    }
                     conversationMemory.addAssistantMessage(userId, "周期提醒确认卡片已生成，请确认。");
+                    // 返回自定义 CONFIRMATION，避免直接返回 TEXT 导致前端清空卡片
+                    try {
+                        Map<String, Object> resultMap = objectMapper.readValue(
+                                toolResult instanceof String ? (String) toolResult : objectMapper.writeValueAsString(toolResult),
+                                Map.class);
+                        String sessionId = (String) resultMap.get("sessionId");
+                        if (sessionId != null) {
+                            log.warn("shouldStop分支手工构建CONFIRMATION响应: sessionId={}", sessionId);
+                            String title = resultMap.get("title") != null ? String.valueOf(resultMap.get("title")) : "提醒";
+                            String remindTime = resultMap.get("remindTime") != null ? String.valueOf(resultMap.get("remindTime")) : null;
+                            String location = resultMap.get("location") != null ? String.valueOf(resultMap.get("location")) : null;
+                            Map<String, Object> confirmData = new HashMap<>();
+                            confirmData.put("title", title);
+                            confirmData.put("remindTime", remindTime);
+                            confirmData.put("location", location);
+                            return AgentResponse.confirmation(sessionId, "📅 周期提醒请确认：", confirmData);
+                        }
+                    } catch (Exception e) {
+                        log.warn("shouldStop分支解析失败: {}", e.getMessage());
+                    }
                     return buildAgentResponse("周期提醒确认卡片已生成，请确认。", toolResult);
                 }
 
@@ -426,12 +476,41 @@ public class AgentService {
             return AgentResponse.error(llmOutput);
         }
 
+        // 过滤 LLM 输出中的 JSON 片段
+        String cleanOutput = sanitizeLlmOutput(llmOutput);
+
         // 默认返回文本响应
-        AgentResponse response = AgentResponse.text(llmOutput);
+        AgentResponse response = AgentResponse.text(cleanOutput);
         if (toolResult != null) {
             response.setToolResult(toolResult);
         }
         return response;
+    }
+
+    /**
+     * 检查 LLM 输出是否包含未解析的 tool_call JSON 片段
+     */
+    private boolean containsToolCallFragment(String output) {
+        if (output == null || output.isEmpty()) {
+            return false;
+        }
+        return output.contains("\"tool_call\"") || output.contains("'tool_call'")
+                || output.contains("\"tool_name\"") || output.contains("\"arguments\"");
+    }
+
+    /**
+     * 过滤 LLM 输出中的 JSON 片段，返回干净的自然语言文本
+     */
+    private String sanitizeLlmOutput(String output) {
+        if (output == null || output.isEmpty()) {
+            return output;
+        }
+        // 如果输出包含 tool_call JSON 片段，返回友好提示
+        if (containsToolCallFragment(output)) {
+            log.warn("过滤LLM输出中的JSON片段: {}", output.substring(0, Math.min(output.length(), 200)));
+            return "操作失败，请重试或换一种方式描述。";
+        }
+        return output;
     }
 
     /**
@@ -458,11 +537,19 @@ public class AgentService {
                 Map<String, Object> castedMap = (Map<String, Object>) toolResult;
                 resultMap = castedMap;
             } else {
+                log.debug("buildConfirmationResponse: toolResult 类型 {} 不是 String/Map，跳过",
+                        toolResult != null ? toolResult.getClass().getSimpleName() : "null");
                 return null;
             }
 
+            boolean success = Boolean.TRUE.equals(resultMap.get("success"));
+            boolean hasSessionId = resultMap.containsKey("sessionId") && resultMap.get("sessionId") != null;
+            log.debug("buildConfirmationResponse: success={}, hasSessionId={}, keys={}",
+                    success, hasSessionId, resultMap.keySet());
+
             // 检查是否是成功的工具结果且包含sessionId
-            if (!Boolean.TRUE.equals(resultMap.get("success")) || !resultMap.containsKey("sessionId")) {
+            if (!success || !hasSessionId) {
+                log.debug("buildConfirmationResponse: 条件不满足（success={}，hasSessionId={}），返回null", success, hasSessionId);
                 return null;
             }
 
@@ -470,6 +557,8 @@ public class AgentService {
             String title = (String) resultMap.get("title");
             String remindTime = (String) resultMap.get("remindTime");
             String location = (String) resultMap.get("location");
+            boolean isRecurring = Boolean.TRUE.equals(resultMap.get("isRecurring"));
+            log.info("buildConfirmationResponse: 检测到确认会话 sessionId={}, title={}, isRecurring={}", sessionId, title, isRecurring);
 
             Map<String, Object> confirmationData = new HashMap<>();
             confirmationData.put("title", title);
@@ -479,7 +568,9 @@ public class AgentService {
                 confirmationData.put("priority", resultMap.get("priority"));
             }
 
-            String content = "📋 我帮你解析了提醒信息，请确认：";
+            String content = isRecurring
+                    ? "📅 我帮你解析了周期提醒，请确认："
+                    : "📋 我帮你解析了提醒信息，请确认：";
             return AgentResponse.confirmation(sessionId, content, confirmationData);
         } catch (Exception e) {
             log.warn("解析工具结果构建CONFIRMATION响应失败: {}", e.getMessage());

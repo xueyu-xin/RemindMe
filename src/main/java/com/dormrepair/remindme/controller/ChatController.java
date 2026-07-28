@@ -79,11 +79,22 @@ public class ChatController {
                             break;
                         case CONFIRMATION:
                             response.put("success", true);
+                            response.put("needConfirmation", true);
                             response.put("type", "confirmation_required");
                             response.put("message", agentResponse.getContent());
-                            response.put("needConfirmation", true);
                             response.put("sessionId", agentResponse.getSessionId());
                             response.put("data", agentResponse.getConfirmationData());
+                            // 周期提醒标识，前端可识别
+                            Map<String, Object> cdata = agentResponse.getConfirmationData();
+                            if (cdata != null && cdata.get("data") instanceof Map) {
+                                @SuppressWarnings("unchecked")
+                                Map<String, Object> inner = (Map<String, Object>) cdata.get("data");
+                                if (Boolean.TRUE.equals(inner.get("isRecurring"))) {
+                                    response.put("isRecurring", true);
+                                }
+                            }
+                            log.info("Agent返回CONFIRMATION: sessionId={}, isRecurring={}",
+                                    agentResponse.getSessionId(), response.get("isRecurring"));
                             break;
                         default:
                             response.put("success", true);

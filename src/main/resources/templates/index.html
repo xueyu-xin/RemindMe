@@ -961,6 +961,16 @@
             transform: translateY(-2px);
             box-shadow: 0 8px 20px rgba(255, 159, 122, 0.45);
         }
+        .confirmation-card .action-btn.success {
+            background: linear-gradient(135deg, #4CAF50 0%, #66BB6A 100%);
+            color: #FFFFFF;
+            border-color: transparent;
+            box-shadow: 0 4px 12px rgba(76, 175, 80, 0.35);
+        }
+        .confirmation-card .action-btn.success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(76, 175, 80, 0.45);
+        }
         .confirmation-card .action-btn.warning {
             color: var(--brown-deep);
             background: var(--cream-bg);
@@ -1303,9 +1313,19 @@
         }
         .schedule-cell {
             display: flex;
-            align-items: center;
-            justify-content: center;
-            min-height: 28px;
+            flex-direction: column;
+            align-items: stretch;
+            justify-content: flex-start;
+            gap: 3px;
+            min-height: 30px;
+            padding: 2px 0;
+        }
+        .schedule-cell.multi-item .schedule-block.week-single {
+            height: auto;
+            min-height: 22px;
+            line-height: 18px;
+            padding: 2px 3px;
+            font-size: 11px;
         }
         .schedule-block.empty {
             background: transparent;
@@ -1314,9 +1334,12 @@
             border: 1px dashed var(--peach-pale);
             border-radius: 6px;
             opacity: 0.3;
+            flex: 1;
         }
         .schedule-block.week-single {
-            display: inline-block;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             width: 100%;
             text-align: center;
             font-size: 12px;
@@ -1328,6 +1351,7 @@
             max-width: 100%;
             height: 24px;
             line-height: 20px;
+            box-sizing: border-box;
         }
     </style>
 </head>
@@ -2383,6 +2407,36 @@
                     return;
                 } else if (action === 'edit') {
                     showEditForm(sessionId);
+                } else if (action === 'confirm_direct' || action === 'confirm_skip' || action === 'overwrite_all') {
+                    var urlMap = {
+                        'confirm_direct': '/api/confirmations/' + sessionId + '/recurring/direct?userId=' + currentUserId,
+                        'confirm_skip': '/api/confirmations/' + sessionId + '/recurring/skip?userId=' + currentUserId,
+                        'overwrite_all': '/api/confirmations/' + sessionId + '/recurring/overwrite-all?userId=' + currentUserId
+                    };
+                    var btnLabelMap = {
+                        'confirm_direct': '⏳ 创建中...',
+                        'confirm_skip': '⏳ 创建中...',
+                        'overwrite_all': '⏳ 覆盖中...'
+                    };
+                    var clickedBtn = Array.from(buttons).find(function(btn) { return btn.disabled && btn.textContent.indexOf('⏳') === -1; });
+                    if (clickedBtn) clickedBtn.textContent = btnLabelMap[action] || '⏳ 处理中...';
+
+                    const response = await fetch(urlMap[action], { method: 'POST', headers: headers });
+                    const result = await response.json();
+                    if (result.success) {
+                        var msg = result.message;
+                        if (result.overwrittenTitle) {
+                            msg = '✅ 已覆盖「' + result.overwrittenTitle + '」，' + result.message;
+                        }
+                        addMessage('bot', msg);
+                        document.getElementById('confirmationContainer').innerHTML = '';
+                        currentConfirmationSessionId = null;
+                        if (typeof originalConfirmationCard !== 'undefined') originalConfirmationCard = null;
+                        renderCalendar();
+                    } else {
+                        addMessage('bot', '❌ ' + (result.message || result.error || '操作失败'));
+                        buttons.forEach(function(btn) { btn.disabled = false; });
+                    }
                 }
             } catch (e) {
                 addMessage('bot', '❌ 网络错误，请重试');
@@ -3802,13 +3856,14 @@
             // 获取本周 7 天的日期（从周一到周日）
             var weekDays = getWeekDays();
 
-            // 按时间分组，同时记录日期
+            // 按时间+日期分组（数组，支持同时刻多事项）
             var timeGroups = {};
             reminders.forEach(function(r) {
                 var time = r.remindTime.slice(11, 16);
                 var dateStr = r.remindTime.slice(0, 10);
                 if (!timeGroups[time]) timeGroups[time] = {};
-                timeGroups[time][dateStr] = r;
+                if (!timeGroups[time][dateStr]) timeGroups[time][dateStr] = [];
+                timeGroups[time][dateStr].push(r);
             });
 
             var sortedTimes = Object.keys(timeGroups).sort();
@@ -3833,33 +3888,38 @@
                     var cell = document.createElement('div');
                     cell.className = 'schedule-cell';
 
-                    var reminder = timeGroups[time] ? timeGroups[time][dateStr] : null;
+                    var reminderList = timeGroups[time] ? timeGroups[time][dateStr] : null;
 
-                    if (reminder) {
-                        var block = document.createElement('div');
-                        var type = determineBlockType(reminder);
-                        block.className = 'schedule-block ' + type + ' week-single';
+                    if (reminderList && reminderList.length > 0) {
+                        reminderList.forEach(function(reminder) {
+                            var block = document.createElement('div');
+                            var type = determineBlockType(reminder);
+                            block.className = 'schedule-block ' + type + ' week-single';
 
-                        if (reminder.status === 'CANCELLED') {
-                            block.classList.add('cancelled');
+                            if (reminder.status === 'CANCELLED') {
+                                block.classList.add('cancelled');
+                            }
+
+                            var weekBlockText = '';
+                            if (reminder.isRecurring) {
+                                var weekRepeatLabel = '每天';
+                                if (reminder.repeatType === 'WEEKLY') weekRepeatLabel = '每周';
+                                else if (reminder.repeatType === 'MONTHLY') weekRepeatLabel = '每月';
+                                weekBlockText += '<span class="recurring-tag-sm" title="' + (reminder.recurringRange || '') + '">⟳</span>';
+                            }
+                            if (type === 'course') {
+                                weekBlockText += '📖 ';
+                            }
+                            weekBlockText += reminder.title;
+                            block.innerHTML = weekBlockText;
+
+                            block.title = reminder.title + (reminder.location ? ' @ ' + reminder.location : '')
+                                + (reminder.isRecurring && reminder.recurringRange ? ' · 周期提醒：' + reminder.recurringRange : '');
+                            cell.appendChild(block);
+                        });
+                        if (reminderList.length > 1) {
+                            cell.classList.add('multi-item');
                         }
-
-                        var weekBlockText = '';
-                        if (reminder.isRecurring) {
-                            var weekRepeatLabel = '每天';
-                            if (reminder.repeatType === 'WEEKLY') weekRepeatLabel = '每周';
-                            else if (reminder.repeatType === 'MONTHLY') weekRepeatLabel = '每月';
-                            weekBlockText += '<span class="recurring-tag-sm" title="' + (reminder.recurringRange || '') + '">⟳</span>';
-                        }
-                        if (type === 'course') {
-                            weekBlockText += '📖 ';
-                        }
-                        weekBlockText += reminder.title;
-                        block.innerHTML = weekBlockText;
-
-                        block.title = reminder.title + (reminder.location ? ' @ ' + reminder.location : '')
-                            + (reminder.isRecurring && reminder.recurringRange ? ' · 周期提醒：' + reminder.recurringRange : '');
-                        cell.appendChild(block);
                     } else {
                         // 无日程：空白占位
                         var empty = document.createElement('div');
