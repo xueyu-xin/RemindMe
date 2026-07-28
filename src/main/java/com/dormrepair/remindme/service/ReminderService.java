@@ -20,7 +20,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
@@ -39,33 +41,27 @@ public class ReminderService {
     private final UserRepository userRepository;
     private final ConfirmationService confirmationService;
     private final EventPublisher eventPublisher;
+    private final ConflictDetectionService conflictDetectionService;
+    private final RecurringReminderService recurringReminderService;
 
-    private static final int CONFLICT_WINDOW_MINUTES = 30;
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     @Transactional
-    public ReminderResponse createReminder(ReminderCreateRequest request) {
+    public Map<String, Object> createReminder(ReminderCreateRequest request) {
         User user = userRepository.findById(request.getUserId())
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
 
-        ConflictResponse conflict = checkConflict(request.getUserId(), request.getRemindTime());
-        if (conflict.isHasConflict()) {
-            throw new IllegalArgumentException("提醒时间与已有提醒冲突");
-        }
+        String remindTimeStr = request.getRemindTime().format(FORMATTER);
+        String priority = request.getPriority() != null ? request.getPriority() : "NORMAL";
+        String location = request.getLocation();
 
-        Reminder reminder = new Reminder();
-        reminder.setUserId(request.getUserId());
-        reminder.setTitle(request.getTitle());
-        reminder.setRemindTime(request.getRemindTime());
-        reminder.setTimezone(request.getTimezone());
-        reminder.setAdvanceMinutes(request.getAdvanceMinutes() != null ? request.getAdvanceMinutes() : user.getDefaultAdvanceMinutes());
-        reminder.setCronExpression(request.getCronExpression());
-        reminder.setLocation(request.getLocation());
-        reminder.setPriority(Priority.valueOf(request.getPriority()));
-        reminder.setSource(ReminderSource.valueOf(request.getSource()));
-
-        Reminder saved = reminderRepository.save(reminder);
-        return toResponse(saved);
+        return createReminderForAgent(
+                request.getUserId(),
+                request.getTitle(),
+                remindTimeStr,
+                location,
+                priority
+        );
     }
 
     @Transactional
@@ -129,34 +125,11 @@ public class ReminderService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * 检测冲突（委托给 ConflictDetectionService）
+     */
     public ConflictResponse checkConflict(Long userId, LocalDateTime remindTime) {
-        LocalDateTime start = remindTime.minusMinutes(CONFLICT_WINDOW_MINUTES);
-        LocalDateTime end = remindTime.plusMinutes(CONFLICT_WINDOW_MINUTES);
-
-        List<Reminder> conflicts = reminderRepository.findByUserIdAndRemindTimeBetween(userId, start, end);
-
-        if (conflicts.isEmpty()) {
-            return new ConflictResponse(false, null, null);
-        }
-
-        List<ConflictResponse.ConflictItem> items = conflicts.stream()
-                .map(r -> new ConflictResponse.ConflictItem(r.getId(), r.getTitle(), r.getRemindTime()))
-                .collect(Collectors.toList());
-
-        LocalDateTime suggestedTime = end;
-        while (suggestedTime.isBefore(remindTime.plusHours(2))) {
-            List<Reminder> check = reminderRepository.findByUserIdAndRemindTimeBetween(
-                    userId,
-                    suggestedTime.minusMinutes(CONFLICT_WINDOW_MINUTES),
-                    suggestedTime.plusMinutes(CONFLICT_WINDOW_MINUTES)
-            );
-            if (check.isEmpty()) {
-                break;
-            }
-            suggestedTime = suggestedTime.plusMinutes(CONFLICT_WINDOW_MINUTES);
-        }
-
-        return new ConflictResponse(true, items, suggestedTime);
+        return conflictDetectionService.checkConflict(userId, remindTime, null);
     }
 
     private Reminder getReminderByIdAndUserId(Long id, Long userId) {
@@ -209,6 +182,17 @@ public class ReminderService {
         Map<String, Object> result = new HashMap<>();
         
         try {
+            // 周期识别：检查标题是否包含周期关键词
+            RecurringParams recurringParams = detectDateRange(title, remindTime);
+            if (recurringParams != null) {
+                log.info("检测到日期范围，路由到周期提醒: startDate={}, endDate={}, repeatType={}",
+                        recurringParams.startDate, recurringParams.endDate, recurringParams.repeatType);
+                return recurringReminderService.createRecurringReminder(
+                        userId, title, recurringParams.remindTime,
+                        recurringParams.startDate, recurringParams.endDate,
+                        recurringParams.repeatType, location, priority != null ? priority : "NORMAL");
+            }
+
             // 解析时间
             LocalDateTime parsedTime = LocalDateTime.parse(remindTime, FORMATTER);
             
@@ -222,14 +206,38 @@ public class ReminderService {
             parsedData.put("source", "USER_INPUT");
             parsedData.put("intentType", "REMINDER");
             
-            // 创建阶段一确认会话
+            // 冲突检测（结果附加到确认会话中，由确认卡片显示冲突提示）
+            ConflictResponse conflictResponse = conflictDetectionService.checkConflict(userId, parsedTime, null);
+            if (conflictResponse.isHasConflict()) {
+                String description = conflictDetectionService.getConflictDescription(
+                        conflictResponse.getConflicts(), parsedTime);
+                
+                parsedData.put("hasConflict", true);
+                parsedData.put("conflictMessage", description);
+                parsedData.put("conflictList", conflictResponse.getConflicts());
+                parsedData.put("suggestedTime", conflictResponse.getSuggestedTime() != null 
+                        ? conflictResponse.getSuggestedTime().format(FORMATTER) : null);
+                
+                // 取第一个冲突的提醒ID，用于覆盖操作
+                if (conflictResponse.getConflicts() != null && !conflictResponse.getConflicts().isEmpty()) {
+                    parsedData.put("conflictId", conflictResponse.getConflicts().get(0).getId());
+                }
+                
+                log.info("Agent创建提醒检测到冲突: userId={}, title={}, conflicts={}", 
+                        userId, title, conflictResponse.getConflicts().size());
+            } else {
+                parsedData.put("hasConflict", false);
+            }
+            
+            // 创建阶段一确认会话（无论是否有冲突都走确认流程）
             ConfirmationCardResponse card = confirmationService.createSession(userId, title, parsedData);
 
             // 发布提醒创建事件
             eventPublisher.publishReminderCreated(userId, null, title, remindTime, location, true);
 
             result.put("success", true);
-            result.put("message", "提醒创建请求已发送，请确认");
+            result.put("message", conflictResponse.isHasConflict() 
+                    ? "检测到时间冲突，请确认是否覆盖" : "提醒创建请求已发送，请确认");
             result.put("title", title);
             result.put("remindTime", remindTime);
             result.put("location", location);
@@ -237,8 +245,16 @@ public class ReminderService {
             result.put("sessionCreated", true);
             result.put("sessionId", card.getData().getSessionId());
             result.put("confirmationRequired", true);
+            result.put("hasConflict", conflictResponse.isHasConflict());
+            // 将确认卡片的 actions、timeout、expiresAt 传递给前端
+            result.put("actions", card.getActions());
+            result.put("timeout", card.getTimeout());
+            result.put("expiresAt", card.getExpiresAt());
+            result.put("shouldStop", true);
+            result.put("taskCompleted", true);
             
-            log.info("Agent创建提醒成功: title={}, sessionCreated=true", title);
+            log.info("Agent创建提醒成功: title={}, sessionCreated=true, hasConflict={}", 
+                    title, conflictResponse.isHasConflict());
             
         } catch (Exception e) {
             log.error("Agent创建提醒失败: userId={}, title={}, error={}", userId, title, e.getMessage(), e);
@@ -456,5 +472,184 @@ public class ReminderService {
         }
 
         return result;
+    }
+
+    @AgentTool(name = "create_recurring_reminder", description = "创建周期提醒，用户输入包含日期范围时调用")
+    @Transactional
+    public Map<String, Object> createRecurringReminderForAgent(Long userId, String title,
+            String remindTime, String startDate, String endDate, String repeatType) {
+
+        log.info("Agent调用创建周期提醒: userId={}, title={}, remindTime={}, startDate={}, endDate={}, repeatType={}",
+                userId, title, remindTime, startDate, endDate, repeatType);
+
+        Map<String, Object> result = new HashMap<>();
+
+        try {
+            if (title == null || title.isBlank()) {
+                result.put("success", false);
+                result.put("error", "标题不能为空");
+                return result;
+            }
+            if (remindTime == null || remindTime.isBlank()) {
+                result.put("success", false);
+                result.put("error", "提醒时间不能为空");
+                return result;
+            }
+            if (startDate == null || startDate.isBlank()) {
+                result.put("success", false);
+                result.put("error", "开始日期不能为空");
+                return result;
+            }
+            if (endDate == null || endDate.isBlank()) {
+                result.put("success", false);
+                result.put("error", "结束日期不能为空");
+                return result;
+            }
+
+            if (!remindTime.matches("\\d{2}:\\d{2}:\\d{2}")) {
+                result.put("success", false);
+                result.put("error", "提醒时间格式错误，应为 HH:mm:ss");
+                return result;
+            }
+
+            if (!startDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                result.put("success", false);
+                result.put("error", "开始日期格式错误，应为 yyyy-MM-dd");
+                return result;
+            }
+
+            if (!endDate.matches("\\d{4}-\\d{2}-\\d{2}")) {
+                result.put("success", false);
+                result.put("error", "结束日期格式错误，应为 yyyy-MM-dd");
+                return result;
+            }
+
+            String normalizedRepeatType = (repeatType != null && !repeatType.isBlank())
+                    ? repeatType.toUpperCase() : "DAILY";
+
+            return recurringReminderService.createRecurringReminder(
+                    userId, title, remindTime, startDate, endDate,
+                    normalizedRepeatType, null, "NORMAL");
+
+        } catch (Exception e) {
+            log.error("创建周期提醒失败: userId={}, error={}", userId, e.getMessage(), e);
+            result.put("success", false);
+            result.put("error", "创建周期提醒失败: " + e.getMessage());
+        }
+
+        return result;
+    }
+
+    @AgentTool(name = "cancel_reminders_by_date", description = "取消指定日期的提醒，用户要求取消某天的提醒时调用")
+    @Transactional
+    public Map<String, Object> cancelRemindersByDate(Long userId, String date, String keyword) {
+        log.info("取消提醒: userId={}, date={}, keyword={}", userId, date, keyword);
+
+        Map<String, Object> result = new HashMap<>();
+
+        try {
+            LocalDate targetDate = LocalDate.parse(date);
+            LocalDateTime dayStart = targetDate.atStartOfDay();
+            LocalDateTime dayEnd = targetDate.atTime(LocalTime.MAX);
+
+            List<Reminder> reminders = reminderRepository.findAll().stream()
+                    .filter(r -> r.getUserId().equals(userId))
+                    .filter(r -> r.getRemindTime() != null)
+                    .filter(r -> !r.getRemindTime().isBefore(dayStart) && !r.getRemindTime().isAfter(dayEnd))
+                    .filter(r -> r.getStatus() == ReminderStatus.PENDING)
+                    .filter(r -> keyword == null || keyword.isBlank() ||
+                            (r.getTitle() != null && r.getTitle().contains(keyword)))
+                    .collect(Collectors.toList());
+
+            if (reminders.isEmpty()) {
+                result.put("success", true);
+                result.put("cancelCount", 0);
+                result.put("message", "未找到" + (keyword != null ? "包含「" + keyword + "」" : "") + "的提醒");
+                return result;
+            }
+
+            List<Map<String, Object>> cancelledList = new java.util.ArrayList<>();
+            for (Reminder r : reminders) {
+                r.setStatus(ReminderStatus.CANCELLED);
+                reminderRepository.save(r);
+
+                Map<String, Object> item = new HashMap<>();
+                item.put("id", r.getId());
+                item.put("title", r.getTitle());
+                item.put("remindTime", r.getRemindTime().format(FORMATTER));
+                cancelledList.add(item);
+
+                log.info("取消提醒: reminderId={}, title={}", r.getId(), r.getTitle());
+            }
+
+            result.put("success", true);
+            result.put("cancelCount", cancelledList.size());
+            result.put("cancelledReminders", cancelledList);
+            result.put("message", String.format("已取消 %d 条提醒：%s",
+                    cancelledList.size(),
+                    cancelledList.stream().map(m -> (String) m.get("title")).collect(Collectors.joining("、"))));
+
+        } catch (Exception e) {
+            log.error("取消提醒失败: userId={}, error={}", userId, e.getMessage());
+            result.put("success", false);
+            result.put("error", "取消提醒失败: " + e.getMessage());
+        }
+
+        return result;
+    }
+
+    private RecurringParams detectDateRange(String title, String remindTime) {
+        if (title == null || remindTime == null) {
+            return null;
+        }
+
+        title = title.toLowerCase();
+        String repeatType = null;
+        int spanDays = 30;
+
+        if (title.contains("每周") || title.contains("星期") || title.contains("周")) {
+            repeatType = "WEEKLY";
+            spanDays = 90;
+        } else if (title.contains("每月") || title.contains("每个月")) {
+            repeatType = "MONTHLY";
+            spanDays = 365;
+        } else if (title.contains("每天") || title.contains("每日") || title.contains("天天") || title.contains("定期")) {
+            repeatType = "DAILY";
+            spanDays = 30;
+        }
+
+        if (repeatType == null) {
+            return null;
+        }
+
+        LocalDateTime parsedTime;
+        try {
+            parsedTime = LocalDateTime.parse(remindTime, FORMATTER);
+        } catch (Exception e) {
+            return null;
+        }
+
+        String timePart = parsedTime.toLocalTime().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        String startDate = parsedTime.toLocalDate().toString();
+        String endDate = parsedTime.toLocalDate().plusDays(spanDays).toString();
+
+        log.info("周期识别: title={}, repeatType={}, timePart={}, startDate={}, endDate={}",
+                title, repeatType, timePart, startDate, endDate);
+
+        return new RecurringParams(timePart, startDate, endDate, repeatType);
+    }
+
+    private static class RecurringParams {
+        String remindTime;
+        String startDate;
+        String endDate;
+        String repeatType;
+
+        RecurringParams(String remindTime, String startDate, String endDate, String repeatType) {
+            this.remindTime = remindTime;
+            this.startDate = startDate;
+            this.endDate = endDate;
+            this.repeatType = repeatType;
+        }
     }
 }

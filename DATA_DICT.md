@@ -1,4 +1,4 @@
-# 校园生活提醒助手 — 数据字典 v1.0
+# 校园生活提醒助手 — 数据字典 v1.1
 
 
 ## 一、文档说明
@@ -540,6 +540,50 @@ public enum PeriodStatus {
 
 **数据库存储**：不持久化，由 `PeriodService` 实时计算
 
+---
+
+### 2.9 SessionStatus（确认会话状态）
+
+| 枚举值 | 说明 | 触发条件 |
+|--------|------|----------|
+| `PENDING` | 待确认（默认） | 创建确认会话时 |
+| `CONFIRMED` | 用户已确认 | 用户点击确认/覆盖按钮 |
+| `CANCELLED` | 用户已取消 | 用户点击取消按钮 |
+| `EXPIRED` | 已过期 | 超过超时时间未操作 |
+
+**Java定义**：
+```java
+public enum SessionStatus {
+    PENDING,
+    CONFIRMED,
+    CANCELLED,
+    EXPIRED
+}
+```
+
+**数据库存储**：VARCHAR(20)，默认 `'PENDING'`
+
+---
+
+### 2.10 ConfirmStage（确认阶段）
+
+| 枚举值 | 说明 |
+|--------|------|
+| `INFO_CONFIRM` | 信息确认（默认） |
+| `CONFLICT_RESOLUTION` | 冲突解决中 |
+| `OVERWRITE_CONFIRM` | 覆盖确认 |
+| `AUTO_CONFIRM` | 自动确认 |
+
+**Java定义**：使用字符串常量，不使用枚举类
+```java
+public static final String STAGE_INFO_CONFIRM = "INFO_CONFIRM";
+public static final String STAGE_CONFLICT_RESOLUTION = "CONFLICT_RESOLUTION";
+public static final String STAGE_OVERWRITE_CONFIRM = "OVERWRITE_CONFIRM";
+public static final String STAGE_AUTO_CONFIRM = "AUTO_CONFIRM";
+```
+
+**数据库存储**：VARCHAR(30)，默认 `'INFO_CONFIRM'`
+
 
 ## 三、表结构定义
 
@@ -788,6 +832,75 @@ CREATE INDEX idx_user_dialog_stats_intent ON user_dialog_stats(intent_type);
 ```
 
 
+### 3.6 表名：confirmation_sessions（确认会话表）
+
+**用途**：存储提醒创建确认流程的会话信息，支持冲突检测、超时确认、覆盖操作等
+
+#### 3.6.1 字段定义
+
+| 字段名 | 数据库字段 | Java类型 | JSON类型 | 必填 | 默认值 | 约束 | 说明 |
+|--------|-----------|----------|----------|------|--------|------|------|
+| sessionId | `session_id` | `String` | `string` | 是 | UUID | PK(36位) | 会话ID，主键，UUID格式 |
+| userId | `user_id` | `Long` | `number` | 是 | 无 | FK | 所属用户ID |
+| reminderId | `reminder_id` | `Long` | `number` | 否 | `NULL` | FK | 关联的提醒ID（确认后生成） |
+| originalInput | `original_input` | `String` | `string` | 否 | `NULL` | TEXT | 用户原始输入文本 |
+| parsedData | `parsed_data` | `String` | `object` | 否 | `NULL` | JSON | LLM解析后的完整数据（JSON格式） |
+| parsedTitle | `parsed_title` | `String` | `string` | 否 | `NULL` | VARCHAR(200) | 解析出的标题 |
+| parsedTime | `parsed_time` | `LocalDateTime` | `string` | 否 | `NULL` | 无 | 解析出的提醒时间 |
+| parsedLocation | `parsed_location` | `String` | `string` | 否 | `NULL` | VARCHAR(200) | 解析出的地点 |
+| parsedPriority | `parsed_priority` | `String` | `string` | 否 | `NULL` | VARCHAR(20) | 解析出的优先级 |
+| parsedAdvanceMinutes | `parsed_advance_minutes` | `Integer` | `number` | 否 | `NULL` | 无 | 解析出的提前量 |
+| stage | `stage` | `String` | `string` | 是 | `'INFO_CONFIRM'` | VARCHAR(30) | 确认阶段（见2.10） |
+| status | `status` | `SessionStatus` | `string` | 是 | `'PENDING'` | VARCHAR(20) | 会话状态（见2.9） |
+| createdAt | `created_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 创建时间 |
+| expiresAt | `expires_at` | `LocalDateTime` | `string` | 否 | `NULL` | 无 | 过期时间（超时自动确认） |
+| updatedAt | `updated_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 更新时间 |
+| retryCount | `retry_count` | `Integer` | `number` | 是 | `0` | 无 | 已重试次数 |
+| attemptCount | `attempt_count` | `Integer` | `number` | 是 | `0` | 无 | 已尝试次数 |
+| maxAttempts | `max_attempts` | `Integer` | `number` | 是 | `3` | 无 | 最大尝试次数 |
+| intervalMinutes | `interval_minutes` | `Integer` | `number` | 是 | `10` | 无 | 补提醒间隔（分钟） |
+
+#### 3.6.2 建表DDL
+
+```sql
+CREATE TABLE confirmation_sessions (
+    session_id VARCHAR(36) PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    reminder_id BIGINT DEFAULT NULL,
+    original_input TEXT DEFAULT NULL,
+    parsed_data JSON DEFAULT NULL,
+    parsed_title VARCHAR(200) DEFAULT NULL,
+    parsed_time TIMESTAMP DEFAULT NULL,
+    parsed_location VARCHAR(200) DEFAULT NULL,
+    parsed_priority VARCHAR(20) DEFAULT NULL,
+    parsed_advance_minutes INT DEFAULT NULL,
+    stage VARCHAR(30) NOT NULL DEFAULT 'INFO_CONFIRM',
+    status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP DEFAULT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    retry_count INT NOT NULL DEFAULT 0,
+    attempt_count INT NOT NULL DEFAULT 0,
+    max_attempts INT NOT NULL DEFAULT 3,
+    interval_minutes INT NOT NULL DEFAULT 10,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (reminder_id) REFERENCES reminders(id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_user_status ON confirmation_sessions(user_id, status);
+CREATE INDEX idx_expires_at ON confirmation_sessions(expires_at);
+CREATE INDEX idx_stage ON confirmation_sessions(stage);
+```
+
+#### 3.6.3 扩展性预留
+
+| 预留字段 | 类型 | 说明 | 计划版本 |
+|----------|------|------|----------|
+| `conflict_ids` | JSON | 冲突提醒ID列表 | v1.1 |
+| `resolved_conflict_ids` | JSON | 已解决的冲突ID列表 | v1.1 |
+| `auto_confirmed` | BOOLEAN | 是否自动确认 | v1.1 |
+
+
 ## 四、API接口字段映射
 
 ### 4.1 注册接口
@@ -841,10 +954,13 @@ CREATE INDEX idx_user_dialog_stats_intent ON user_dialog_stats(intent_type);
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | id | number | 提醒ID |
-| conflict | object | 冲突检测结果 |
+| conflict | object | 冲突检测结果（见 ConflictResponse） |
 | conflict.hasConflict | boolean | 是否有冲突 |
 | conflict.conflicts | array | 冲突的提醒列表 |
 | conflict.suggestedTime | string | 建议的时间 |
+| success | boolean | 是否创建成功 |
+| sessionId | string | 确认会话ID（需进一步确认时返回） |
+| redirect | string | 下一步操作（"confirm"需确认，"success"直接成功） |
 
 ---
 
@@ -867,6 +983,265 @@ CREATE INDEX idx_user_dialog_stats_intent ON user_dialog_stats(intent_type);
 | days[].hasReminder | boolean | 是否有提醒 |
 | days[].reminderCount | number | 提醒数量 |
 | days[].reminders | array | 提醒列表（点击日期时加载） |
+
+---
+
+### 4.5 确认流程接口（Confirmation）
+
+#### 4.5.1 创建确认会话（触发冲突检测）
+
+`POST /api/confirmations/create`
+
+**请求字段**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| userId | number | 是 | 用户ID |
+| title | string | 是 | 事项名称 |
+| remindTime | string | 是 | ISO-8601格式时间 |
+| timezone | string | 否 | 时区，默认Asia/Shanghai |
+| advanceMinutes | number | 否 | 提前量，默认10 |
+| location | string | 否 | 地点 |
+| priority | string | 否 | 优先级，默认NORMAL |
+| source | string | 否 | 来源，默认USER_INPUT |
+
+**WebSocket推送** `type: "confirmation_card"`：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| type | string | 固定 `"confirmation_card"` |
+| message | string | 提示文本 |
+| expiresAt | string | 过期时间（ISO-8601） |
+| timeout | number | 超时秒数 |
+| data | object | 卡片数据 |
+| data.sessionId | string | 会话ID |
+| data.title | string | 提醒标题 |
+| data.remindTime | string | 提醒时间 |
+| data.priority | string | 优先级 |
+| data.location | string | 地点 |
+| data.advanceMinutes | number | 提前量 |
+| data.confidence | number | LLM解析置信度 |
+| data.hasConflict | boolean | 是否有冲突 |
+| data.conflictMessage | string | 冲突描述文本 |
+| data.conflictId | number | 第一个冲突提醒ID |
+| data.conflictList | string(JSON) | 冲突列表JSON字符串 |
+| data.suggestedTime | string | 建议的新时间 |
+| actions | array | 操作按钮列表 |
+| actions[].id | string | 操作ID（confirm/edit/cancel/overwrite） |
+| actions[].label | string | 按钮文字 |
+| actions[].style | string | 样式类名 |
+
+---
+
+#### 4.5.2 确认创建（带冲突覆盖）
+
+`POST /api/confirmations/{sessionId}/confirm`
+
+**请求字段**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| userId | number | 是 | 用户ID（Query参数） |
+| conflictIds | array\<number\> | 否 | 要覆盖的冲突提醒ID列表（Body） |
+
+**响应字段**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | boolean | 是否成功 |
+| message | string | 结果提示（含被覆盖标题） |
+| reminderId | number | 创建的提醒ID |
+| overwrittenTitle | string | 被覆盖的提醒标题（多个用、分隔） |
+
+---
+
+#### 4.5.3 取消确认
+
+`POST /api/confirmations/{sessionId}/cancel`
+
+**请求字段**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| userId | number | 是 | 用户ID（Query参数） |
+
+**响应字段**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | boolean | 是否成功 |
+| message | string | 结果提示 |
+
+---
+
+#### 4.5.4 全部覆盖
+
+`POST /api/confirmations/{sessionId}/overwrite`
+
+**请求字段**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| userId | number | 是 | 用户ID（Query参数） |
+
+**响应字段**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | boolean | 是否成功 |
+| message | string | 结果提示 |
+| reminderId | number | 新提醒ID |
+| overwrittenTitle | string | 被覆盖的所有提醒标题 |
+
+---
+
+#### 4.5.5 批量覆盖（选中指定冲突项）
+
+`POST /api/confirmations/{sessionId}/batch-overwrite`
+
+**请求字段**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| userId | number | 是 | 用户ID（Query参数） |
+| conflictIds | array\<number\> | 是 | 要覆盖的冲突提醒ID列表（Body） |
+
+**响应字段**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | boolean | 是否成功 |
+| message | string | 结果提示 |
+| reminderId | number | 新提醒ID |
+| overwrittenTitle | string | 被覆盖的提醒标题 |
+
+---
+
+#### 4.5.6 单项覆盖
+
+`POST /api/confirmations/{sessionId}/overwrite/{conflictId}`
+
+**请求字段**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| userId | number | 是 | 用户ID（Query参数） |
+| conflictId | number | 是 | 要覆盖的冲突提醒ID（Path参数） |
+
+**响应字段**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | boolean | 是否成功 |
+| message | string | 结果提示 |
+| reminderId | number | 新提醒ID |
+| overwrittenTitle | string | 被覆盖的提醒标题 |
+
+---
+
+#### 4.5.7 修改（重新解析）
+
+`POST /api/confirmations/{sessionId}/reparse`
+
+**请求字段**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| userId | number | 是 | 用户ID（Query参数） |
+| title | string | 是 | 新标题（Body） |
+| remindTime | string | 是 | 新时间（Body） |
+| location | string | 否 | 新地点 |
+| priority | string | 否 | 新优先级 |
+| advanceMinutes | number | 否 | 新提前量 |
+
+**响应字段**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | boolean | 是否成功 |
+| message | string | 结果提示 |
+
+---
+
+#### 4.5.8 智能修改
+
+`POST /api/confirmations/{sessionId}/smart-edit`
+
+**请求字段**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| userId | number | 是 | 用户ID（Query参数） |
+| userInput | string | 是 | 用户修改意图文本（Body） |
+| currentData | object | 是 | 当前卡片数据（Body） |
+
+**响应字段**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | boolean | 是否成功 |
+| message | string | 结果提示（如"已修改时间为：下午3点"） |
+| field | string | 修改的字段名 |
+| newValue | string | 新值 |
+
+---
+
+#### 4.5.9 获取会话数据
+
+`GET /api/confirmations/{sessionId}/data`
+
+**请求参数**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| userId | number | 是 | 用户ID |
+
+**响应字段**：返回 `ConfirmationSession` 全部字段 + 解析后数据
+
+---
+
+#### 4.5.10 手动操作接口
+
+`POST /api/confirmations/action`
+
+**请求字段**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| sessionId | string | 是 | 会话ID |
+| action | string | 是 | `"confirm"` 或 `"cancel"` |
+| userId | number | 是 | 用户ID |
+
+**响应字段**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | boolean | 是否成功 |
+| message | string | 结果提示 |
+
+---
+
+#### 4.5.11 批量操作接口
+
+`POST /api/confirmations/action-all`
+
+**请求字段**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| action | string | 是 | `"confirmAll"` 或 `"cancelAll"` |
+| userId | number | 是 | 用户ID |
+
+**响应字段**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| success | boolean | 是否成功 |
+| message | string | 结果提示（含操作数量） |
+
+---
+
+### 4.6 冲突检测接口
+
+#### 4.6.1 检查时间冲突
+
+`POST /api/reminders/check-conflict`
+
+**请求字段**：
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| userId | number | 是 | 用户ID |
+| remindTime | string | 是 | ISO-8601格式时间 |
+| title | string | 否 | 事项标题（用于排除自身） |
+
+**响应字段**（`ConflictResponse`）：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| hasConflict | boolean | 是否有冲突 |
+| conflicts | array | 冲突列表 |
+| conflicts[].id | number | 冲突提醒ID |
+| conflicts[].title | string | 冲突提醒标题 |
+| conflicts[].remindTime | string | 冲突提醒时间 |
+| suggestedTime | string | 建议的新时间（ISO-8601） |
 
 
 ## 五、Java实体类
@@ -1121,6 +1496,277 @@ public class UserDialogStats {
 }
 ```
 
+### 5.6 ConfirmationSession.java
+
+```java
+package com.dormrepair.remindme.entity;
+
+import jakarta.persistence.*;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import java.time.LocalDateTime;
+
+@Entity
+@Table(name = "confirmation_sessions", indexes = {
+    @Index(name = "idx_user_status", columnList = "user_id, status"),
+    @Index(name = "idx_expires_at", columnList = "expires_at"),
+    @Index(name = "idx_stage", columnList = "stage")
+})
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class ConfirmationSession {
+    @Id
+    @Column(name = "session_id", length = 36)
+    private String sessionId;
+
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
+    @Column(name = "reminder_id")
+    private Long reminderId;
+
+    @Column(name = "original_input", columnDefinition = "TEXT")
+    private String originalInput;
+
+    @Column(name = "parsed_data", columnDefinition = "JSON")
+    private String parsedData;
+
+    @Column(name = "parsed_title", length = 200)
+    private String parsedTitle;
+
+    @Column(name = "parsed_time")
+    private LocalDateTime parsedTime;
+
+    @Column(name = "parsed_location", length = 200)
+    private String parsedLocation;
+
+    @Column(name = "parsed_priority", length = 20)
+    private String parsedPriority;
+
+    @Column(name = "parsed_advance_minutes")
+    private Integer parsedAdvanceMinutes;
+
+    @Column(name = "stage", length = 30)
+    @Builder.Default
+    private String stage = "INFO_CONFIRM";
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", length = 20)
+    @Builder.Default
+    private SessionStatus status = SessionStatus.PENDING;
+
+    @Column(name = "created_at")
+    private LocalDateTime createdAt;
+
+    @Column(name = "expires_at")
+    private LocalDateTime expiresAt;
+
+    @Column(name = "updated_at")
+    private LocalDateTime updatedAt;
+
+    @Column(name = "retry_count")
+    @Builder.Default
+    private Integer retryCount = 0;
+
+    @Column(name = "attempt_count")
+    @Builder.Default
+    private Integer attemptCount = 0;
+
+    @Column(name = "max_attempts")
+    @Builder.Default
+    private Integer maxAttempts = 3;
+
+    @Column(name = "interval_minutes")
+    @Builder.Default
+    private Integer intervalMinutes = 10;
+
+    @PrePersist
+    protected void onCreate() {
+        createdAt = LocalDateTime.now();
+        updatedAt = LocalDateTime.now();
+    }
+
+    @PreUpdate
+    protected void onUpdate() {
+        updatedAt = LocalDateTime.now();
+    }
+
+    public enum SessionStatus {
+        PENDING,
+        CONFIRMED,
+        CANCELLED,
+        EXPIRED
+    }
+}
+```
+
+### 5.7 DTO 定义
+
+#### 5.7.1 ConflictResponse.java（冲突检测响应）
+
+```java
+package com.dormrepair.remindme.dto.response;
+
+import com.fasterxml.jackson.annotation.JsonFormat;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class ConflictResponse {
+    private boolean hasConflict;
+    private List<ConflictItem> conflicts;
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
+    private LocalDateTime suggestedTime;
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ConflictItem {
+        private Long id;
+        private String title;
+        @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
+        private LocalDateTime remindTime;
+    }
+}
+```
+
+#### 5.7.2 ConfirmationCardResponse.java（确认卡片响应）
+
+```java
+package com.dormrepair.remindme.dto.response;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import java.util.List;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class ConfirmationCardResponse {
+    private String type;
+    private String message;
+    @Builder.Default
+    private ConfirmationData data = new ConfirmationData();
+    private List<Action> actions;
+    private Integer timeout;
+    private String expiresAt;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ConfirmationData {
+        private String sessionId;
+        private String title;
+        private String remindTime;
+        private String priority;
+        private String location;
+        private Integer advanceMinutes;
+        private Double confidence;
+        private String weatherSuggestion;
+        private Boolean hasConflict;
+        private String conflictMessage;
+        private Long conflictId;
+        private String conflictList;
+        private String suggestedTime;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Action {
+        private String id;
+        private String label;
+        private String style;
+    }
+}
+```
+
+#### 5.7.3 ReminderCreateRequest.java（创建提醒请求）
+
+```java
+package com.dormrepair.remindme.dto.request;
+
+import com.fasterxml.jackson.annotation.JsonFormat;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
+import lombok.Data;
+import java.time.LocalDateTime;
+
+@Data
+public class ReminderCreateRequest {
+    @NotNull(message = "用户ID不能为空")
+    private Long userId;
+
+    @NotBlank(message = "事项名称不能为空")
+    @Size(max = 255, message = "事项名称不超过255个字符")
+    private String title;
+
+    @NotNull(message = "提醒时间不能为空")
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
+    private LocalDateTime remindTime;
+
+    private String timezone = "Asia/Shanghai";
+    private Integer advanceMinutes;
+    private String cronExpression;
+    private String location;
+    private String priority = "NORMAL";
+    private String source = "USER_INPUT";
+}
+```
+
+#### 5.7.4 ReminderResponse.java（提醒响应）
+
+```java
+package com.dormrepair.remindme.dto.response;
+
+import com.fasterxml.jackson.annotation.JsonFormat;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+import java.time.LocalDateTime;
+
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+public class ReminderResponse {
+    private Long id;
+    private Long userId;
+    private String title;
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
+    private LocalDateTime remindTime;
+    private String timezone;
+    private Integer advanceMinutes;
+    private String cronExpression;
+    private String location;
+    private String priority;
+    private String status;
+    private String confirmStatus;
+    private Integer confirmAttempts;
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
+    private LocalDateTime lastConfirmRemindAt;
+    private String source;
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
+    private LocalDateTime createdAt;
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
+    private LocalDateTime updatedAt;
+}
+```
+
 
 ## 六、字段映射总表（快速查找）
 
@@ -1166,8 +1812,25 @@ public class UserDialogStats {
 | intent_type | intentType | intentType | user_dialog_stats | 意图类型 |
 | parsed_time | parsedTime | parsedTime | user_dialog_stats | 解析的时间 |
 | parsed_title | parsedTitle | parsedTitle | user_dialog_stats | 解析的事项 |
+| session_id | sessionId | sessionId | confirmation_sessions | 会话ID |
+| user_id | userId | userId | confirmation_sessions | 所属用户 |
+| reminder_id | reminderId | reminderId | confirmation_sessions | 关联提醒ID |
+| original_input | originalInput | originalInput | confirmation_sessions | 原始输入 |
+| parsed_data | parsedData | parsedData | confirmation_sessions | 解析数据(JSON) |
+| parsed_title | parsedTitle | parsedTitle | confirmation_sessions | 解析标题 |
+| parsed_time | parsedTime | parsedTime | confirmation_sessions | 解析时间 |
+| parsed_location | parsedLocation | parsedLocation | confirmation_sessions | 解析地点 |
+| parsed_priority | parsedPriority | parsedPriority | confirmation_sessions | 解析优先级 |
+| parsed_advance_minutes | parsedAdvanceMinutes | parsedAdvanceMinutes | confirmation_sessions | 解析提前量 |
+| stage | stage | stage | confirmation_sessions | 确认阶段 |
+| status | status | status | confirmation_sessions | 会话状态 |
+| expires_at | expiresAt | expiresAt | confirmation_sessions | 过期时间 |
+| retry_count | retryCount | retryCount | confirmation_sessions | 重试次数 |
+| attempt_count | attemptCount | attemptCount | confirmation_sessions | 尝试次数 |
+| max_attempts | maxAttempts | maxAttempts | confirmation_sessions | 最大尝试次数 |
+| interval_minutes | intervalMinutes | intervalMinutes | confirmation_sessions | 补提醒间隔 |
 | created_at | createdAt | createdAt | 所有表 | 创建时间 |
-| updated_at | updatedAt | updatedAt | users/reminders | 更新时间 |
+| updated_at | updatedAt | updatedAt | users/reminders/confirmation_sessions | 更新时间 |
 
 
 ## 七、版本记录
@@ -1175,6 +1838,7 @@ public class UserDialogStats {
 | 版本 | 日期 | 修改内容 | 作者 |
 |------|------|----------|------|
 | v1.0 | 2026-07-18 | 初始版本，完整数据字典 | — |
+| v1.1 | 2026-07-28 | 新增 SessionStatus/ConfirmStage 枚举、confirmation_sessions 表、确认流程 API（4.5节）、冲突检测 API（4.6节）、DTO 定义（5.7节）、ConfirmationSession 实体类（5.6节）、更新字段映射总表 | — |
 
 ---
 

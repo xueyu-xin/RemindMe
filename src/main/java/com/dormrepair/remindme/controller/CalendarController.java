@@ -2,9 +2,13 @@ package com.dormrepair.remindme.controller;
 
 import com.dormrepair.remindme.dto.response.CalendarResponse;
 import com.dormrepair.remindme.dto.response.PeriodStatusResponse;
+import com.dormrepair.remindme.entity.RecurringInstance;
+import com.dormrepair.remindme.entity.RecurringReminder;
 import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.entity.User;
 import com.dormrepair.remindme.enums.ExecutionStatus;
+import com.dormrepair.remindme.repository.RecurringInstanceRepository;
+import com.dormrepair.remindme.repository.RecurringReminderRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.repository.UserRepository;
 import com.dormrepair.remindme.service.PeriodService;
@@ -37,6 +41,8 @@ public class CalendarController {
     private final ReminderRepository reminderRepository;
     private final UserRepository userRepository;
     private final PeriodService periodService;
+    private final RecurringReminderRepository recurringReminderRepository;
+    private final RecurringInstanceRepository recurringInstanceRepository;
 
     @GetMapping("/month")
     public ResponseEntity<CalendarResponse> getMonthView(
@@ -127,6 +133,30 @@ public class CalendarController {
                 .filter(r -> r.getRemindTime().isAfter(dayStart) && r.getRemindTime().isBefore(dayEnd))
                 .collect(Collectors.toList());
 
+        // 周期提醒检测：检查 RecurringInstance 表中是否存在该天的记录，或 RecurringReminder 模板中该天是否在范围
+        List<RecurringReminder> userRecurringTemplates = recurringReminderRepository
+                .findByUserIdAndStatus(userId, "ACTIVE");
+        boolean hasRecurringTemplateOnDate = userRecurringTemplates.stream()
+                .anyMatch(t -> !date.isBefore(t.getStartDate()) && !date.isAfter(t.getEndDate()));
+        // 检查每个模板该天是否有实例
+        boolean hasRecurring = false;
+        java.util.Map<Long, RecurringReminder> recurringMap = new java.util.HashMap<>();
+        java.util.Set<Long> recurringReminderIds = new java.util.HashSet<>();
+        for (RecurringReminder t : userRecurringTemplates) {
+            if (!date.isBefore(t.getStartDate()) && !date.isAfter(t.getEndDate())) {
+                hasRecurring = true;
+                RecurringInstance inst = recurringInstanceRepository
+                        .findByRecurringIdAndRemindDate(t.getId(), date).orElse(null);
+                if (inst != null && inst.getReminderId() != null) {
+                    recurringReminderIds.add(inst.getReminderId());
+                    recurringMap.put(inst.getReminderId(), t);
+                }
+            }
+        }
+        final boolean finalHasRecurring = hasRecurring || hasRecurringTemplateOnDate;
+        final java.util.Map<Long, RecurringReminder> finalRecurringMap = recurringMap;
+        final java.util.Set<Long> finalRecurringReminderIds = recurringReminderIds;
+
         boolean hasPendingReminder = dayReminders.stream()
                 .anyMatch(r -> r.getStatus().name().equals("PENDING") 
                            && r.getConfirmStatus().name().equals("CONFIRMED")
@@ -165,21 +195,41 @@ public class CalendarController {
             log.warn("农历计算失败: date={}, error={}", date, e.getMessage());
         }
 
+        java.util.Set<Long> alreadyAdded = new java.util.HashSet<>();
         List<CalendarResponse.ReminderItem> reminderItems = dayReminders.stream()
-                .map(r -> new CalendarResponse.ReminderItem(
-                        r.getId(),
-                        r.getTitle(),
-                        r.getRemindTime().toString(),
-                        r.getPriority().name(),
-                        r.getStatus().name(),
-                        r.getConfirmStatus().name(),
-                        r.getLocation()
-                ))
+                .filter(r -> {
+                    if (alreadyAdded.contains(r.getId())) return false;
+                    alreadyAdded.add(r.getId());
+                    return true;
+                })
+                .map(r -> {
+                    boolean isRecurring = finalRecurringReminderIds.contains(r.getId());
+                    RecurringReminder t = finalRecurringMap.get(r.getId());
+                    String recurringRange = null;
+                    String repeatType = null;
+                    if (t != null) {
+                        recurringRange = t.getStartDate() + " ~ " + t.getEndDate();
+                        repeatType = t.getRepeatType().name();
+                    }
+                    return new CalendarResponse.ReminderItem(
+                            r.getId(),
+                            r.getTitle(),
+                            r.getRemindTime().toString(),
+                            r.getPriority().name(),
+                            r.getStatus().name(),
+                            r.getConfirmStatus().name(),
+                            r.getLocation(),
+                            isRecurring,
+                            recurringRange,
+                            repeatType
+                    );
+                })
                 .collect(Collectors.toList());
 
         return new CalendarResponse.DayItem(
                 date,
                 hasPendingReminder,
+                finalHasRecurring,
                 dayReminders.size(),
                 periodStatus,
                 festival,

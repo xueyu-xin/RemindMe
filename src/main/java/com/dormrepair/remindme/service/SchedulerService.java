@@ -4,6 +4,7 @@ import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.enums.ConfirmStatus;
 import com.dormrepair.remindme.enums.ExecutionStatus;
 import com.dormrepair.remindme.enums.ReminderStatus;
+import com.dormrepair.remindme.repository.RecurringReminderRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -18,6 +19,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.net.URLEncoder;
 import java.time.Duration;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
@@ -37,6 +39,9 @@ public class SchedulerService {
     private final WeatherService weatherService;
     private final LLMService llmService;
     private final UserService userService;
+    private final RecurringReminderService recurringReminderService;
+    private final RecurringReminderRepository recurringReminderRepository;
+    private final com.dormrepair.remindme.repository.RecurringInstanceRepository recurringInstanceRepository;
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
@@ -373,6 +378,64 @@ public class SchedulerService {
             log.info("推送阶段二自动确认消息: userId={}, reminderId={}", reminder.getUserId(), reminder.getId());
         } catch (Exception e) {
             log.error("推送阶段二自动确认消息失败: userId={}, error={}", reminder.getUserId(), e.getMessage());
+        }
+    }
+
+    @Scheduled(cron = "0 0 1 * * ?")
+    @Transactional
+    public void generateDailyRecurringInstances() {
+        log.info("开始生成每日周期提醒实例...");
+        try {
+            LocalDate today = LocalDate.now();
+            List<com.dormrepair.remindme.entity.RecurringReminder> activeReminders =
+                    recurringReminderRepository.findByStatus("ACTIVE");
+
+            int generated = 0;
+            int skipped = 0;
+
+            for (com.dormrepair.remindme.entity.RecurringReminder template : activeReminders) {
+                try {
+                    // 1. 检查今天是否在周期范围内
+                    if (today.isBefore(template.getStartDate()) || today.isAfter(template.getEndDate())) {
+                        continue;
+                    }
+
+                    // 2. 检查 last_generated_date 是否已更新为今天（避免重复）
+                    if (template.getLastGeneratedDate() != null && template.getLastGeneratedDate().equals(today)) {
+                        skipped++;
+                        continue;
+                    }
+
+                    // 3. 检查实例表中是否已存在
+                    if (recurringInstanceRepository.existsByRecurringIdAndRemindDate(template.getId(), today)) {
+                        skipped++;
+                        template.setLastGeneratedDate(today);
+                        recurringReminderRepository.save(template);
+                        continue;
+                    }
+
+                    // 4. 为今天生成实例
+                    Map<String, Object> result = recurringReminderService.generateInstanceForDate(template, today);
+                    String status = (String) result.get("status");
+
+                    // 5. 更新 last_generated_date = 今天
+                    template.setLastGeneratedDate(today);
+                    recurringReminderRepository.save(template);
+
+                    if ("success".equals(status)) {
+                        generated++;
+                    } else {
+                        log.warn("周期实例生成状态: recurringId={}, date={}, status={}",
+                                template.getId(), today, status);
+                    }
+                } catch (Exception e) {
+                    log.error("生成周期实例失败: recurringId={}, error={}", template.getId(), e.getMessage());
+                }
+            }
+
+            log.info("每日周期实例生成完成: 生成 {} 条，跳过 {} 条", generated, skipped);
+        } catch (Exception e) {
+            log.error("每日周期实例生成失败: {}", e.getMessage(), e);
         }
     }
 }

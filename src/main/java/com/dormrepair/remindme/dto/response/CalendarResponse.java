@@ -28,6 +28,7 @@ public class CalendarResponse {
         @JsonFormat(pattern = "yyyy-MM-dd", timezone = "Asia/Shanghai")
         private LocalDate date;
         private Boolean hasReminder;
+        private Boolean hasRecurring;
         private Integer reminderCount;
         private String periodStatus;
         private String festival;
@@ -46,5 +47,8 @@ public class CalendarResponse {
         private String status;
         private String confirmStatus;
         private String location;
+        private Boolean isRecurring;
+        private String recurringRange;
+        private String repeatType;
     }
 }

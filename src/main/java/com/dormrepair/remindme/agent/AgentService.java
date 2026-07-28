@@ -159,6 +159,13 @@ public class AgentService {
                     return confirmationResponse;
                 }
 
+                // 检查工具结果是否标记任务完成（如 create_recurring_reminder 返回 shouldStop=true）
+                if (isTaskCompleted(toolResult)) {
+                    log.info("工具结果标记任务完成（shouldStop=true），结束循环: toolName={}", llmToolCall.getToolName());
+                    conversationMemory.addAssistantMessage(userId, "周期提醒确认卡片已生成，请确认。");
+                    return buildAgentResponse("周期提醒确认卡片已生成，请确认。", toolResult);
+                }
+
                 // 如果工具执行失败，继续循环让LLM处理降级结果
                 // 不再直接退出循环，而是让LLM有机会根据失败结果生成友好回复
                 if (!toolSuccess) {
@@ -332,10 +339,14 @@ public class AgentService {
                 "天气查询失败，可能因为城市名不正确或网络问题。建议您检查城市名，或稍后再试。";
             case "create_reminder" ->
                 "创建提醒失败，请确认提醒信息是否正确，稍后再试。";
+            case "create_recurring_reminder" ->
+                "创建周期提醒失败，请确认日期范围和时间是否正确，稍后再试。";
             case "update_reminder" ->
                 "修改提醒失败，请确认提醒是否存在，稍后再试。";
             case "cancel_reminder" ->
                 "取消提醒失败，请确认提醒是否存在，稍后再试。";
+            case "cancel_reminders_by_date" ->
+                "取消提醒失败，请确认日期和关键词是否正确，稍后再试。";
             case "get_reminder_detail" ->
                 "查询提醒详情失败，请确认提醒ID是否正确，稍后再试。";
             case "get_user_preferences" ->
@@ -473,6 +484,34 @@ public class AgentService {
         } catch (Exception e) {
             log.warn("解析工具结果构建CONFIRMATION响应失败: {}", e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * 检查工具结果是否标记任务完成（shouldStop=true 或 taskCompleted=true）
+     *
+     * @param toolResult 工具执行结果（JSON字符串或Map）
+     * @return 如果标记任务完成则返回true
+     */
+    private boolean isTaskCompleted(Object toolResult) {
+        if (toolResult == null) {
+            return false;
+        }
+        try {
+            Map<String, Object> resultMap;
+            if (toolResult instanceof String) {
+                resultMap = objectMapper.readValue((String) toolResult, Map.class);
+            } else if (toolResult instanceof Map) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> castedMap = (Map<String, Object>) toolResult;
+                resultMap = castedMap;
+            } else {
+                return false;
+            }
+            return Boolean.TRUE.equals(resultMap.get("shouldStop"))
+                    || Boolean.TRUE.equals(resultMap.get("taskCompleted"));
+        } catch (Exception e) {
+            return false;
         }
     }
 

@@ -171,6 +171,11 @@ public class ToolRegistry {
             "userId", "用户ID（系统自动填充）",
             "reminderId", "提醒ID（必填）"
         ));
+        paramDescriptions.put("cancelRemindersByDate", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "date", "日期，格式 yyyy-MM-dd（必填）",
+            "keyword", "关键词，用于按标题过滤要取消的提醒（可选）"
+        ));
         paramDescriptions.put("queryWeatherNowForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
             "location", "城市名（可选）",
@@ -213,6 +218,14 @@ public class ToolRegistry {
             "userId", "用户ID（系统自动填充）",
             "latitude", "纬度（可选，有GPS坐标时传入）",
             "longitude", "经度（可选，有GPS坐标时传入）"
+        ));
+        paramDescriptions.put("createRecurringReminderForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "title", "提醒事项的标题（必填）",
+            "remindTime", "每天提醒时间，格式为 HH:mm:ss（必填）",
+            "startDate", "开始日期，格式为 yyyy-MM-dd（必填）",
+            "endDate", "结束日期，格式为 yyyy-MM-dd（必填）",
+            "repeatType", "周期类型，可选值 DAILY/WEEKLY/MONTHLY（默认DAILY）"
         ));
         // RAG 工具参数描述
         paramDescriptions.put("retrievePrivateKnowledgeForAgent", Map.of(

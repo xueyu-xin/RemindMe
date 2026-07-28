@@ -36,8 +36,8 @@ public class ReminderController {
     private final ConfirmationService confirmationService;
 
     @PostMapping
-    public ResponseEntity<ReminderResponse> createReminder(@Valid @RequestBody ReminderCreateRequest request) {
-        ReminderResponse response = reminderService.createReminder(request);
+    public ResponseEntity<Map<String, Object>> createReminder(@Valid @RequestBody ReminderCreateRequest request) {
+        Map<String, Object> response = reminderService.createReminder(request);
         return ResponseEntity.ok(response);
     }
 

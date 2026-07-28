@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.controller;
 
+import com.dormrepair.remindme.dto.response.ConfirmationCardResponse;
 import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.service.ConfirmationService;
 import com.dormrepair.remindme.service.LLMService;
@@ -24,9 +25,18 @@ public class ConfirmationController {
     @PostMapping("/{sessionId}/confirm")
     public ResponseEntity<Map<String, Object>> confirm(
             @PathVariable String sessionId,
-            @RequestParam Long userId) {
+            @RequestParam Long userId,
+            @RequestBody(required = false) Map<String, Object> body) {
         try {
-            Map<String, Object> result = confirmationService.confirm(sessionId, userId);
+            List<Long> conflictIdsToOverwrite = List.of();
+            if (body != null && body.containsKey("conflictIds")) {
+                @SuppressWarnings("unchecked")
+                List<Number> ids = (List<Number>) body.get("conflictIds");
+                conflictIdsToOverwrite = ids != null
+                        ? ids.stream().map(Number::longValue).toList()
+                        : List.of();
+            }
+            Map<String, Object> result = confirmationService.confirm(sessionId, userId, conflictIdsToOverwrite);
             return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             Map<String, Object> error = new HashMap<>();
@@ -42,6 +52,58 @@ public class ConfirmationController {
             @RequestParam Long userId) {
         try {
             Map<String, Object> result = confirmationService.cancel(sessionId, userId);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        }
+    }
+
+    @PostMapping("/{sessionId}/overwrite")
+    public ResponseEntity<Map<String, Object>> overwrite(
+            @PathVariable String sessionId,
+            @RequestParam Long userId) {
+        try {
+            Map<String, Object> result = confirmationService.handleOverwrite(sessionId, userId);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        }
+    }
+
+    @PostMapping("/{sessionId}/overwrite/{conflictId}")
+    public ResponseEntity<Map<String, Object>> overwriteSingle(
+            @PathVariable String sessionId,
+            @PathVariable Long conflictId,
+            @RequestParam Long userId) {
+        try {
+            Map<String, Object> result = confirmationService.handleOverwrite(sessionId, userId, List.of(conflictId));
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        }
+    }
+
+    @PostMapping("/{sessionId}/batch-overwrite")
+    public ResponseEntity<Map<String, Object>> batchOverwrite(
+            @PathVariable String sessionId,
+            @RequestParam Long userId,
+            @RequestBody Map<String, Object> body) {
+        try {
+            @SuppressWarnings("unchecked")
+            List<Number> conflictIdNumbers = (List<Number>) body.get("conflictIds");
+            List<Long> conflictIds = conflictIdNumbers != null
+                    ? conflictIdNumbers.stream().map(Number::longValue).toList()
+                    : List.of();
+            Map<String, Object> result = confirmationService.handleOverwrite(sessionId, userId, conflictIds);
             return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             Map<String, Object> error = new HashMap<>();
@@ -162,11 +224,26 @@ public class ConfirmationController {
             parsedData.put("intentType", "REMINDER");
             parsedData.put("confidence", 0.95);
 
-            confirmationService.reparse(sessionId, userId, title, parsedData);
+            // 周期提醒字段
+            if (body.get("isRecurring") != null) {
+                parsedData.put("isRecurring", body.get("isRecurring"));
+                parsedData.put("startDate", body.get("startDate"));
+                parsedData.put("endDate", body.get("endDate"));
+                parsedData.put("repeatType", body.get("repeatType"));
+                if (body.get("recurringRemindTime") != null) {
+                    parsedData.put("recurringRemindTime", body.get("recurringRemindTime"));
+                }
+            }
+
+            ConfirmationCardResponse card = confirmationService.reparse(sessionId, userId, title, parsedData);
 
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);
             result.put("message", "已重新解析");
+            // 将卡片信息传递给前端
+            result.put("actions", card.getActions());
+            result.put("timeout", card.getTimeout());
+            result.put("expiresAt", card.getExpiresAt());
             return ResponseEntity.ok(result);
         } catch (IllegalArgumentException e) {
             Map<String, Object> error = new HashMap<>();
@@ -358,6 +435,51 @@ public class ConfirmationController {
             error.put("success", false);
             error.put("message", e.getMessage());
             return ResponseEntity.badRequest().body(error);
+        }
+    }
+
+    /**
+     * 处理冲突选择
+     */
+    @PostMapping("/conflict")
+    public ResponseEntity<Map<String, Object>> handleConflict(@RequestBody Map<String, Object> body) {
+        try {
+            Long userId = body.containsKey("userId") ? Long.parseLong(String.valueOf(body.get("userId"))) : null;
+            String action = (String) body.get("action");
+            String title = (String) body.get("title");
+            String remindTime = (String) body.get("remindTime");
+            String location = (String) body.get("location");
+            String priority = (String) body.get("priority");
+            
+            Long conflictReminderId = null;
+            if (body.containsKey("conflictReminderId") && body.get("conflictReminderId") != null) {
+                conflictReminderId = Long.parseLong(String.valueOf(body.get("conflictReminderId")));
+            }
+            
+            String newTime = (String) body.get("newTime");
+
+            if (userId == null || action == null || title == null || remindTime == null) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("success", false);
+                error.put("message", "缺少必要参数（userId, action, title, remindTime）");
+                return ResponseEntity.badRequest().body(error);
+            }
+
+            Map<String, Object> result = confirmationService.handleConflict(
+                    userId, action, title, remindTime, location, priority, conflictReminderId, newTime);
+            
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        } catch (Exception e) {
+            log.error("处理冲突失败: {}", e.getMessage(), e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "处理冲突失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
         }
     }
 }

@@ -410,6 +410,16 @@
         .day-festival { display: block; font-size: 10px; color: #e74c3c; margin-top: 2px; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .day-lunar { display: block; font-size: 10px; color: var(--brown-light); margin-top: 2px; line-height: 1.2; }
         .day-period { display: block; font-size: 11px; margin-top: 1px; line-height: 1; }
+        .day-recurring {
+            position: absolute;
+            top: 2px;
+            right: 3px;
+            font-size: 12px;
+            color: var(--theme-color, #667eea);
+            font-weight: bold;
+            line-height: 1;
+            text-shadow: 0 0 2px #fff;
+        }
 
         .calendar-header { display: flex; justify-content: space-between; align-items: center; padding: 0 0 16px; }
         .calendar-header h3 { margin: 0; font-size: 20px; color: var(--brown-deep); letter-spacing: 1.5px; }
@@ -990,6 +1000,104 @@
             animation: timerBlink 1s ease-in-out infinite;
         }
 
+        /* 确认卡片 - 冲突模式 */
+        .confirmation-card.conflict-mode {
+            border: 2px solid #FFE4B5;
+            border-left: 4px solid #FFA500;
+        }
+        .confirmation-card.conflict-mode .card-title {
+            color: #D2691E;
+        }
+        .conflict-section {
+            background: #FFF8E7;
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 14px;
+        }
+        .conflict-section-title {
+            font-size: 14px;
+            color: #8B4513;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        .conflict-items {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .conflict-items::-webkit-scrollbar {
+            width: 4px;
+        }
+        .conflict-items::-webkit-scrollbar-thumb {
+            background: var(--peach-soft);
+            border-radius: 4px;
+        }
+        .conflict-select-all {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            background: var(--peach-pale);
+            border-radius: 8px;
+            cursor: pointer;
+            user-select: none;
+        }
+        .conflict-select-all input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--peach);
+            cursor: pointer;
+        }
+        .conflict-select-all label {
+            font-size: 13px;
+            color: #8B4513;
+            cursor: pointer;
+        }
+        .conflict-item-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            color: #8B4513;
+            padding: 8px 10px;
+            margin: 4px 0;
+            background: #FFF9F0;
+            border-radius: 8px;
+            border: 1px solid var(--peach-pale);
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+        .conflict-item-row.row-selected {
+            background: var(--peach-pale);
+            border-color: var(--peach-soft);
+        }
+        .conflict-checkbox-wrap {
+            flex-shrink: 0;
+        }
+        .conflict-checkbox {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--peach);
+            cursor: pointer;
+        }
+        .conflict-info {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .suggested-time-inline {
+            font-size: 13px;
+            color: #228B22;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px dashed #FFE4B5;
+        }
+
         @keyframes timerBlink {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.6; }
@@ -1146,6 +1254,42 @@
         .schedule-block.cancelled {
             opacity: 0.5;
             text-decoration: line-through;
+        }
+
+        .schedule-block.single {
+            white-space: normal;
+            height: auto;
+            min-height: 28px;
+            line-height: 1.4;
+        }
+
+        .recurring-tag {
+            display: inline-block;
+            background: rgba(102, 126, 234, 0.25);
+            color: #fff;
+            padding: 1px 5px;
+            border-radius: 6px;
+            font-size: 11px;
+            margin-right: 4px;
+            vertical-align: middle;
+            font-weight: 600;
+            text-shadow: 0 0 1px rgba(0,0,0,0.2);
+        }
+        .recurring-tag-sm {
+            display: inline-block;
+            font-size: 11px;
+            color: #fff;
+            margin-right: 3px;
+            font-weight: bold;
+            opacity: 0.9;
+        }
+        .recurring-range {
+            font-size: 10px;
+            opacity: 0.8;
+            margin-top: 2px;
+            display: block;
+            line-height: 1.2;
+            font-weight: normal;
         }
 
         /* 7列布局（周查询） */
@@ -1381,8 +1525,10 @@
 
         var stompClient = null;
         var currentConfirmationSessionId = null;
-        var isProcessing = false; // 防重复点击标志
-        var lastUserInput = ''; // 保存用户输入，用于重试
+        var isProcessing = false;
+        var lastUserInput = '';
+        var conflictStates = {};
+        var currentConflictList = [];
 
         // 城市搜索相关状态
         var selectedCityValue = null;   // 选中的城市值（用于保存，如 "广东省-广州市-天河区"）
@@ -1476,6 +1622,7 @@
                 addMessage('bot', card.message);
                 container.innerHTML = '';
                 currentConfirmationSessionId = null;
+                originalConfirmationCard = null;
                 return;
             }
             
@@ -1483,6 +1630,7 @@
                 addMessage('bot', card.message);
                 container.innerHTML = '';
                 currentConfirmationSessionId = null;
+                originalConfirmationCard = null;
                 return;
             }
             
@@ -1490,6 +1638,7 @@
                 addMessage('bot', card.message);
                 container.innerHTML = '';
                 currentConfirmationSessionId = null;
+                originalConfirmationCard = null;
                 return;
             }
             
@@ -1497,15 +1646,33 @@
                 addMessage('bot', card.message);
                 container.innerHTML = '';
                 currentConfirmationSessionId = null;
+                originalConfirmationCard = null;
                 renderCalendar();
                 return;
             }
             
             if (card.type === 'confirmation_card') {
                 currentConfirmationSessionId = card.data.sessionId;
+                originalConfirmationCard = card;
                 var expiresAt = new Date(card.expiresAt);
+                var hasConflict = card.data.hasConflict === true;
                 
-                var html = '<div class="confirmation-card" id="confirmationCard" data-session-id="' + card.data.sessionId + '">';
+                var sessionId = card.data.sessionId;
+                conflictStates = {};
+                currentConflictList = [];
+                
+                if (hasConflict && card.data.conflictList) {
+                    try {
+                        currentConflictList = JSON.parse(card.data.conflictList);
+                        if (!Array.isArray(currentConflictList)) currentConflictList = [];
+                    } catch(e) { currentConflictList = []; }
+                    
+                    currentConflictList.forEach(function(c) {
+                        conflictStates[c.id] = 'pending';
+                    });
+                }
+                
+                var html = '<div class="confirmation-card ' + (hasConflict ? 'conflict-mode' : '') + '" id="confirmationCard" data-session-id="' + sessionId + '" data-has-conflict="' + (hasConflict ? 'true' : 'false') + '">';
                 html += '<div class="card-title">' + card.message + '</div>';
                 html += '<div class="card-info">';
                 html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + card.data.title + '</span></div>';
@@ -1515,9 +1682,41 @@
                 }
                 html += '<div class="info-item"><span class="info-label">优先级</span><span class="info-value">' + card.data.priority + '</span></div>';
                 html += '</div>';
+                
+                if (hasConflict && currentConflictList.length > 0) {
+                    html += '<div class="conflict-section">';
+                    html += '<div class="conflict-section-title">⚠️ 冲突的提醒：</div>';
+                    html += '<div class="conflict-select-all">';
+                    html += '<input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll()" ' + (currentConflictList.length === currentConflictList.filter(function(c) { return conflictStates[c.id] === 'selected'; }).length ? 'checked' : '') + '>';
+                    html += '<label for="selectAllCheckbox">全选（覆盖所有冲突）</label>';
+                    html += '</div>';
+                    html += '<div class="conflict-items" id="conflictItems">';
+                    currentConflictList.forEach(function(c) {
+                        var cid = c.id;
+                        var state = conflictStates[cid] || 'pending';
+                        var time = c.remindTime || '';
+                        if (time && time.length > 16) time = time.substring(5, 16);
+                        var rowClass = 'conflict-item-row';
+                        if (state === 'selected') {
+                            rowClass += ' row-selected';
+                        }
+                        html += '<div class="' + rowClass + '" id="conflict-row-' + cid + '">';
+                        html += '<div class="conflict-checkbox-wrap">';
+                        html += '<input type="checkbox" class="conflict-checkbox" id="conflict-checkbox-' + cid + '" data-conflict-id="' + cid + '" ' + (state === 'selected' ? 'checked' : '') + ' onchange="toggleConflictItem(' + cid + ', this)">';
+                        html += '</div>';
+                        html += '<div class="conflict-info">📌 ' + (c.title || '未命名') + ' - ' + time + '</div>';
+                        html += '</div>';
+                    });
+                    html += '</div>';
+                    if (card.data.suggestedTime) {
+                        html += '<div class="suggested-time-inline">💡 建议可以改到: ' + card.data.suggestedTime + '</div>';
+                    }
+                    html += '</div>';
+                }
+                
                 html += '<div class="card-actions">';
                 card.actions.forEach(function(action) {
-                    html += '<button class="action-btn ' + action.style + '" onclick="handleConfirmationAction(\'' + action.id + '\', \'' + card.data.sessionId + '\')">' + action.label + '</button>';
+                    html += '<button class="action-btn ' + action.style + '" onclick="handleConfirmationAction(\'' + action.id + '\', \'' + sessionId + '\')">' + action.label + '</button>';
                 });
                 html += '</div>';
                 html += '<div class="card-timer" id="timerText">⏳ 15秒后未确认自动确认</div>';
@@ -1988,6 +2187,7 @@
 
         var timerInterval = null;
         var currentTimerSessionId = null;
+        var originalConfirmationCard = null;
         function startTimer(expiresAt, sessionId) {
             if (timerInterval) clearInterval(timerInterval);
             currentTimerSessionId = sessionId;
@@ -2014,6 +2214,57 @@
             }, 1000);
         }
 
+        function toggleSelectAll() {
+            var checkbox = document.getElementById('selectAllCheckbox');
+            if (!checkbox) return;
+            var newState = checkbox.checked;
+            
+            currentConflictList.forEach(function(c) {
+                conflictStates[c.id] = newState ? 'selected' : 'pending';
+                var cb = document.getElementById('conflict-checkbox-' + c.id);
+                var row = document.getElementById('conflict-row-' + c.id);
+                if (cb) cb.checked = newState;
+                if (row) {
+                    if (newState) {
+                        row.classList.add('row-selected');
+                    } else {
+                        row.classList.remove('row-selected');
+                    }
+                }
+            });
+        }
+
+        function toggleConflictItem(conflictId, checkbox) {
+            var row = document.getElementById('conflict-row-' + conflictId);
+            if (!row) return;
+            
+            if (checkbox.checked) {
+                conflictStates[conflictId] = 'selected';
+                row.classList.add('row-selected');
+            } else {
+                conflictStates[conflictId] = 'pending';
+                row.classList.remove('row-selected');
+            }
+            
+            var selectAllCheckbox = document.getElementById('selectAllCheckbox');
+            if (selectAllCheckbox) {
+                var selectedCount = currentConflictList.filter(function(c) {
+                    return conflictStates[c.id] === 'selected';
+                }).length;
+                selectAllCheckbox.checked = selectedCount === currentConflictList.length;
+            }
+        }
+
+        function getSelectedConflictIds() {
+            var ids = [];
+            for (var cid in conflictStates) {
+                if (conflictStates[cid] === 'selected') {
+                    ids.push(parseInt(cid));
+                }
+            }
+            return ids;
+        }
+
         async function handleConfirmationAction(action, sessionId) {
             if (isProcessing) return;
             isProcessing = true;
@@ -2032,15 +2283,26 @@
             
             try {
                 if (action === 'confirm') {
+                    var idsToOverwrite = getSelectedConflictIds();
+                    var confirmBody = idsToOverwrite.length > 0
+                        ? JSON.stringify({ conflictIds: idsToOverwrite })
+                        : null;
                     const response = await fetch('/api/confirmations/' + sessionId + '/confirm?userId=' + currentUserId, {
                         method: 'POST',
-                        headers: headers
+                        headers: headers,
+                        body: confirmBody
                     });
                     const result = await response.json();
                     if (result.success) {
-                        addMessage('bot', result.message);
+                        var confirmMsg = result.message;
+                        if (result.overwrittenTitle) {
+                            confirmMsg = '✅ 已覆盖「' + result.overwrittenTitle + '」，新提醒已创建';
+                        }
+                        addMessage('bot', confirmMsg);
                         document.getElementById('confirmationContainer').innerHTML = '';
                         currentConfirmationSessionId = null;
+                        conflictStates = {};
+                        currentConflictList = [];
                         renderCalendar();
                     } else {
                         addMessage('bot', '❌ ' + result.message);
@@ -2058,6 +2320,67 @@
                     } else {
                         addMessage('bot', '❌ ' + result.message);
                     }
+                } else if (action === 'overwrite') {
+                    var selectedIds = getSelectedConflictIds();
+                    if (selectedIds.length === 0) {
+                        addMessage('bot', '⚠️ 请先勾选要覆盖的冲突提醒（或点击全选）');
+                        isProcessing = false;
+                        buttons.forEach(function(btn) { btn.disabled = false; });
+                        return;
+                    }
+                    var overwriteBtn = Array.from(buttons).find(function(btn) {
+                        return btn.textContent.includes('覆盖') && !btn.textContent.includes('全');
+                    });
+                    if (overwriteBtn) {
+                        overwriteBtn.textContent = '⏳ 覆盖中...';
+                        overwriteBtn.disabled = true;
+                    }
+                    try {
+                        var overwriteHeaders = { 'Content-Type': 'application/json' };
+                        var overwriteToken = localStorage.getItem('token');
+                        if (overwriteToken) overwriteHeaders['Authorization'] = 'Bearer ' + overwriteToken;
+
+                        var overwriteUrl;
+                        var overwriteBody = null;
+                        if (selectedIds.length === currentConflictList.length) {
+                            overwriteUrl = '/api/confirmations/' + sessionId + '/overwrite?userId=' + currentUserId;
+                        } else {
+                            overwriteUrl = '/api/confirmations/' + sessionId + '/batch-overwrite?userId=' + currentUserId;
+                            overwriteBody = JSON.stringify({ conflictIds: selectedIds });
+                        }
+
+                        const response = await fetch(overwriteUrl, {
+                            method: 'POST',
+                            headers: overwriteHeaders,
+                            body: overwriteBody
+                        });
+                        const result = await response.json();
+                        if (result.success) {
+                            var overwriteMsg = result.message;
+                            if (result.overwrittenTitle) {
+                                overwriteMsg = '✅ 已覆盖「' + result.overwrittenTitle + '」，新提醒已创建';
+                            }
+                            addMessage('bot', overwriteMsg);
+                            document.getElementById('confirmationContainer').innerHTML = '';
+                            currentConfirmationSessionId = null;
+                            conflictStates = {};
+                            currentConflictList = [];
+                            renderCalendar();
+                        } else {
+                            addMessage('bot', '❌ ' + result.message);
+                            if (overwriteBtn) {
+                                overwriteBtn.textContent = '📝 覆盖';
+                                overwriteBtn.disabled = false;
+                            }
+                        }
+                    } catch (e) {
+                        addMessage('bot', '❌ 网络错误，请重试');
+                        if (overwriteBtn) {
+                            overwriteBtn.textContent = '📝 覆盖';
+                            overwriteBtn.disabled = false;
+                        }
+                    }
+                    return;
                 } else if (action === 'edit') {
                     showEditForm(sessionId);
                 }
@@ -2119,7 +2442,25 @@
 
         function showEditForm(sessionId) {
             if (timerInterval) clearInterval(timerInterval);
-            
+
+            // 先获取数据，判断是否为周期提醒
+            fetch('/api/confirmations/' + sessionId + '/data?userId=' + currentUserId)
+                .then(response => response.json())
+                .then(data => {
+                    // 判断是否为周期提醒
+                    if (data.isRecurring === true) {
+                        showRecurringEditForm(sessionId, data);
+                    } else {
+                        showSingleEditForm(sessionId, data);
+                    }
+                })
+                .catch(e => {
+                    console.error('加载数据失败', e);
+                    addMessage('bot', '❌ 加载数据失败，请重试');
+                });
+        }
+
+        function showSingleEditForm(sessionId, data) {
             var container = document.getElementById('confirmationContainer');
             var html = '<div class="confirmation-card edit-form" id="editForm">';
             html += '<div class="card-title">✏️ 修改提醒信息</div>';
@@ -2131,6 +2472,13 @@
             html += '<div class="form-item">';
             html += '<label class="form-label">时间</label>';
             html += '<input type="datetime-local" class="form-input" id="editTime">';
+            html += '</div>';
+            html += '<div class="form-item suggested-time-row" id="suggestedTimeRow" style="display:none;">';
+            html += '<label class="form-label">💡 建议时间</label>';
+            html += '<div class="suggested-time-content">';
+            html += '<span id="suggestedTimeText"></span>';
+            html += '<button class="action-btn success" onclick="applySuggestion()">✨ 采用建议</button>';
+            html += '</div>';
             html += '</div>';
             html += '<div class="form-item">';
             html += '<label class="form-label">地点</label>';
@@ -2150,21 +2498,163 @@
             html += '<button class="action-btn danger" onclick="cancelEditForm(\'' + sessionId + '\')">❌ 取消修改</button>';
             html += '</div>';
             html += '</div>';
-            
+
             container.innerHTML = html;
-            
-            fetch('/api/confirmations/' + sessionId + '/data?userId=' + currentUserId)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.title) document.getElementById('editTitle').value = data.title;
-                    if (data.remindTime) {
-                        var dt = new Date(data.remindTime.replace(' ', 'T'));
-                        document.getElementById('editTime').value = dt.toISOString().slice(0, 16);
+
+            // 填充数据
+            if (data.title) document.getElementById('editTitle').value = data.title;
+            if (data.remindTime) {
+                var dt = new Date(data.remindTime.replace(' ', 'T'));
+                document.getElementById('editTime').value = dt.toISOString().slice(0, 16);
+            }
+            if (data.location) document.getElementById('editLocation').value = data.location;
+            if (data.priority) document.getElementById('editPriority').value = data.priority;
+            if (data.suggestedTime) {
+                document.getElementById('suggestedTimeText').textContent = data.suggestedTime;
+                document.getElementById('suggestedTimeRow').style.display = 'block';
+                document.getElementById('suggestedTimeRow').dataset.suggestedTime = data.suggestedTime;
+            }
+        }
+
+        function showRecurringEditForm(sessionId, data) {
+            var container = document.getElementById('confirmationContainer');
+            var html = '<div class="confirmation-card edit-form" id="editForm">';
+            html += '<div class="card-title">✏️ 修改周期提醒</div>';
+            html += '<div class="card-info">';
+            html += '<div class="form-item">';
+            html += '<label class="form-label">标题</label>';
+            html += '<input type="text" class="form-input" id="editRecurringTitle" placeholder="请输入标题">';
+            html += '</div>';
+            html += '<div class="form-item">';
+            html += '<label class="form-label">时间</label>';
+            html += '<input type="time" class="form-input" id="editRecurringTime" step="1">';
+            html += '</div>';
+            html += '<div class="form-item">';
+            html += '<label class="form-label">开始日期</label>';
+            html += '<input type="date" class="form-input" id="editRecurringStartDate">';
+            html += '</div>';
+            html += '<div class="form-item">';
+            html += '<label class="form-label">结束日期</label>';
+            html += '<input type="date" class="form-input" id="editRecurringEndDate">';
+            html += '</div>';
+            html += '<div class="form-item">';
+            html += '<label class="form-label">重复类型</label>';
+            html += '<select class="form-input" id="editRecurringRepeatType">';
+            html += '<option value="DAILY">每天</option>';
+            html += '<option value="WEEKLY">每周</option>';
+            html += '<option value="MONTHLY">每月</option>';
+            html += '</select>';
+            html += '</div>';
+            html += '</div>';
+            html += '<div class="card-actions">';
+            html += '<button class="action-btn primary" onclick="submitRecurringEdit(\'' + sessionId + '\')">✅ 确认修改</button>';
+            html += '<button class="action-btn danger" onclick="cancelEditForm(\'' + sessionId + '\')">❌ 取消修改</button>';
+            html += '</div>';
+            html += '</div>';
+
+            container.innerHTML = html;
+
+            // 填充数据
+            if (data.title) document.getElementById('editRecurringTitle').value = data.title;
+            var remindTime = data.recurringRemindTime || data.remindTime;
+            if (remindTime) {
+                // 如果是完整时间 "2026-08-03 19:00:00"，提取时间部分
+                if (remindTime.indexOf(' ') !== -1) {
+                    remindTime = remindTime.split(' ')[1];
+                }
+                document.getElementById('editRecurringTime').value = remindTime;
+            }
+            if (data.startDate) document.getElementById('editRecurringStartDate').value = data.startDate;
+            if (data.endDate) document.getElementById('editRecurringEndDate').value = data.endDate;
+            if (data.repeatType) document.getElementById('editRecurringRepeatType').value = data.repeatType;
+        }
+
+        async function submitRecurringEdit(sessionId) {
+            var title = document.getElementById('editRecurringTitle').value.trim();
+            var timeStr = document.getElementById('editRecurringTime').value;
+            var startDate = document.getElementById('editRecurringStartDate').value;
+            var endDate = document.getElementById('editRecurringEndDate').value;
+            var repeatType = document.getElementById('editRecurringRepeatType').value;
+
+            if (!title) {
+                addMessage('bot', '❌ 请输入标题');
+                return;
+            }
+            if (!timeStr) {
+                addMessage('bot', '❌ 请选择时间');
+                return;
+            }
+            if (!startDate) {
+                addMessage('bot', '❌ 请选择开始日期');
+                return;
+            }
+            if (!endDate) {
+                addMessage('bot', '❌ 请选择结束日期');
+                return;
+            }
+            if (startDate > endDate) {
+                addMessage('bot', '❌ 开始日期不能晚于结束日期');
+                return;
+            }
+
+            // 拼接完整日期时间供后端解析
+            var fullDateTime = startDate + ' ' + timeStr;
+
+            var headers = { 'Content-Type': 'application/json' };
+            var token = localStorage.getItem('token');
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+
+            try {
+                const response = await fetch('/api/confirmations/' + sessionId + '/reparse?userId=' + currentUserId, {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({
+                        title: title,
+                        remindTime: fullDateTime,
+                        location: null,
+                        priority: 'NORMAL',
+                        advanceMinutes: 10,
+                        isRecurring: true,
+                        startDate: startDate,
+                        endDate: endDate,
+                        repeatType: repeatType,
+                        recurringRemindTime: timeStr
+                    })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    addMessage('bot', '✅ 已修改周期提醒，请确认');
+                    // 重新加载卡片
+                    try {
+                        const dataResponse = await fetch('/api/confirmations/' + sessionId + '/data?userId=' + currentUserId);
+                        const data = await dataResponse.json();
+                        var defaultActions = [
+                            { id: 'confirm', label: '✅ 确认创建', style: 'primary' },
+                            { id: 'edit', label: '✏️ 修改', style: 'warning' },
+                            { id: 'cancel', label: '❌ 取消', style: 'danger' }
+                        ];
+                        var card = {
+                            type: 'confirmation_card',
+                            message: '📅 已更新周期提醒信息，请确认：',
+                            data: data,
+                            actions: result.actions && result.actions.length > 0 ? result.actions : defaultActions,
+                            timeout: result.timeout || 180,
+                            expiresAt: result.expiresAt || new Date(Date.now() + 15000).toISOString()
+                        };
+                        showConfirmationCard(card);
+                    } catch (e) {
+                        console.error('重新加载卡片失败', e);
                     }
-                    if (data.location) document.getElementById('editLocation').value = data.location;
-                    if (data.priority) document.getElementById('editPriority').value = data.priority;
-                })
-                .catch(e => console.error('加载数据失败', e));
+                } else {
+                    addMessage('bot', '❌ ' + (result.message || '修改失败'));
+                }
+            } catch (e) {
+                console.error('提交周期修改失败', e);
+                addMessage('bot', '❌ 提交修改失败，请稍后重试');
+            }
         }
 
         async function submitEditForm(sessionId) {
@@ -2207,17 +2697,19 @@
                     try {
                         const dataResponse = await fetch('/api/confirmations/' + sessionId + '/data?userId=' + currentUserId);
                         const data = await dataResponse.json();
+                        // 使用后端返回的 actions，如果没有则使用默认值
+                        var defaultActions = [
+                            { id: 'confirm', label: '✅ 确认', style: 'primary' },
+                            { id: 'edit', label: '✏️ 修改', style: 'warning' },
+                            { id: 'cancel', label: '❌ 取消', style: 'danger' }
+                        ];
                         var card = {
                             type: 'confirmation_card',
-                            message: '📋 我帮你解析了提醒信息，请确认：',
+                            message: data.hasConflict === true ? ('⚠️ ' + data.conflictMessage) : '📋 我帮你解析了提醒信息，请确认：',
                             data: data,
-                            actions: [
-                                { id: 'confirm', label: '✅ 确认', style: 'primary' },
-                                { id: 'edit', label: '✏️ 修改', style: 'warning' },
-                                { id: 'cancel', label: '❌ 取消', style: 'danger' }
-                            ],
-                            timeout: 180,
-                            expiresAt: new Date(Date.now() + 15000).toISOString()
+                            actions: result.actions && result.actions.length > 0 ? result.actions : defaultActions,
+                            timeout: result.timeout || 180,
+                            expiresAt: result.expiresAt || new Date(Date.now() + 15000).toISOString()
                         };
                         showConfirmationCard(card);
                     } catch (e) {
@@ -2231,31 +2723,41 @@
             }
         }
 
+        function applySuggestion() {
+            var row = document.getElementById('suggestedTimeRow');
+            var suggestedTime = row.dataset.suggestedTime;
+            if (suggestedTime) {
+                // 将建议时间填入时间输入框
+                var dt = new Date(suggestedTime.replace(' ', 'T'));
+                document.getElementById('editTime').value = dt.toISOString().slice(0, 16);
+                // 视觉反馈：按钮变色并显示已采用
+                var btn = row.querySelector('button');
+                btn.textContent = '✅ 已采用';
+                btn.classList.remove('success');
+                btn.classList.add('primary');
+                btn.disabled = true;
+            }
+        }
+
         function cancelEditForm(sessionId) {
-            fetch('/api/confirmations/' + sessionId + '/data?userId=' + currentUserId)
-                .then(response => response.json())
-                .then(data => {
-                    var container = document.getElementById('confirmationContainer');
-                    var html = '<div class="confirmation-card" id="confirmationCard" data-session-id="' + data.sessionId + '">';
-                    html += '<div class="card-title">📋 我帮你解析了提醒信息，请确认：</div>';
-                    html += '<div class="card-info">';
-                    html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + data.title + '</span></div>';
-                    html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + data.remindTime + '</span></div>';
-                    if (data.location) {
-                        html += '<div class="info-item"><span class="info-label">地点</span><span class="info-value">' + data.location + '</span></div>';
-                    }
-                    html += '<div class="info-item"><span class="info-label">优先级</span><span class="info-value">' + data.priority + '</span></div>';
-                    html += '</div>';
-                    html += '<div class="card-actions">';
-                    html += '<button class="action-btn primary" onclick="handleConfirmationAction(\'confirm\', \'' + data.sessionId + '\')">✅ 确认创建</button>';
-                    html += '<button class="action-btn warning" onclick="handleConfirmationAction(\'edit\', \'' + data.sessionId + '\')">✏️ 修改</button>';
-                    html += '<button class="action-btn danger" onclick="handleConfirmationAction(\'cancel\', \'' + data.sessionId + '\')">❌ 取消</button>';
-                    html += '</div>';
-                    html += '<div class="card-timer" id="timerText">⏳ 15秒后未确认自动确认</div>';
-                    html += '</div>';
-                    container.innerHTML = html;
-                })
-                .catch(e => console.error('加载数据失败', e));
+            if (originalConfirmationCard && originalConfirmationCard.data.sessionId === sessionId) {
+                showConfirmationCard(originalConfirmationCard);
+            } else {
+                var container = document.getElementById('confirmationContainer');
+                var html = '<div class="confirmation-card" id="confirmationCard" data-session-id="' + sessionId + '">';
+                html += '<div class="card-title">📋 我帮你解析了提醒信息，请确认：</div>';
+                html += '<div class="card-info">';
+                html += '<div class="info-item"><span class="info-label">优先级</span><span class="info-value">中</span></div>';
+                html += '</div>';
+                html += '<div class="card-actions">';
+                html += '<button class="action-btn primary" onclick="handleConfirmationAction(\'confirm\', \'' + sessionId + '\')">✅ 确认创建</button>';
+                html += '<button class="action-btn warning" onclick="handleConfirmationAction(\'edit\', \'' + sessionId + '\')">✏️ 修改</button>';
+                html += '<button class="action-btn danger" onclick="handleConfirmationAction(\'cancel\', \'' + sessionId + '\')">❌ 取消</button>';
+                html += '</div>';
+                html += '<div class="card-timer" id="timerText">⏳ 15秒后未确认自动确认</div>';
+                html += '</div>';
+                container.innerHTML = html;
+            }
         }
 
         document.addEventListener('DOMContentLoaded', function() {
@@ -2390,39 +2892,14 @@
                 const result = await response.json();
 
                 if (result.needConfirmation) {
-                    // 兼容 Agent 模式（result.sessionId）和非 Agent 模式（result.data.sessionId）
-                    var sessionId = null;
-                    if (result.data && result.data.sessionId) {
-                        sessionId = result.data.sessionId;
-                    } else if (result.sessionId) {
-                        sessionId = result.sessionId;
+                    // 卡片由 WebSocket 推送，前端不再自己构建
+                    // 如果卡片还没显示，才显示等待提示
+                    var container = document.getElementById('confirmationContainer');
+                    if (!container || container.innerHTML.trim() === '') {
+                        addMessage('bot', '⏳ 正在生成确认卡片...');
                     }
-
-                    // 构建 card.data，确保包含 sessionId（showConfirmationCard 依赖 card.data.sessionId）
-                    var cardData = result.data || {};
-                    if (sessionId && !cardData.sessionId) {
-                        cardData.sessionId = sessionId;
-                    }
-
-                    var card = {
-                        type: 'confirmation_card',
-                        message: result.message || '📋 我帮你解析了提醒信息，请确认：',
-                        data: cardData,
-                        actions: [
-                            { id: 'confirm', label: '✅ 确认', style: 'primary' },
-                            { id: 'edit', label: '✏️ 修改', style: 'warning' },
-                            { id: 'cancel', label: '❌ 取消', style: 'danger' }
-                        ],
-                        timeout: 180,
-                        expiresAt: new Date(Date.now() + 15000).toISOString()
-                    };
-
-                    // 双保险：提前设置 currentConfirmationSessionId
-                    if (sessionId) {
-                        currentConfirmationSessionId = sessionId;
-                    }
-
-                    showConfirmationCard(card);
+                    // sessionId 由 WebSocket 推送时更新，这里不处理
+                    return;
                 } else if (result.address) {
                     // 位置查询响应：显示地址并更新设置页
                     addMessage('bot', result.message || ('📍 ' + result.address));
@@ -2619,8 +3096,11 @@
                 });
                 
                 const data = await response.json();
+                console.log('📝 createReminder 响应:', data);
                 
-                if (data.id) {
+                if (data.success && data.sessionId) {
+                    addMessage('bot', data.message || '⏳ 请确认提醒信息');
+                } else if (data.success) {
                     addMessage('bot', '📌 提醒已设置成功！');
                 } else {
                     addMessage('bot', '⚠️ 设置失败：' + (data.message || '请重试'));
@@ -2648,7 +3128,7 @@
                 btn.className = 'retry-btn';
                 btn.setAttribute('onclick', 'retryLastMessage(\'' + msgId + '\')');
                 btn.setAttribute('title', '重新发送');
-                btn.innerHTML = '🔄 <span class="retry-text">重试</span>';
+                btn.innerHTML = '↻ <span class="retry-text">重试</span>';
                 
                 wrapper.appendChild(msg);
                 wrapper.appendChild(btn);
@@ -2773,6 +3253,7 @@
                             }
                             dayInfo[dateStr] = {
                                 hasReminder: day.hasReminder,
+                                hasRecurring: day.hasRecurring,
                                 festival: day.festival,
                                 lunarDate: day.lunarDate,
                                 periodStatus: day.periodStatus
@@ -2808,6 +3289,7 @@
                                     var d = data.days[0];
                                     dayInfo[date] = {
                                         hasReminder: d.hasReminder,
+                                        hasRecurring: d.hasRecurring,
                                         festival: d.festival,
                                         lunarDate: d.lunarDate,
                                         periodStatus: d.periodStatus
@@ -2869,12 +3351,21 @@
                     dayDiv.appendChild(lunarEl);
                 }
 
-                // 经期标记
+                // 经期标记（buildCalendarGrid处）
                 if (info.periodStatus) {
                     var periodEl = document.createElement('span');
                     periodEl.className = 'day-period';
                     periodEl.textContent = info.periodStatus === '经期' ? '🌙' : '🌸';
                     dayDiv.appendChild(periodEl);
+                }
+
+                // 周期提醒标记
+                if (info.hasRecurring) {
+                    var recurEl = document.createElement('span');
+                    recurEl.className = 'day-recurring';
+                    recurEl.textContent = '⟳';
+                    recurEl.title = '周期提醒';
+                    dayDiv.appendChild(recurEl);
                 }
 
                 if (info.hasReminder) {
@@ -2903,6 +3394,7 @@
 
                 container.appendChild(dayDiv);
             }
+            // end of buildCalendarGrid
         }
 
         function buildWeekGridWithReminders(today, dayInfo) {
@@ -2966,6 +3458,15 @@
                     periodEl.className = 'day-period';
                     periodEl.textContent = info.periodStatus === '经期' ? '🌙' : '🌸';
                     dayDiv.appendChild(periodEl);
+                }
+
+                // 周期提醒标记
+                if (info.hasRecurring) {
+                    var recurEl = document.createElement('span');
+                    recurEl.className = 'day-recurring';
+                    recurEl.textContent = '⟳';
+                    recurEl.title = '周期提醒';
+                    dayDiv.appendChild(recurEl);
                 }
 
                 if (info.hasReminder) {
@@ -3262,12 +3763,24 @@
                     block.classList.add('cancelled');
                 }
 
-                block.textContent = r.title;
-                if (type === 'course') {
-                    block.textContent = '📖 ' + r.title;
+                var blockText = '';
+                if (r.isRecurring) {
+                    var repeatLabel = '每天';
+                    if (r.repeatType === 'WEEKLY') repeatLabel = '每周';
+                    else if (r.repeatType === 'MONTHLY') repeatLabel = '每月';
+                    blockText += '<span class="recurring-tag" title="' + (r.recurringRange || '') + '">⟳' + repeatLabel + '</span> ';
                 }
+                if (type === 'course') {
+                    blockText += '📖 ';
+                }
+                blockText += r.title;
+                if (r.isRecurring && r.recurringRange) {
+                    blockText += '<div class="recurring-range" title="' + r.recurringRange + '">' + r.recurringRange + '</div>';
+                }
+                block.innerHTML = blockText;
 
-                block.title = r.title + (r.location ? ' @ ' + r.location : '');
+                block.title = r.title + (r.location ? ' @ ' + r.location : '')
+                    + (r.isRecurring && r.recurringRange ? ' · 周期提醒：' + r.recurringRange : '');
                 blocks.appendChild(block);
 
                 row.appendChild(blocks);
@@ -3331,12 +3844,21 @@
                             block.classList.add('cancelled');
                         }
 
-                        block.textContent = reminder.title;
-                        if (type === 'course') {
-                            block.textContent = '📖 ' + reminder.title;
+                        var weekBlockText = '';
+                        if (reminder.isRecurring) {
+                            var weekRepeatLabel = '每天';
+                            if (reminder.repeatType === 'WEEKLY') weekRepeatLabel = '每周';
+                            else if (reminder.repeatType === 'MONTHLY') weekRepeatLabel = '每月';
+                            weekBlockText += '<span class="recurring-tag-sm" title="' + (reminder.recurringRange || '') + '">⟳</span>';
                         }
+                        if (type === 'course') {
+                            weekBlockText += '📖 ';
+                        }
+                        weekBlockText += reminder.title;
+                        block.innerHTML = weekBlockText;
 
-                        block.title = reminder.title + (reminder.location ? ' @ ' + reminder.location : '');
+                        block.title = reminder.title + (reminder.location ? ' @ ' + reminder.location : '')
+                            + (reminder.isRecurring && reminder.recurringRange ? ' · 周期提醒：' + reminder.recurringRange : '');
                         cell.appendChild(block);
                     } else {
                         // 无日程：空白占位

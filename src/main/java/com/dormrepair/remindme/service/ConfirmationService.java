@@ -4,6 +4,7 @@ import com.dormrepair.remindme.agent.event.EventPublisher;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.Action;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.ConfirmationData;
+import com.dormrepair.remindme.dto.response.ConflictResponse;
 import com.dormrepair.remindme.entity.ConfirmationSession;
 import com.dormrepair.remindme.entity.ConfirmationSession.SessionStatus;
 import com.dormrepair.remindme.entity.Reminder;
@@ -44,6 +45,11 @@ public class ConfirmationService {
     private final EventPublisher eventPublisher;
     private final WeatherService weatherService;
     private final LLMService llmService;
+    private final ConflictDetectionService conflictDetectionService;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private RecurringReminderService recurringReminderService;
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
@@ -97,11 +103,14 @@ public class ConfirmationService {
 
     @Transactional
     public Map<String, Object> confirm(String sessionId, Long userId) {
-        // 1. 先查找会话（不检查过期时间）
+        return confirm(sessionId, userId, List.of());
+    }
+
+    @Transactional
+    public Map<String, Object> confirm(String sessionId, Long userId, List<Long> conflictIdsToOverwrite) {
         ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
 
-        // 2. 检查会话状态
         SessionStatus status = session.getStatus();
         if (status == SessionStatus.CONFIRMED) {
             throw new IllegalArgumentException("该会话已确认，不能重复确认");
@@ -113,15 +122,21 @@ public class ConfirmationService {
             throw new IllegalArgumentException("该会话已过期，不能确认");
         }
 
-        // 3. 检查是否过期
         if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
             session.setStatus(SessionStatus.EXPIRED);
             confirmationRepository.save(session);
             throw new IllegalArgumentException("该会话已过期，请重新创建");
         }
 
-        // 4. 所有检查通过，正常执行确认逻辑
         Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+
+        // 周期提醒：走周期创建流程
+        if (Boolean.TRUE.equals(parsedData.get("isRecurring"))) {
+            return confirmRecurring(session, userId, parsedData);
+        }
+
+        List<String> overwrittenTitles = deleteConflicts(userId, conflictIdsToOverwrite);
+
         Reminder reminder = createReminder(userId, parsedData, ConfirmStatus.CONFIRMED);
 
         session.setStatus(SessionStatus.CONFIRMED);
@@ -129,7 +144,8 @@ public class ConfirmationService {
         session.setReminderId(reminder.getId());
         confirmationRepository.save(session);
 
-        String successMessage = buildConfirmSuccessMessage(reminder);
+        String overwrittenTitle = overwrittenTitles.isEmpty() ? null : String.join("、", overwrittenTitles);
+        String successMessage = buildConfirmSuccessMessage(reminder, overwrittenTitle);
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
@@ -137,15 +153,68 @@ public class ConfirmationService {
         result.put("reminderId", reminder.getId());
         result.put("title", reminder.getTitle());
         result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+        if (!overwrittenTitles.isEmpty()) {
+            result.put("overwrittenTitle", overwrittenTitle);
+        }
 
-        log.info("阶段一确认: sessionId={}, userId={}, reminderId={}", sessionId, userId, reminder.getId());
+        log.info("确认创建: sessionId={}, userId={}, reminderId={}, deletedConflicts={}", sessionId, userId, reminder.getId(), overwrittenTitles.size());
 
-        // 发布提醒确认事件（通知Agent）
         try {
             eventPublisher.publishReminderConfirmed(userId, reminder.getId(), reminder.getTitle());
             log.info("发布确认事件: sessionId={}, userId={}, reminderId={}", sessionId, userId, reminder.getId());
         } catch (Exception e) {
             log.error("发布确认事件失败: sessionId={}, userId={}, error={}", sessionId, userId, e.getMessage(), e);
+        }
+
+        return result;
+    }
+
+    private Map<String, Object> confirmRecurring(ConfirmationSession session, Long userId, Map<String, Object> parsedData) {
+        String title = (String) parsedData.get("title");
+        // 使用纯时间 HH:mm:ss，如果没有则从完整时间中提取
+        String remindTime = (String) parsedData.get("recurringRemindTime");
+        if (remindTime == null) {
+            String fullTime = (String) parsedData.get("remindTime");
+            if (fullTime != null && fullTime.length() > 10) {
+                remindTime = fullTime.substring(11);  // 提取时间部分
+            }
+        }
+        String startDate = (String) parsedData.get("startDate");
+        String endDate = (String) parsedData.get("endDate");
+        String repeatType = (String) parsedData.get("repeatType");
+        String location = (String) parsedData.get("location");
+        String priority = (String) parsedData.getOrDefault("priority", "NORMAL");
+
+        Map<String, Object> createResult = recurringReminderService.generateInstancesFromConfirm(
+                userId, title, remindTime, startDate, endDate, repeatType, location, priority);
+
+        session.setStatus(SessionStatus.CONFIRMED);
+        session.setStage("REMINDER_EXECUTE");
+        confirmationRepository.save(session);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", createResult.get("success"));
+        result.put("message", createResult.get("message"));
+        result.put("isRecurring", true);
+        if (createResult.get("recurringId") != null) {
+            result.put("recurringId", createResult.get("recurringId"));
+        }
+        if (createResult.get("totalDays") != null) {
+            result.put("totalDays", createResult.get("totalDays"));
+        }
+        if (createResult.get("successCount") != null) {
+            result.put("successCount", createResult.get("successCount"));
+        }
+        if (createResult.get("conflictCount") != null) {
+            result.put("conflictCount", createResult.get("conflictCount"));
+        }
+
+        log.info("周期提醒确认创建: sessionId={}, userId={}, recurringId={}", session.getSessionId(), userId, createResult.get("recurringId"));
+
+        try {
+            eventPublisher.publishReminderConfirmed(userId, null, title);
+        } catch (Exception e) {
+            log.error("发布确认事件失败: {}", e.getMessage());
         }
 
         return result;
@@ -197,9 +266,392 @@ public class ConfirmationService {
         return result;
     }
 
+    /**
+     * 覆盖创建：删除冲突提醒，然后创建新提醒
+     * <p>
+     * 用户在确认卡片上点击"覆盖创建"按钮时调用。
+     * 删除冲突的旧提醒，然后确认当前会话的新提醒。
+     * </p>
+     *
+     * @param sessionId 确认会话ID
+     * @param userId    用户ID
+     * @return 处理结果
+     */
+    @Transactional
+    public Map<String, Object> handleOverwrite(String sessionId, Long userId) {
+        log.info("=== handleOverwrite (全量) 被调用 === sessionId={}, userId={}", sessionId, userId);
+
+        try {
+            Map<String, Object> result = new HashMap<>();
+
+            ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                    .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+
+            SessionStatus status = session.getStatus();
+            if (status == SessionStatus.CONFIRMED) {
+                throw new IllegalArgumentException("该会话已确认，不能重复操作");
+            }
+            if (status == SessionStatus.CANCELLED) {
+                throw new IllegalArgumentException("该会话已取消");
+            }
+            if (status == SessionStatus.EXPIRED) {
+                throw new IllegalArgumentException("该会话已过期，请重新创建");
+            }
+
+            if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
+                session.setStatus(SessionStatus.EXPIRED);
+                confirmationRepository.save(session);
+                throw new IllegalArgumentException("该会话已过期，请重新创建");
+            }
+
+            Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+
+            List<Long> allConflictIds = getAllConflictIds(parsedData);
+            List<String> overwrittenTitles = deleteConflicts(userId, allConflictIds);
+
+            Reminder reminder = createReminder(userId, parsedData, ConfirmStatus.CONFIRMED);
+
+            session.setStatus(SessionStatus.CONFIRMED);
+            session.setStage("REMINDER_EXECUTE");
+            session.setReminderId(reminder.getId());
+            confirmationRepository.save(session);
+
+            String overwrittenTitle = overwrittenTitles.isEmpty() ? null : String.join("、", overwrittenTitles);
+            String successMessage = buildConfirmSuccessMessage(reminder, overwrittenTitle);
+
+            result.put("success", true);
+            result.put("message", successMessage);
+            result.put("reminderId", reminder.getId());
+            if (!overwrittenTitles.isEmpty()) {
+                result.put("overwrittenTitle", overwrittenTitle);
+            }
+
+            log.info("全量覆盖成功: sessionId={}, reminderId={}, deletedConflicts={}", sessionId, reminder.getId(), overwrittenTitles.size());
+
+            try {
+                eventPublisher.publishReminderConfirmed(userId, reminder.getId(), reminder.getTitle());
+            } catch (Exception e) {
+                log.error("发布确认事件失败: {}", e.getMessage(), e);
+            }
+
+            return result;
+        } catch (Exception e) {
+            log.error("handleOverwrite 执行失败: sessionId={}, userId={}", sessionId, userId, e);
+            throw e;
+        }
+    }
+
+    @Transactional
+    public Map<String, Object> handleOverwrite(String sessionId, Long userId, List<Long> conflictIdsToOverwrite) {
+        log.info("=== handleOverwrite (指定ID) 被调用 === sessionId={}, userId={}, conflictIds={}", sessionId, userId, conflictIdsToOverwrite);
+
+        try {
+            Map<String, Object> result = new HashMap<>();
+
+            ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                    .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+
+            SessionStatus status = session.getStatus();
+            if (status == SessionStatus.CONFIRMED) {
+                throw new IllegalArgumentException("该会话已确认，不能重复操作");
+            }
+            if (status == SessionStatus.CANCELLED) {
+                throw new IllegalArgumentException("该会话已取消");
+            }
+            if (status == SessionStatus.EXPIRED) {
+                throw new IllegalArgumentException("该会话已过期，请重新创建");
+            }
+
+            if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
+                session.setStatus(SessionStatus.EXPIRED);
+                confirmationRepository.save(session);
+                throw new IllegalArgumentException("该会话已过期，请重新创建");
+            }
+
+            Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+
+            List<String> overwrittenTitles = deleteConflicts(userId, conflictIdsToOverwrite);
+
+            Reminder reminder = createReminder(userId, parsedData, ConfirmStatus.CONFIRMED);
+
+            session.setStatus(SessionStatus.CONFIRMED);
+            session.setStage("REMINDER_EXECUTE");
+            session.setReminderId(reminder.getId());
+            confirmationRepository.save(session);
+
+            String overwrittenTitle = overwrittenTitles.isEmpty() ? null : String.join("、", overwrittenTitles);
+            String successMessage = buildConfirmSuccessMessage(reminder, overwrittenTitle);
+
+            result.put("success", true);
+            result.put("message", successMessage);
+            result.put("reminderId", reminder.getId());
+            if (!overwrittenTitles.isEmpty()) {
+                result.put("overwrittenTitle", overwrittenTitle);
+            }
+
+            log.info("指定ID覆盖成功: sessionId={}, reminderId={}, deletedConflicts={}", sessionId, reminder.getId(), overwrittenTitles.size());
+
+            try {
+                eventPublisher.publishReminderConfirmed(userId, reminder.getId(), reminder.getTitle());
+            } catch (Exception e) {
+                log.error("发布确认事件失败: {}", e.getMessage(), e);
+            }
+
+            return result;
+        } catch (Exception e) {
+            log.error("handleOverwrite(指定ID) 执行失败: sessionId={}, userId={}", sessionId, userId, e);
+            throw e;
+        }
+    }
+
+    private List<Long> getAllConflictIds(Map<String, Object> parsedData) {
+        List<Long> ids = new java.util.ArrayList<>();
+
+        if (parsedData.get("conflictId") != null) {
+            ids.add(Long.valueOf(String.valueOf(parsedData.get("conflictId"))));
+        }
+
+        Object conflictListObj = parsedData.get("conflictList");
+        if (conflictListObj != null) {
+            try {
+                List<?> conflicts;
+                if (conflictListObj instanceof String) {
+                    conflicts = objectMapper.readValue((String) conflictListObj, List.class);
+                } else if (conflictListObj instanceof List) {
+                    conflicts = (List<?>) conflictListObj;
+                } else {
+                    conflicts = List.of();
+                }
+                for (Object c : conflicts) {
+                    if (c instanceof Map) {
+                        Object id = ((Map<?, ?>) c).get("id");
+                        if (id != null) {
+                            ids.add(Long.valueOf(String.valueOf(id)));
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                log.warn("解析冲突列表失败: {}", e.getMessage());
+            }
+        }
+
+        return ids.stream().distinct().toList();
+    }
+
+    private List<String> deleteConflicts(Long userId, List<Long> conflictIds) {
+        List<String> deletedTitles = new java.util.ArrayList<>();
+        if (conflictIds == null || conflictIds.isEmpty()) {
+            return deletedTitles;
+        }
+
+        for (Long conflictId : conflictIds) {
+            Reminder conflictReminder = reminderRepository.findById(conflictId)
+                    .filter(r -> r.getUserId().equals(userId))
+                    .orElse(null);
+            if (conflictReminder != null) {
+                deletedTitles.add(conflictReminder.getTitle());
+                conflictReminder.setStatus(ReminderStatus.CANCELLED);
+                reminderRepository.save(conflictReminder);
+                log.info("删除冲突提醒: reminderId={}, title={}", conflictId, conflictReminder.getTitle());
+            }
+        }
+
+        return deletedTitles;
+    }
+
+    /**
+     * 处理冲突选择
+     * <p>
+     * 用户在冲突卡片上选择处理方式后调用此方法
+     * </p>
+     *
+     * @param userId 用户ID
+     * @param action 操作类型：overwrite/cancel/modify
+     * @param title 新提醒标题
+     * @param remindTime 新提醒时间
+     * @param location 地点（可选）
+     * @param priority 优先级（可选）
+     * @param conflictReminderId 冲突的提醒ID（overwrite时使用）
+     * @param newTime 修改后的新时间（modify时使用）
+     * @return 处理结果
+     */
+    @Transactional
+    public Map<String, Object> handleConflict(Long userId, String action, String title, 
+            String remindTime, String location, String priority, Long conflictReminderId, String newTime) {
+        
+        log.info("处理冲突选择: userId={}, action={}, title={}, remindTime={}", userId, action, title, remindTime);
+        
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            switch (action) {
+                case "overwrite":
+                    // 覆盖：删除冲突提醒，创建新提醒
+                    result = handleOverwrite(userId, title, remindTime, location, priority, conflictReminderId);
+                    break;
+                    
+                case "cancel":
+                    // 取消：不创建新提醒
+                    result.put("success", true);
+                    result.put("message", "已取消创建提醒");
+                    log.info("冲突处理-取消: userId={}, title={}", userId, title);
+                    break;
+                    
+                case "modify":
+                    // 修改时间：使用新时间重新检测并创建确认会话
+                    result = handleModify(userId, title, newTime, location, priority);
+                    break;
+                    
+                default:
+                    result.put("success", false);
+                    result.put("message", "无效的操作类型: " + action);
+                    break;
+            }
+        } catch (Exception e) {
+            log.error("处理冲突失败: userId={}, action={}, error={}", userId, action, e.getMessage(), e);
+            result.put("success", false);
+            result.put("message", "处理冲突失败: " + e.getMessage());
+        }
+        
+        return result;
+    }
+
+    /**
+     * 处理覆盖操作：删除冲突提醒，创建新提醒
+     */
+    private Map<String, Object> handleOverwrite(Long userId, String title, String remindTime,
+            String location, String priority, Long conflictReminderId) {
+        
+        Map<String, Object> result = new HashMap<>();
+        
+        // 删除冲突的提醒
+        if (conflictReminderId != null) {
+            Reminder conflictReminder = reminderRepository.findById(conflictReminderId)
+                    .filter(r -> r.getUserId().equals(userId))
+                    .orElse(null);
+            if (conflictReminder != null) {
+                conflictReminder.setStatus(ReminderStatus.CANCELLED);
+                reminderRepository.save(conflictReminder);
+                log.info("冲突处理-覆盖：删除冲突提醒 reminderId={}", conflictReminderId);
+            }
+        }
+        
+        // 解析时间
+        LocalDateTime parsedTime = parseTimeFlexible(remindTime);
+        
+        // 构建解析数据
+        Map<String, Object> parsedData = new HashMap<>();
+        parsedData.put("title", title);
+        parsedData.put("remindTime", remindTime);
+        parsedData.put("location", location);
+        parsedData.put("priority", priority != null ? priority : "NORMAL");
+        parsedData.put("advanceMinutes", 10);
+        parsedData.put("source", "USER_INPUT");
+        parsedData.put("intentType", "REMINDER");
+        
+        // 创建确认会话
+        ConfirmationCardResponse card = createSession(userId, title, parsedData);
+        
+        result.put("success", true);
+        result.put("message", "已覆盖原有提醒，请确认新提醒");
+        result.put("sessionId", card.getData().getSessionId());
+        result.put("sessionCreated", true);
+        
+        log.info("冲突处理-覆盖成功: userId={}, title={}", userId, title);
+        return result;
+    }
+
+    /**
+     * 处理修改时间操作：使用新时间重新检测
+     */
+    private Map<String, Object> handleModify(Long userId, String title, String newTime,
+            String location, String priority) {
+        
+        Map<String, Object> result = new HashMap<>();
+        
+        if (newTime == null || newTime.isBlank()) {
+            result.put("success", false);
+            result.put("message", "修改时间不能为空");
+            return result;
+        }
+        
+        LocalDateTime parsedTime = parseTimeFlexible(newTime);
+        
+        // 重新检测冲突
+        var conflictResponse = conflictDetectionService.checkConflict(userId, parsedTime, null);
+        if (conflictResponse.isHasConflict()) {
+            // 仍然有冲突
+            String description = conflictDetectionService.getConflictDescription(
+                    conflictResponse.getConflicts(), parsedTime);
+            
+            result.put("success", false);
+            result.put("hasConflict", true);
+            result.put("conflicts", conflictResponse.getConflicts());
+            result.put("suggestedTime", conflictResponse.getSuggestedTime() != null 
+                    ? conflictResponse.getSuggestedTime().format(FORMATTER) : null);
+            result.put("message", description);
+            result.put("title", title);
+            result.put("remindTime", newTime);
+            
+            log.info("冲突处理-修改后仍有冲突: userId={}, title={}, newTime={}", userId, title, newTime);
+            return result;
+        }
+        
+        // 没有冲突，创建确认会话
+        Map<String, Object> parsedData = new HashMap<>();
+        parsedData.put("title", title);
+        parsedData.put("remindTime", newTime);
+        parsedData.put("location", location);
+        parsedData.put("priority", priority != null ? priority : "NORMAL");
+        parsedData.put("advanceMinutes", 10);
+        parsedData.put("source", "USER_INPUT");
+        parsedData.put("intentType", "REMINDER");
+        
+        ConfirmationCardResponse card = createSession(userId, title, parsedData);
+        
+        result.put("success", true);
+        result.put("message", "已修改时间，请确认提醒");
+        result.put("sessionId", card.getData().getSessionId());
+        result.put("sessionCreated", true);
+        result.put("hasConflict", false);
+        
+        log.info("冲突处理-修改时间成功: userId={}, title={}, newTime={}", userId, title, newTime);
+        return result;
+    }
+
     @Transactional
     public ConfirmationCardResponse reparse(String sessionId, Long userId, String newInput, Map<String, Object> newParsedData) {
         ConfirmationSession session = findValidSession(sessionId, userId);
+
+        // 冲突检测（修改时间后重新检测）
+        String remindTimeStr = (String) newParsedData.get("remindTime");
+        if (remindTimeStr != null) {
+            try {
+                LocalDateTime parsedTime = LocalDateTime.parse(remindTimeStr, FORMATTER);
+                ConflictResponse conflictResponse = conflictDetectionService.checkConflict(userId, parsedTime, null);
+                if (conflictResponse.isHasConflict()) {
+                    String description = conflictDetectionService.getConflictDescription(
+                            conflictResponse.getConflicts(), parsedTime);
+                    newParsedData.put("hasConflict", true);
+                    newParsedData.put("conflictMessage", description);
+                    newParsedData.put("conflictList", conflictResponse.getConflicts());
+                    newParsedData.put("suggestedTime", conflictResponse.getSuggestedTime() != null 
+                            ? conflictResponse.getSuggestedTime().format(FORMATTER) : null);
+                    if (conflictResponse.getConflicts() != null && !conflictResponse.getConflicts().isEmpty()) {
+                        newParsedData.put("conflictId", conflictResponse.getConflicts().get(0).getId());
+                    }
+                } else {
+                    newParsedData.put("hasConflict", false);
+                    newParsedData.remove("conflictMessage");
+                    newParsedData.remove("conflictList");
+                    newParsedData.remove("suggestedTime");
+                    newParsedData.remove("conflictId");
+                }
+            } catch (Exception e) {
+                log.warn("reparse冲突检测失败: {}", e.getMessage());
+                newParsedData.put("hasConflict", false);
+            }
+        }
 
         String parsedDataJson;
         try {
@@ -209,7 +661,6 @@ public class ConfirmationService {
         }
 
         LocalDateTime parsedTime = null;
-        String remindTimeStr = (String) newParsedData.get("remindTime");
         if (remindTimeStr != null) {
             parsedTime = parseTimeFlexible(remindTimeStr);
         }
@@ -241,30 +692,37 @@ public class ConfirmationService {
         for (ConfirmationSession session : expired) {
             if ("INFO_CONFIRM".equals(session.getStage())) {
                 try {
-                    // 使用 createReminderFromSessionWithoutPush，不推送 card_confirmed（超时自动确认场景）
-                    Reminder reminder = createReminderFromSessionWithoutPush(session);
+                    Map<String, Object> parsedData = parseParsedData(session.getParsedData());
 
-                    String autoMessage = buildAutoConfirmMessage(reminder);
+                    // 周期提醒：走周期创建流程
+                    if (Boolean.TRUE.equals(parsedData.get("isRecurring"))) {
+                        handleExpiredRecurringSession(session, parsedData);
+                    } else {
+                        // 使用 createReminderFromSessionWithoutPush，不推送 card_confirmed（超时自动确认场景）
+                        Reminder reminder = createReminderFromSessionWithoutPush(session);
 
-                    Map<String, Object> result = new HashMap<>();
-                    result.put("success", true);
-                    result.put("message", autoMessage);
-                    result.put("reminderId", reminder.getId());
-                    result.put("sessionId", session.getSessionId());
-                    result.put("title", reminder.getTitle());
-                    result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+                        String autoMessage = buildAutoConfirmMessage(reminder);
 
-                    // 保留 timeout_auto_create 消息用于向后兼容
-                    pushUserMessage(session.getUserId(), "timeout_auto_create", result);
-                    log.info("阶段一超时自动确认: sessionId={}, userId={}, reminderId={}", 
-                            session.getSessionId(), session.getUserId(), reminder.getId());
+                        Map<String, Object> result = new HashMap<>();
+                        result.put("success", true);
+                        result.put("message", autoMessage);
+                        result.put("reminderId", reminder.getId());
+                        result.put("sessionId", session.getSessionId());
+                        result.put("title", reminder.getTitle());
+                        result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+
+                        // 保留 timeout_auto_create 消息用于向后兼容
+                        pushUserMessage(session.getUserId(), "timeout_auto_create", result);
+                        log.info("阶段一超时自动确认: sessionId={}, userId={}, reminderId={}",
+                                session.getSessionId(), session.getUserId(), reminder.getId());
+                    }
                 } catch (Exception e) {
-                    log.warn("阶段一超时自动确认失败: sessionId={}, error={}", 
+                    log.warn("阶段一超时自动确认失败: sessionId={}, error={}",
                             session.getSessionId(), e.getMessage());
-                    
+
                     session.setStatus(SessionStatus.EXPIRED);
                     confirmationRepository.save(session);
-                    
+
                     Map<String, Object> result = new HashMap<>();
                     result.put("success", false);
                     result.put("message", "⏰ 确认已超时，请重新输入");
@@ -273,7 +731,7 @@ public class ConfirmationService {
             } else {
                 session.setStatus(SessionStatus.EXPIRED);
                 confirmationRepository.save(session);
-                
+
                 Map<String, Object> result = new HashMap<>();
                 result.put("success", false);
                 result.put("message", "⏰ 会话已过期");
@@ -281,6 +739,52 @@ public class ConfirmationService {
                 log.info("会话过期: sessionId={}, userId={}", session.getSessionId(), session.getUserId());
             }
         }
+    }
+
+    /**
+     * 处理周期提醒的超时确认
+     */
+    private void handleExpiredRecurringSession(ConfirmationSession session, Map<String, Object> parsedData) {
+        String title = (String) parsedData.get("title");
+        String remindTime = (String) parsedData.get("recurringRemindTime");
+        if (remindTime == null) {
+            String fullTime = (String) parsedData.get("remindTime");
+            if (fullTime != null && fullTime.length() > 10) {
+                remindTime = fullTime.substring(11);
+            }
+        }
+        String startDate = (String) parsedData.get("startDate");
+        String endDate = (String) parsedData.get("endDate");
+        String repeatType = (String) parsedData.get("repeatType");
+        String location = (String) parsedData.get("location");
+        String priority = (String) parsedData.getOrDefault("priority", "NORMAL");
+
+        Map<String, Object> createResult = recurringReminderService.generateInstancesFromConfirm(
+                session.getUserId(), title, remindTime, startDate, endDate, repeatType, location, priority);
+
+        session.setStatus(SessionStatus.CONFIRMED);
+        session.setStage("REMINDER_EXECUTE");
+        confirmationRepository.save(session);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", createResult.get("success"));
+        result.put("message", "⏰ 15秒未确认，已自动创建周期提醒：" + createResult.get("message"));
+        result.put("sessionId", session.getSessionId());
+        result.put("title", title);
+        result.put("isRecurring", true);
+        result.put("startDate", startDate);
+        result.put("endDate", endDate);
+        result.put("repeatType", repeatType);
+        if (createResult.get("recurringId") != null) {
+            result.put("recurringId", createResult.get("recurringId"));
+        }
+        if (createResult.get("totalDays") != null) {
+            result.put("totalDays", createResult.get("totalDays"));
+        }
+
+        pushUserMessage(session.getUserId(), "timeout_auto_create", result);
+        log.info("周期提醒超时自动确认: sessionId={}, userId={}, recurringId={}",
+                session.getSessionId(), session.getUserId(), createResult.get("recurringId"));
     }
 
     /**
@@ -344,6 +848,9 @@ public class ConfirmationService {
     }
 
     private ConfirmationCardResponse buildConfirmationCard(ConfirmationSession session, Map<String, Object> parsedData) {
+        boolean hasConflict = Boolean.TRUE.equals(parsedData.get("hasConflict"));
+        boolean isRecurring = Boolean.TRUE.equals(parsedData.get("isRecurring"));
+
         ConfirmationData data = ConfirmationData.builder()
                 .sessionId(session.getSessionId())
                 .title((String) parsedData.get("title"))
@@ -352,17 +859,100 @@ public class ConfirmationService {
                 .location((String) parsedData.get("location"))
                 .advanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", 10))
                 .confidence((Double) parsedData.getOrDefault("confidence", 0.95))
+                .hasConflict(hasConflict)
+                .conflictMessage((String) parsedData.get("conflictMessage"))
+                .conflictId(parsedData.get("conflictId") != null ? Long.valueOf(String.valueOf(parsedData.get("conflictId"))) : null)
+                .suggestedTime((String) parsedData.get("suggestedTime"))
                 .build();
 
-        List<Action> actions = Arrays.asList(
-                Action.builder().id("confirm").label("✅ 确认创建").style("primary").build(),
-                Action.builder().id("edit").label("✏️ 修改").style("warning").build(),
-                Action.builder().id("cancel").label("❌ 取消").style("danger").build()
-        );
+        // 周期提醒：显示日期范围和总天数
+        if (isRecurring) {
+            StringBuilder titleBuilder = new StringBuilder();
+            titleBuilder.append("📅 周期提醒：").append(parsedData.get("title"));
+            String repeatType = (String) parsedData.getOrDefault("repeatType", "DAILY");
+            String repeatLabel = switch (repeatType) {
+                case "WEEKLY" -> "每周";
+                case "MONTHLY" -> "每月";
+                default -> "每天";
+            };
+            titleBuilder.append("（").append(repeatLabel).append("）");
+            data.setTitle(titleBuilder.toString());
+
+            // 提取纯时间部分用于显示
+            String recurringRemindTime = (String) parsedData.get("recurringRemindTime");
+            if (recurringRemindTime == null) {
+                String fullTime = (String) parsedData.get("remindTime");
+                if (fullTime != null && fullTime.length() > 10) {
+                    recurringRemindTime = fullTime.substring(11);  // 提取 HH:mm:ss
+                } else {
+                    recurringRemindTime = fullTime;
+                }
+            }
+            // 显示为 "每天 19:00 | 2026-08-03 至 2026-08-09 共7天"
+            StringBuilder timeBuilder = new StringBuilder();
+            if (recurringRemindTime != null) {
+                // 截取 HH:mm 部分
+                String displayTime = recurringRemindTime.length() >= 5 ? recurringRemindTime.substring(0, 5) : recurringRemindTime;
+                timeBuilder.append(repeatLabel).append(" ").append(displayTime);
+            }
+            timeBuilder.append(" | ").append(parsedData.get("startDate"))
+                    .append(" 至 ").append(parsedData.get("endDate"));
+            Integer totalDays = (Integer) parsedData.get("totalDays");
+            if (totalDays != null) {
+                timeBuilder.append(" 共").append(totalDays).append("天");
+            }
+            data.setRemindTime(timeBuilder.toString());
+        }
+
+        // 冲突列表转为 JSON 字符串
+        if (parsedData.get("conflictList") != null) {
+            try {
+                data.setConflictList(objectMapper.writeValueAsString(parsedData.get("conflictList")));
+            } catch (JsonProcessingException e) {
+                data.setConflictList("[]");
+            }
+        }
+
+        List<Action> actions;
+        String message;
+        if (isRecurring) {
+            String repeatType = (String) parsedData.getOrDefault("repeatType", "DAILY");
+            String repeatLabel = switch (repeatType) {
+                case "WEEKLY" -> "每周";
+                case "MONTHLY" -> "每月";
+                default -> "每天";
+            };
+            Integer totalDays = (Integer) parsedData.get("totalDays");
+            message = String.format("📅 我将为你创建「%s」的%s提醒%s，请确认：",
+                    parsedData.get("title"),
+                    repeatLabel,
+                    totalDays != null ? String.format("（共%d天）", totalDays) : "");
+            actions = Arrays.asList(
+                    Action.builder().id("confirm").label("✅ 确认创建").style("primary").build(),
+                    Action.builder().id("edit").label("✏️ 修改").style("warning").build(),
+                    Action.builder().id("cancel").label("❌ 取消").style("danger").build()
+            );
+        } else if (hasConflict) {
+            // 有冲突时：确认（主按钮）+ 覆盖 + 修改 + 取消
+            message = "⚠️ " + parsedData.get("conflictMessage");
+            actions = Arrays.asList(
+                    Action.builder().id("confirm").label("✅ 确认创建").style("primary").build(),
+                    Action.builder().id("overwrite").label("📝 覆盖").style("warning").build(),
+                    Action.builder().id("edit").label("✏️ 修改时间").style("warning").build(),
+                    Action.builder().id("cancel").label("❌ 取消").style("danger").build()
+            );
+        } else {
+            message = "📋 我帮你解析了提醒信息，请确认：";
+            actions = Arrays.asList(
+                    Action.builder().id("confirm").label("✅ 确认创建").style("primary").build(),
+                    Action.builder().id("edit").label("✏️ 修改").style("warning").build(),
+                    Action.builder().id("cancel").label("❌ 取消").style("danger").build()
+            );
+        }
 
         return ConfirmationCardResponse.builder()
                 .type("confirmation_card")
-                .message("📋 我帮你解析了提醒信息，请确认：")
+                .message(message)
                 .data(data)
                 .actions(actions)
                 .timeout(TIMEOUT_SECONDS)
@@ -569,14 +1159,34 @@ public class ConfirmationService {
                     data.put("location", session.getParsedLocation());
                     data.put("priority", session.getParsedPriority());
                     data.put("advanceMinutes", session.getParsedAdvanceMinutes());
+                    // 从 parsedData 中提取建议时间
+                    Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+                    data.put("suggestedTime", parsedData.get("suggestedTime"));
+                    data.put("hasConflict", parsedData.get("hasConflict"));
+                    data.put("conflictMessage", parsedData.get("conflictMessage"));
+                    data.put("conflictList", parsedData.get("conflictList"));
+                    // 周期提醒字段
+                    data.put("isRecurring", parsedData.get("isRecurring"));
+                    data.put("startDate", parsedData.get("startDate"));
+                    data.put("endDate", parsedData.get("endDate"));
+                    data.put("repeatType", parsedData.get("repeatType"));
+                    data.put("recurringRemindTime", parsedData.get("recurringRemindTime"));
                     return data;
                 })
                 .orElse(new HashMap<>());
     }
 
     private String buildConfirmSuccessMessage(Reminder reminder) {
+        return buildConfirmSuccessMessage(reminder, null);
+    }
+
+    private String buildConfirmSuccessMessage(Reminder reminder, String overwrittenTitle) {
         String title = reminder.getTitle();
         String remindTime = reminder.getRemindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+        if (overwrittenTitle != null && !overwrittenTitle.isBlank()) {
+            return "✅ 已覆盖「" + overwrittenTitle + "」，新提醒\"" + title + "\"已创建\n" +
+                   "⏰ 我将在 " + remindTime + " 提醒您";
+        }
         return "✅ 已创建提醒：\"" + title + "\"，" + remindTime + " 执行\n" +
                "⏰ 我将在 " + remindTime + " 提醒您" + title;
     }
