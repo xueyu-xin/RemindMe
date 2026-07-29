@@ -29,5 +29,7 @@ public class ConflictResponse {
         private String title;
         @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
         private LocalDateTime remindTime;
+        @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
+        private LocalDateTime endTime;
     }
 }

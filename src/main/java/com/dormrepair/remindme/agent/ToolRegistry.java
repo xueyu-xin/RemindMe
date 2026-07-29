@@ -189,6 +189,7 @@ public class ToolRegistry implements SmartInitializingSingleton {
             "userId", "用户ID（系统自动填充）",
             "title", "提醒事项的标题（必填）",
             "remindTime", "提醒时间，格式为 yyyy-MM-dd HH:mm:ss（必填）",
+            "endTime", "结束时间，格式为 yyyy-MM-dd HH:mm:ss（可选，用于时间段提醒，如'下午3点到5点开会'时传入结束时间）",
             "location", "提醒地点（可选）",
             "priority", "优先级，可选值 LOW/NORMAL/HIGH（默认NORMAL）"
         ));
@@ -201,6 +202,7 @@ public class ToolRegistry implements SmartInitializingSingleton {
             "reminderId", "提醒ID（必填），调用前必须先用 query_reminders 查到匹配的提醒，取其 reminderId 传进来，不能硬编码 ID=1、2、3",
             "title", "标题（可选）",
             "remindTime", "提醒时间，格式为 yyyy-MM-dd HH:mm:ss（可选）",
+            "endTime", "结束时间，格式为 yyyy-MM-dd HH:mm:ss（可选，用于时间段提醒）",
             "location", "地点（可选）"
         ));
         paramDescriptions.put("cancelReminderForAgent", Map.of(

@@ -7,6 +7,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.util.List;
+import java.util.Map;
 
 @Data
 @Builder
@@ -33,6 +34,7 @@ public class ConfirmationCardResponse {
         private String sessionId;
         private String title;
         private String remindTime;
+        private String endTime;
         private String priority;
         private String location;
         private Integer advanceMinutes;
@@ -60,10 +62,23 @@ public class ConfirmationCardResponse {
         private String sourceFile;
         /** 总日程数 */
         private Integer totalCount;
+        /** 导入ID（课表场景） */
+        private String importId;
         /** 成功创建数（结果反馈） */
         private Integer successCount;
         /** 失败数（结果反馈） */
         private Integer failedCount;
+
+        // ===== 课表场景专用字段 =====
+
+        /** 时间节次列表（课表场景） */
+        private List<Map<String, Object>> timeSections;
+        /** 学期开始日期（课表场景） */
+        private String semesterStartDate;
+        /** 学期总周数（课表场景） */
+        private Integer totalWeeks;
+        /** AI 建议的学期周数（课表场景） */
+        private Integer suggestedWeeks;
     }
 
     @Data

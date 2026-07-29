@@ -215,6 +215,7 @@ public class CalendarController {
                             r.getId(),
                             r.getTitle(),
                             r.getRemindTime().toString(),
+                            r.getEndTime() != null ? r.getEndTime().toString() : null,
                             r.getPriority().name(),
                             r.getStatus().name(),
                             r.getConfirmStatus().name(),

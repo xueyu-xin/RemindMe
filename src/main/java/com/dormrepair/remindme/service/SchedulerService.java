@@ -53,6 +53,12 @@ public class SchedulerService {
     public void scanPendingReminders() {
         log.debug("扫描到期提醒...");
 
+        // 扫描逻辑说明：
+        // - 单点提醒（endTime 为 null）：在 remindTime 时推送通知
+        // - 时间段提醒（endTime 不为 null）：也在 remindTime（开始时间）时推送通知
+        //   用户收到通知后，可以看到这是一个时间段提醒，并知道活动的结束时间
+        // - 两种提醒的推送时机相同，都是基于 remindTime，因此现有逻辑无需特殊处理
+
         List<Reminder> pendingReminders = reminderRepository
                 .findByStatusAndConfirmStatusAndExecutionStatusAndRemindTimeBefore(
                         ReminderStatus.PENDING,

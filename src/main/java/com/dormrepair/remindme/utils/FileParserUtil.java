@@ -82,7 +82,7 @@ public final class FileParserUtil {
 
                     for (int cellIdx = 0; cellIdx < row.getLastCellNum(); cellIdx++) {
                         if (cellIdx > 0) {
-                            rowBuilder.append("\t");
+                            rowBuilder.append("|");
                         }
                         Cell cell = row.getCell(cellIdx, Row.MissingCellPolicy.CREATE_NULL_AS_BLANK);
                         String value = getCellValueAsString(cell);
@@ -98,8 +98,15 @@ public final class FileParserUtil {
                 }
             }
 
+            String result = sb.toString();
+
+            // 检测是否为课表格式，保留原始表格结构不进行额外转换
+            if (isScheduleFormat(result)) {
+                log.info("检测到课表格式，保留原始表格结构：{}", file.getOriginalFilename());
+            }
+
             log.info("Excel 解析成功：{}", file.getOriginalFilename());
-            return sb.toString();
+            return result;
         } catch (Exception e) {
             log.error("Excel 解析失败：{}", file.getOriginalFilename(), e);
             throw new RuntimeException("Excel 解析失败：" + e.getMessage(), e);
@@ -189,5 +196,21 @@ public final class FileParserUtil {
             default:
                 return "";
         }
+    }
+
+    /**
+     * 检测解析后的文本是否包含课表特征
+     */
+    private static boolean isScheduleFormat(String content) {
+        if (content == null || content.trim().isEmpty()) return false;
+        String[] scheduleKeywords = {"时间/节次", "周一", "周二", "周三", "周四", "周五",
+                "第1节", "第2节", "第3节", "08:00", "08:50", "09:50"};
+        int matchCount = 0;
+        for (String kw : scheduleKeywords) {
+            if (content.contains(kw)) {
+                matchCount++;
+            }
+        }
+        return matchCount >= 2;
     }
 }

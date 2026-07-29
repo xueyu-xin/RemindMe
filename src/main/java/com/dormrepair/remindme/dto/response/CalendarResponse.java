@@ -43,6 +43,7 @@ public class CalendarResponse {
         private Long id;
         private String title;
         private String remindTime;
+        private String endTime;
         private String priority;
         private String status;
         private String confirmStatus;

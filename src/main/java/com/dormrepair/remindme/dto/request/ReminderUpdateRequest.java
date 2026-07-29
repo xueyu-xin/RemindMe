@@ -18,6 +18,9 @@ public class ReminderUpdateRequest {
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
     private LocalDateTime remindTime;
 
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
+    private LocalDateTime endTime;
+
     private String timezone;
 
     private Integer advanceMinutes;

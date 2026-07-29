@@ -42,6 +42,9 @@ public class ConfirmationSession {
     @Column(name = "parsed_time")
     private LocalDateTime parsedTime;
 
+    @Column(name = "parsed_end_time")
+    private LocalDateTime parsedEndTime;
+
     @Column(name = "parsed_location", length = 200)
     private String parsedLocation;
 

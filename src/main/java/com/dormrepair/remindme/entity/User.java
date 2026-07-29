@@ -67,6 +67,9 @@ public class User {
     @Column(name = "last_period_start")
     private LocalDate lastPeriodStart;
 
+    @Column(name = "semester_start_date")
+    private LocalDate semesterStartDate;
+
     @Column(name = "period_duration", nullable = false)
     private Integer periodDuration = 5;
 
