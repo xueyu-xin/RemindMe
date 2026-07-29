@@ -324,7 +324,25 @@
             font-size: 12px;
             white-space: nowrap;
         }
-        #confirmationContainer { flex-shrink: 0; }
+        #confirmationContainer {
+            flex-shrink: 0;
+            max-height: 70vh;
+            overflow-y: auto;
+            padding-right: 8px;
+        }
+        #confirmationContainer::-webkit-scrollbar {
+            width: 6px;
+        }
+        #confirmationContainer::-webkit-scrollbar-thumb {
+            background: var(--peach-pale);
+            border-radius: 3px;
+        }
+        #confirmationContainer::-webkit-scrollbar-thumb:hover {
+            background: var(--peach);
+        }
+        #confirmationContainer::-webkit-scrollbar-track {
+            background: transparent;
+        }
         .prompt-bar { flex-shrink: 0; }
         .chat-history {
             flex: 1;
@@ -1002,17 +1020,31 @@
             transition: all 0.25s ease;
             line-height: 1.5;
             background: var(--cream-card);
+            color: var(--brown-deep) !important;
+            -webkit-text-fill-color: var(--brown-deep) !important;
             letter-spacing: 0.5px;
         }
         .confirmation-card .action-btn.primary {
             background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
-            color: #FFFFFF;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
             border-color: transparent;
             box-shadow: 0 4px 12px rgba(255, 159, 122, 0.35);
         }
         .confirmation-card .action-btn.primary:hover {
             transform: translateY(-2px);
             box-shadow: 0 8px 20px rgba(255, 159, 122, 0.45);
+        }
+        .confirmation-card .action-btn.secondary {
+            background: var(--cream-bg) !important;
+            color: var(--brown-deep) !important;
+            -webkit-text-fill-color: var(--brown-deep) !important;
+            border-color: var(--peach-pale) !important;
+        }
+        .confirmation-card .action-btn.secondary:hover {
+            background: var(--peach-pale) !important;
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-soft);
         }
         .confirmation-card .action-btn.success {
             background: linear-gradient(135deg, #4CAF50 0%, #66BB6A 100%);
@@ -1159,6 +1191,249 @@
             margin-top: 8px;
             padding-top: 8px;
             border-top: 1px dashed #FFE4B5;
+        }
+
+        /* ===== 课表确认卡片 ===== */
+        .schedule-table-card .course-list,
+        .time-config-card .time-slots-container {
+            max-height: 250px;
+            overflow-y: auto;
+            margin-bottom: 14px;
+        }
+        .schedule-table-card .course-list::-webkit-scrollbar,
+        .time-config-card .time-slots-container::-webkit-scrollbar {
+            width: 5px;
+        }
+        .schedule-table-card .course-list::-webkit-scrollbar-thumb,
+        .time-config-card .time-slots-container::-webkit-scrollbar-thumb {
+            background: var(--peach-pale);
+            border-radius: 3px;
+        }
+        .schedule-table-card .course-list-header {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--brown-deep);
+            margin-bottom: 10px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--peach-pale);
+        }
+        .schedule-table-card .course-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            margin-bottom: 6px;
+            background: var(--cream-bg);
+            border-radius: 8px;
+            font-size: 13px;
+        }
+        .schedule-table-card .course-index {
+            color: var(--brown-light);
+            flex-shrink: 0;
+            width: 24px;
+        }
+        .schedule-table-card .course-title {
+            color: var(--brown-deep);
+            font-weight: 500;
+            flex: 1;
+        }
+        .schedule-table-card .course-info {
+            color: var(--brown-mid);
+            font-size: 12px;
+        }
+
+        /* ===== 时间配置卡片 ===== */
+        .time-config-card .info-item {
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .time-config-card .date-input {
+            padding: 6px 10px;
+            border: 2px solid var(--peach-pale);
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            background: var(--cream-bg);
+            color: var(--brown-deep);
+        }
+        .time-config-card .link-mode-group {
+            margin-bottom: 14px;
+        }
+        .time-config-card .link-mode-label {
+            font-size: 13px;
+            color: var(--brown-mid);
+            margin-bottom: 8px;
+        }
+        .time-config-card .link-mode-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+        .time-config-card .link-mode-btn {
+            padding: 6px 12px;
+            border: 2px solid var(--peach-pale);
+            border-radius: 8px;
+            background: var(--cream-card);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.2s;
+            color: var(--brown-deep);
+        }
+        .time-config-card .link-mode-btn:hover {
+            background: var(--peach-pale);
+            color: var(--brown-deep);
+        }
+        .time-config-card .link-mode-btn.active {
+            background: var(--peach);
+            color: #FFFFFF;
+            border-color: var(--peach);
+        }
+        .time-config-card .time-slots-header {
+            display: flex;
+            align-items: center;
+            padding: 8px 10px;
+            background: var(--peach-pale);
+            border-radius: 8px 8px 0 0;
+            font-size: 12px;
+            color: var(--brown-deep);
+            font-weight: 600;
+        }
+        .time-config-card .time-slots-header span:first-child {
+            width: 60px;
+        }
+        .time-config-card .time-slots-header span {
+            flex: 1;
+            text-align: center;
+        }
+        .time-config-card .time-slot-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--peach-pale);
+            font-size: 13px;
+            color: var(--brown-deep);
+        }
+        .time-config-card .time-slot-row:last-child {
+            border-bottom: none;
+        }
+        .time-config-card .slot-index {
+            width: 60px;
+            color: var(--brown-mid);
+            font-size: 12px;
+        }
+        .time-config-card .slot-start,
+        .time-config-card .slot-end {
+            flex: 1;
+            padding: 4px 8px;
+            border: 1px solid var(--peach-pale);
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 13px;
+            text-align: center;
+            background: var(--cream-bg);
+            color: var(--brown-deep);
+            -webkit-text-fill-color: var(--brown-deep);
+        }
+        .time-config-card .slot-start::-webkit-calendar-picker-indicator,
+        .time-config-card .slot-end::-webkit-calendar-picker-indicator {
+            cursor: pointer;
+            opacity: 0.7;
+        }
+        .time-config-card .inference-result {
+            margin-top: 12px;
+            padding: 10px;
+            background: var(--cream-bg);
+            border-radius: 8px;
+            font-size: 13px;
+            color: var(--brown-mid);
+        }
+
+        /* ===== 手动创建卡片 ===== */
+        .manual-create-card .info-item {
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .manual-create-card .date-input {
+            padding: 6px 10px;
+            border: 2px solid var(--peach-pale);
+            border-radius: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            background: var(--cream-bg);
+            color: var(--brown-deep);
+        }
+        .manual-course-list {
+            max-height: 300px;
+            overflow-y: auto;
+            margin-bottom: 12px;
+        }
+        .manual-course-list::-webkit-scrollbar {
+            width: 5px;
+        }
+        .manual-course-list::-webkit-scrollbar-thumb {
+            background: var(--peach-pale);
+            border-radius: 3px;
+        }
+        .manual-course-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            padding: 8px;
+            margin-bottom: 8px;
+            background: var(--cream-bg);
+            border-radius: 8px;
+            border: 1px solid var(--peach-pale);
+            align-items: center;
+        }
+        .manual-course-row input,
+        .manual-course-row select {
+            padding: 4px 8px;
+            border: 1px solid var(--peach-pale);
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 12px;
+            background: white;
+            min-width: 0;
+        }
+        .manual-course-row .course-name-input {
+            width: 120px;
+        }
+        .manual-course-row .day-of-week-select {
+            width: 90px;
+        }
+        .manual-course-row .section-range-input {
+            width: 80px;
+        }
+        .manual-course-row .week-range-input {
+            width: 90px;
+        }
+        .manual-course-row .odd-even-select {
+            width: 80px;
+        }
+        .manual-course-row .location-input,
+        .manual-course-row .teacher-input {
+            width: 100px;
+        }
+        .manual-course-row .remove-row-btn {
+            width: 28px;
+            height: 28px;
+            border: 1px solid var(--danger);
+            border-radius: 6px;
+            background: #FFF5F5;
+            color: var(--danger);
+            cursor: pointer;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+        .manual-course-row .remove-row-btn:hover {
+            background: var(--danger);
+            color: white;
+        }
+
+        /* ===== 预览卡片 ===== */
+        .preview-card .info-item {
+            justify-content: space-between;
         }
 
         @keyframes timerBlink {
@@ -1906,6 +2181,707 @@
                 
                 container.innerHTML = html;
             }
+            
+            if (card.type === 'schedule_table_confirm') {
+                var container = document.getElementById('confirmationContainer');
+                var importId = (card.data && card.data.importId) ? card.data.importId : '';
+                var totalCount = (card.data && card.data.totalCount) ? card.data.totalCount : 0;
+                var html = '<div class="confirmation-card schedule-table-card" id="confirmationCard" data-import-id="' + importId + '">';
+                html += '<div class="card-title">' + (card.message || '📚 课表识别完成') + '</div>';
+                
+                // 课程列表
+                if (card.data && card.data.items && card.data.items.length > 0) {
+                    html += '<div class="course-list">';
+                    html += '<div class="course-list-header"><span>📖 识别到 ' + totalCount + ' 门课程</span></div>';
+                    card.data.items.forEach(function(item, idx) {
+                        html += '<div class="course-item">';
+                        html += '<span class="course-index">' + (idx + 1) + '.</span>';
+                        html += '<span class="course-title">' + (item.title || '未知课程') + '</span>';
+                        if (item.time) html += '<span class="course-info">' + item.time + '</span>';
+                        if (item.location) html += '<span class="course-info">📍' + item.location + '</span>';
+                        html += '</div>';
+                    });
+                    html += '</div>';
+                }
+
+                // 推断的时间表
+                if (card.data && card.data.timeSections && card.data.timeSections.length > 0) {
+                    html += '<div style="margin-bottom:14px;">';
+                    html += '<div style="font-size:14px;color:var(--brown-mid);margin-bottom:8px;">⏰ 推断的课程时间表</div>';
+                    html += '<div style="background:var(--cream-bg);border-radius:12px;padding:12px;">';
+                    card.data.timeSections.forEach(function(ts) {
+                        if (ts.startTime && ts.endTime) {
+                            html += '<div style="display:flex;align-items:center;gap:12px;padding:3px 0;font-size:13px;border-bottom:1px solid var(--peach-pale);">';
+                            html += '<span style="width:50px;color:var(--brown-mid);font-weight:bold;">第' + ts.index + '节</span>';
+                            html += '<span style="color:var(--brown-deep);">' + ts.startTime + ' - ' + ts.endTime + '</span>';
+                            html += '</div>';
+                        }
+                    });
+                    html += '</div></div>';
+                } else {
+                    html += '<div style="font-size:13px;color:var(--brown-light);padding:8px 0;">⏰ 暂无时间表，请点击"手动调整"配置</div>';
+                }
+
+                // 学期开始日期
+                if (card.data && card.data.semesterStartDate) {
+                    html += '<div class="info-item"><span class="info-label">学期开始</span><span class="info-value">' + card.data.semesterStartDate + '</span></div>';
+                }
+
+                // 学期总周数
+                if (card.data && card.data.totalWeeks) {
+                    html += '<div class="info-item"><span class="info-label">学期周数</span><span class="info-value">' + card.data.totalWeeks + ' 周</span></div>';
+                }
+                
+                html += '<div class="card-actions">';
+                html += '<button class="action-btn primary" onclick="handleScheduleConfirm(\'' + importId + '\', \'confirm\')">✅ 确认生成</button>';
+                html += '<button class="action-btn secondary" onclick="handleScheduleConfirm(\'' + importId + '\', \'adjust\')">✏️ 手动调整</button>';
+                html += '<button class="action-btn danger" onclick="handleScheduleConfirm(\'' + importId + '\', \'cancel\')">❌ 取消</button>';
+                html += '</div>';
+                html += '</div>';
+                container.innerHTML = html;
+            }
+            
+            if (card.type === 'time_config_card') {
+                var container = document.getElementById('confirmationContainer');
+                var importId = (card.data && card.data.importId) ? card.data.importId : '';
+                var html = '<div class="confirmation-card time-config-card" id="confirmationCard" data-import-id="' + importId + '">';
+                html += '<div class="card-title">⏰ 课程时间配置</div>';
+                
+                html += '<div class="info-item"><span class="info-label">学期开始日期</span>';
+                html += '<input type="date" class="date-input" id="semesterStartDate" value="' + (card.data && card.data.semesterStartDate ? card.data.semesterStartDate : '') + '">';
+                html += '</div>';
+
+                html += '<div class="info-item"><span class="info-label">学期总周数</span>';
+                html += '<div style="display:flex;align-items:center;gap:10px;">';
+                html += '<input type="number" id="configTotalWeeks" value="' + (card.data && card.data.totalWeeks ? card.data.totalWeeks : 16) + '" min="1" max="30" style="width:80px;padding:6px 10px;border:2px solid var(--brown-pale);border-radius:8px;font-size:14px;">';
+                html += '<span style="font-size:13px;color:var(--brown-light);">周</span>';
+                if (card.data && card.data.suggestedWeeks) {
+                    html += '<span style="font-size:12px;color:var(--brown-light);margin-left:4px;">（建议 ' + card.data.suggestedWeeks + ' 周）</span>';
+                }
+                html += '</div></div>';
+                
+                html += '<div class="link-mode-group">';
+                html += '<div class="link-mode-label">联动模式：</div>';
+                html += '<div class="link-mode-buttons">';
+                html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'TOP_DOWN\')">⬇️ 向下联动</button>';
+                html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'BOTTOM_UP\')">⬆️ 向上联动</button>';
+                html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'BOTH\')">⬅️➡️ 双向联动</button>';
+                html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'NONE\')">❌ 互不影响</button>';
+                html += '</div>';
+                html += '</div>';
+                
+                html += '<div class="time-slots-container">';
+                html += '<div class="time-slots-header"><span>节次</span><span>开始时间</span><span>结束时间</span></div>';
+                if (card.data && card.data.timeSections) {
+                    card.data.timeSections.forEach(function(ts) {
+                        html += '<div class="time-slot-row" data-index="' + ts.index + '">';
+                        html += '<span class="slot-index">第' + ts.index + '节</span>';
+                        html += '<input type="time" class="slot-start" value="' + (ts.startTime || '') + '" onchange="onTimeSlotChange(this, \'start\')">';
+                        html += '<input type="time" class="slot-end" value="' + (ts.endTime || '') + '" onchange="onTimeSlotChange(this, \'end\')">';
+                        html += '</div>';
+                    });
+                }
+                html += '</div>';
+                
+                html += '<div class="inference-result" id="inferenceResult"></div>';
+                
+                html += '<div class="card-actions">';
+                html += '<button class="action-btn primary" onclick="submitTimeConfig(\'' + importId + '\')">✅ 确认配置</button>';
+                html += '<button class="action-btn danger" onclick="handleScheduleConfirm(\'' + importId + '\', \'cancel\')">❌ 取消</button>';
+                html += '</div>';
+                html += '</div>';
+                container.innerHTML = html;
+                // 初始推理
+                inferTimeSlots();
+            }
+            
+            if (card.type === 'manual_create_card') {
+                var container = document.getElementById('confirmationContainer');
+                var importId = (card.data && card.data.importId) ? card.data.importId : '';
+                var html = '<div class="confirmation-card manual-create-card" id="confirmationCard" data-import-id="' + importId + '">';
+                html += '<div class="card-title">✏️ 手动创建课程</div>';
+                
+                html += '<div class="info-item"><span class="info-label">学期开始日期</span>';
+                html += '<input type="date" class="date-input" id="manualSemesterStart" value="' + (card.data && card.data.semesterStartDate ? card.data.semesterStartDate : '') + '">';
+                html += '</div>';
+
+                html += '<div class="info-item"><span class="info-label">学期总周数</span>';
+                html += '<div style="display:flex;align-items:center;gap:10px;">';
+                html += '<input type="number" id="manualTotalWeeks" value="' + (card.data && card.data.totalWeeks ? card.data.totalWeeks : 16) + '" min="1" max="30" style="width:80px;padding:6px 10px;border:2px solid var(--brown-pale);border-radius:8px;font-size:14px;">';
+                html += '<span style="font-size:13px;color:var(--brown-light);">周</span>';
+                html += '</div></div>';
+                
+                html += '<div class="manual-course-list" id="manualCourseList"></div>';
+                
+                html += '<button class="action-btn secondary" onclick="addManualCourseRow()">➕ 添加课程</button>';
+                
+                html += '<div class="card-actions">';
+                html += '<button class="action-btn primary" onclick="submitManualCourses(\'' + importId + '\')">📚 生成日程</button>';
+                html += '<button class="action-btn danger" onclick="handleScheduleConfirm(\'' + importId + '\', \'cancel\')">❌ 取消</button>';
+                html += '</div>';
+                html += '</div>';
+                container.innerHTML = html;
+                // 初始添加一行
+                addManualCourseRow();
+            }
+        }
+
+        // ===== 课表相关函数 =====
+        
+        var currentLinkMode = 'NONE';
+        var manualCourseRowCount = 0;
+
+        function getImportIdFromCard() {
+            var card = document.getElementById('confirmationCard');
+            if (card) {
+                var importId = card.getAttribute('data-import-id');
+                if (importId && importId !== 'undefined' && importId !== 'null' && importId !== '') return importId;
+                if (card.dataset && card.dataset.importId) return card.dataset.importId;
+            }
+            // 尝试从容器中查找
+            var container = document.getElementById('confirmationContainer');
+            if (container) {
+                var innerCard = container.querySelector('[data-import-id]');
+                if (innerCard) {
+                    var id = innerCard.getAttribute('data-import-id');
+                    if (id && id !== 'undefined' && id !== 'null' && id !== '') return id;
+                }
+            }
+            // 尝试从 originalConfirmationCard 中获取
+            if (typeof originalConfirmationCard !== 'undefined' && originalConfirmationCard && originalConfirmationCard.data) {
+                if (originalConfirmationCard.data.importId) return originalConfirmationCard.data.importId;
+                if (originalConfirmationCard.data.sessionId) return originalConfirmationCard.data.sessionId;
+            }
+            console.warn('⚠️ 无法获取 importId');
+            return null;
+        }
+
+        function handleScheduleConfirm(importId, action) {
+            if (action === 'cancel') {
+                var container = document.getElementById('confirmationContainer');
+                if (container) container.innerHTML = '';
+                return;
+            }
+            
+            var headers = { 'Content-Type': 'application/json' };
+            var token = localStorage.getItem('token');
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+            var userId = localStorage.getItem('userId');
+
+            if (action === 'confirm') {
+                fetch('/api/schedule/confirm-ai?importId=' + importId + '&userId=' + userId, {
+                    method: 'POST',
+                    headers: headers
+                })
+                .then(function(res) { return res.json(); })
+                .then(function(result) {
+                    if (result.success) {
+                        showSchedulePreview(result);
+                    } else {
+                        addMessage('bot', '❌ ' + result.message);
+                    }
+                })
+                .catch(function(err) {
+                    addMessage('bot', '❌ 请求失败: ' + err.message);
+                });
+            } else if (action === 'adjust') {
+                fetch('/api/schedule/get-time-config?importId=' + importId + '&userId=' + userId, {
+                    headers: headers
+                })
+                .then(function(res) { return res.json(); })
+                .then(function(result) {
+                    if (result.success) {
+                        showConfirmationCard({
+                            type: 'time_config_card',
+                            message: '⏰ 配置课程时间',
+                            data: result.data || {}
+                        });
+                    } else {
+                        addMessage('bot', '❌ ' + result.message);
+                    }
+                })
+                .catch(function(err) {
+                    addMessage('bot', '❌ 请求失败: ' + err.message);
+                });
+            }
+        }
+
+        function getTimeSlotsFromUI() {
+            var slots = [];
+            var rows = document.querySelectorAll('.time-slot-row');
+            rows.forEach(function(row) {
+                var index = parseInt(row.getAttribute('data-index'));
+                var startInput = row.querySelector('.slot-start');
+                var endInput = row.querySelector('.slot-end');
+                slots.push({
+                    index: index,
+                    startTime: startInput ? startInput.value : '',
+                    endTime: endInput ? endInput.value : '',
+                    _userFilled: row.dataset.userFilled === 'true'
+                });
+            });
+            return slots;
+        }
+
+        function updateTimeSlotsUI(slots) {
+            slots.forEach(function(slot) {
+                var row = document.querySelector('.time-slot-row[data-index="' + slot.index + '"]');
+                if (row) {
+                    var startInput = row.querySelector('.slot-start');
+                    var endInput = row.querySelector('.slot-end');
+                    if (startInput) startInput.value = slot.startTime || '';
+                    if (endInput) endInput.value = slot.endTime || '';
+                    if (slot._userFilled) row.dataset.userFilled = 'true';
+                }
+            });
+            inferTimeSlots();
+        }
+
+        function selectLinkMode(el, mode) {
+            currentLinkMode = mode;
+            var buttons = document.querySelectorAll('.link-mode-btn');
+            buttons.forEach(function(btn) {
+                btn.classList.remove('active');
+            });
+            el.classList.add('active');
+            inferTimeSlots();
+        }
+
+        function onTimeSlotChange(input, field) {
+            var row = input.closest('.time-slot-row');
+            var index = parseInt(row.dataset.index);
+            var slots = getTimeSlotsFromUI();
+            var idx = slots.findIndex(function(s) { return s.index === index; });
+            if (idx < 0) return;
+
+            var current = slots[idx];
+
+            current._userFilled = true;
+
+            function getFirstClassDuration(slotList) {
+                var first = slotList.find(function(s) {
+                    return s.startTime && s.endTime && s.startTime.length > 0 && s.endTime.length > 0;
+                });
+                if (first) {
+                    var dur = calculateDuration(first.startTime, first.endTime);
+                    return (dur > 0) ? dur : 45;
+                }
+                return 45;
+            }
+
+            var classDuration = getFirstClassDuration(slots);
+
+            if (field === 'start') {
+                current.endTime = addMinutes(current.startTime, classDuration);
+            }
+
+            if (field === 'end') {
+                var newDuration = calculateDuration(current.startTime, current.endTime);
+                if (newDuration > 0) {
+                    classDuration = newDuration;
+                }
+            }
+
+            // === 检查并修正：确保当前节的结束时间在下一节的开始时间之前 ===
+            for (var i = idx + 1; i < slots.length; i++) {
+                var target = slots[i];
+                var prev = slots[i - 1];
+
+                if (target._userFilled) {
+                    continue;
+                }
+
+                if (!target.startTime || target.startTime.length === 0) {
+                    continue;
+                }
+
+                if (prev && prev.endTime && prev.endTime.length > 0) {
+                    var gap = calculateDuration(prev.endTime, target.startTime);
+                    if (gap < 0) {
+                        var breakTime = getDefaultBreakTime(slots, i);
+                        var newStart = addMinutes(prev.endTime, breakTime);
+                        target.startTime = newStart;
+                        target.endTime = addMinutes(target.startTime, classDuration);
+                    }
+                }
+            }
+
+            // === 向下联动：更新所有后续节次 ===
+            for (var i = idx + 1; i < slots.length; i++) {
+                var target = slots[i];
+                var prev = slots[i - 1];
+
+                if (target._userFilled) {
+                    continue;
+                }
+
+                if (!target.startTime || target.startTime.length === 0) {
+                    continue;
+                }
+
+                var breakTime = 10;
+                if (prev && prev.endTime && prev.endTime.length > 0) {
+                    var calc = calculateDuration(prev.endTime, target.startTime);
+                    if (calc > 0 && calc < 120) {
+                        breakTime = calc;
+                    }
+                }
+
+                target.endTime = addMinutes(target.startTime, classDuration);
+            }
+
+            // === 再次检查，确保所有节次时间合法 ===
+            slots = validateAllSlots(slots, classDuration);
+
+            updateTimeSlotsUI(slots);
+            inferTimeSlots();
+        }
+
+        function getDefaultBreakTime(slots, index) {
+            var prev = slots[index - 1];
+            var next = slots[index];
+            if (prev && prev.endTime && next && next.startTime) {
+                var gap = calculateDuration(prev.endTime, next.startTime);
+                if (gap > 0 && gap < 120) {
+                    return gap;
+                }
+            }
+            var breaks = [];
+            for (var i = 0; i < slots.length - 1; i++) {
+                var a = slots[i];
+                var b = slots[i + 1];
+                if (a.endTime && a.endTime.length > 0 && b.startTime && b.startTime.length > 0) {
+                    var g = calculateDuration(a.endTime, b.startTime);
+                    if (g > 0 && g < 120) {
+                        breaks.push(g);
+                    }
+                }
+            }
+            var mostCommon = getMostCommon(breaks);
+            return (mostCommon && mostCommon > 0) ? mostCommon : 10;
+        }
+
+        function validateAllSlots(slots, classDuration) {
+            for (var i = 1; i < slots.length; i++) {
+                var prev = slots[i - 1];
+                var current = slots[i];
+
+                if (!prev.endTime || prev.endTime.length === 0) continue;
+                if (!current.startTime || current.startTime.length === 0) continue;
+
+                var gap = calculateDuration(prev.endTime, current.startTime);
+                if (gap < 0) {
+                    var breakTime = 10;
+                    if (current._userFilled) {
+                        if (!prev._userFilled) {
+                            prev.endTime = subtractMinutes(current.startTime, 10);
+                        }
+                    } else {
+                        var newStart = addMinutes(prev.endTime, 10);
+                        current.startTime = newStart;
+                        if (current.endTime && current.endTime.length > 0) {
+                            var dur = calculateDuration(current.startTime, current.endTime);
+                            if (dur < 0) {
+                                current.endTime = addMinutes(current.startTime, classDuration);
+                            }
+                        }
+                    }
+                }
+            }
+            return slots;
+        }
+
+        function subtractMinutes(time, minutes) {
+            if (!time) return '';
+            return addMinutes(time, -minutes);
+        }
+
+        function parseTimeToMinutes(timeStr) {
+            if (!timeStr) return 0;
+            var parts = timeStr.split(':');
+            return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+        }
+
+        function minutesToTime(minutes) {
+            var h = Math.floor(minutes / 60) % 24;
+            var m = minutes % 60;
+            return String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
+        }
+
+        function calculateDuration(start, end) {
+            if (!start || !end) return 45;
+            var diff = parseTimeToMinutes(end) - parseTimeToMinutes(start);
+            return diff > 0 ? diff : 45;
+        }
+
+        function getMostCommon(arr) {
+            if (!arr || arr.length === 0) return null;
+            var map = {};
+            arr.forEach(function(v) {
+                if (v > 0) {
+                    map[v] = (map[v] || 0) + 1;
+                }
+            });
+            var maxCount = 0;
+            var maxVal = null;
+            for (var key in map) {
+                if (map[key] > maxCount) {
+                    maxCount = map[key];
+                    maxVal = parseInt(key);
+                }
+            }
+            return maxVal;
+        }
+
+        function addMinutes(time, minutes) {
+            if (!time || !minutes) return time;
+            var parts = time.split(':').map(Number);
+            var total = parts[0] * 60 + parts[1] + minutes;
+            var h = String(Math.floor(total / 60)).padStart(2, '0');
+            var m = String(total % 60).padStart(2, '0');
+            return h + ':' + m;
+        }
+
+        function inferTimeSlots() {
+            var slots = getTimeSlotsFromUI();
+            var resultEl = document.getElementById('inferenceResult');
+            if (!resultEl) return;
+
+            var completeSlots = slots.filter(function(s) {
+                return s.startTime && s.endTime && s.startTime.length > 0 && s.endTime.length > 0;
+            });
+
+            if (completeSlots.length === 0) {
+                resultEl.innerHTML = '⏳ 请填写至少一个节次的开始和结束时间，系统将自动推理';
+                return;
+            }
+
+            var classDurations = completeSlots.map(function(s) {
+                var dur = calculateDuration(s.startTime, s.endTime);
+                return { index: s.index, duration: dur };
+            });
+
+            var breakInfos = [];
+            for (var i = 0; i < slots.length - 1; i++) {
+                var current = slots[i];
+                var next = slots[i + 1];
+                if (current.endTime && current.endTime.length > 0 &&
+                    next.startTime && next.startTime.length > 0) {
+                    var gap = calculateDuration(current.endTime, next.startTime);
+                    if (gap > 0 && gap < 180) {
+                        breakInfos.push({
+                            from: current.index,
+                            to: next.index,
+                            gap: gap,
+                            fromEnd: current.endTime,
+                            toStart: next.startTime
+                        });
+                    }
+                }
+            }
+
+            var durations = classDurations.map(function(d) { return d.duration; });
+            var inferredClassDuration = getMostCommon(durations);
+            if (!inferredClassDuration || inferredClassDuration <= 0) {
+                inferredClassDuration = 45;
+            }
+
+            var gaps = breakInfos.map(function(b) { return b.gap; });
+            var inferredBreak = getMostCommon(gaps);
+            if (!inferredBreak || inferredBreak <= 0) {
+                inferredBreak = 10;
+            }
+
+            var longBreaks = breakInfos.filter(function(b) {
+                return b.gap > inferredBreak * 1.5;
+            });
+
+            var html = '';
+            html += '<div style="font-size:14px;color:var(--brown-deep);font-weight:bold;margin-bottom:8px;">📊 推理结果</div>';
+            html += '<div style="font-size:13px;color:var(--brown-mid);margin-bottom:4px;">⏱ 每节课时长：<strong style="color:var(--brown-deep);">' + inferredClassDuration + ' 分钟</strong></div>';
+
+            if (breakInfos.length > 0) {
+                html += '<div style="font-size:13px;color:var(--brown-mid);margin-top:4px;">☕ 课间休息：</div>';
+                html += '<div style="font-size:12px;color:var(--brown-light);padding-left:12px;">';
+                breakInfos.forEach(function(b) {
+                    var isLong = b.gap > inferredBreak * 1.5;
+                    var label = isLong ? ' 🔸 大课间' : ' ✅ 普通';
+                    html += '第' + b.from + '→' + b.to + '节：' + b.gap + ' 分钟' + label + '<br>';
+                });
+                html += '</div>';
+            }
+
+            var totalClasses = classDurations.length;
+            var totalMinutes = classDurations.reduce(function(sum, d) { return sum + d.duration; }, 0);
+            var totalBreak = breakInfos.reduce(function(sum, b) { return sum + b.gap; }, 0);
+
+            html += '<div style="font-size:12px;color:var(--brown-light);margin-top:6px;border-top:1px solid var(--peach-pale);padding-top:6px;">';
+            html += '已填写 ' + totalClasses + ' 节课，共 ' + totalMinutes + ' 分钟';
+            if (breakInfos.length > 0) {
+                html += '，课间共 ' + totalBreak + ' 分钟';
+            }
+            html += '</div>';
+
+            if (longBreaks.length > 0) {
+                html += '<div style="font-size:12px;color:#FFB347;margin-top:4px;">💡 检测到 ' + longBreaks.length + ' 个大课间（间隔 > ' + inferredBreak + ' 分钟）</div>';
+            }
+
+            resultEl.innerHTML = html;
+        }
+
+        function submitTimeConfig(importId) {
+            var headers = { 'Content-Type': 'application/json' };
+            var token = localStorage.getItem('token');
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+            var userId = localStorage.getItem('userId');
+            
+            var totalWeeks = parseInt(document.getElementById('configTotalWeeks').value) || 16;
+            var config = {
+                semesterStartDate: document.getElementById('semesterStartDate').value,
+                linkMode: currentLinkMode,
+                sectionTimes: getTimeSlotsFromUI(),
+                importId: importId,
+                totalWeeks: totalWeeks
+            };
+            console.log('📝 submitTimeConfig Request Payload:', JSON.stringify(config, null, 2));
+
+            fetch('/api/schedule/config-time?userId=' + userId, {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify(config)
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(result) {
+                if (result.success) {
+                    showSchedulePreview(result);
+                } else {
+                    addMessage('bot', '❌ ' + result.message);
+                }
+            })
+            .catch(function(err) {
+                addMessage('bot', '❌ 请求失败: ' + err.message);
+            });
+        }
+
+        function showSchedulePreview(result) {
+            var container = document.getElementById('confirmationContainer');
+            if (!container) return;
+            
+            var importId = result.importId || '';
+            var html = '<div class="confirmation-card preview-card" id="confirmationCard" data-import-id="' + importId + '">';
+            html += '<div class="card-title">' + (result.message || '📋 日程预览') + '</div>';
+            
+            if (result.items && result.items.length > 0) {
+                html += '<div class="info-item"><span class="info-label">日程总数</span><span class="info-value">' + result.items.length + ' 条</span></div>';
+            }
+            if (result.totalWeeks !== undefined) {
+                html += '<div class="info-item"><span class="info-label">学期周数</span><span class="info-value">' + result.totalWeeks + ' 周</span></div>';
+            }
+            if (result.conflictCount !== undefined) {
+                html += '<div class="info-item"><span class="info-label">冲突数量</span><span class="info-value' + (result.conflictCount > 0 ? ' conflict' : '') + '">' + result.conflictCount + ' 条</span></div>';
+            }
+            
+            html += '<div class="card-actions">';
+            html += '<button class="action-btn primary" onclick="handleConfirmationAction(\'schedule_direct\', \'' + importId + '\')">✅ 直接创建</button>';
+            html += '<button class="action-btn secondary" onclick="handleConfirmationAction(\'schedule_skip\', \'' + importId + '\')">⏭️ 创建无冲突部分</button>';
+            html += '<button class="action-btn warning" onclick="handleConfirmationAction(\'schedule_overwrite\', \'' + importId + '\')">📝 全部覆盖</button>';
+            html += '<button class="action-btn secondary" onclick="handleScheduleConfirm(\'' + importId + '\', \'adjust\')">✏️ 修改</button>';
+            html += '<button class="action-btn danger" onclick="handleConfirmationAction(\'cancel\', \'' + importId + '\')">❌ 取消</button>';
+            html += '</div>';
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        function addManualCourseRow() {
+            manualCourseRowCount++;
+            var rowId = 'manualRow_' + manualCourseRowCount;
+            var list = document.getElementById('manualCourseList');
+            if (!list) return;
+            
+            var row = document.createElement('div');
+            row.className = 'manual-course-row';
+            row.id = rowId;
+            row.innerHTML = `
+                <input type="text" class="course-name-input" placeholder="课程名">
+                <select class="day-of-week-select">
+                    <option value="">选择星期</option>
+                    <option value="星期一">星期一</option>
+                    <option value="星期二">星期二</option>
+                    <option value="星期三">星期三</option>
+                    <option value="星期四">星期四</option>
+                    <option value="星期五">星期五</option>
+                    <option value="星期六">星期六</option>
+                    <option value="星期日">星期日</option>
+                </select>
+                <input type="text" class="section-range-input" placeholder="节次(如 1-2)">
+                <input type="text" class="week-range-input" placeholder="周次(如 1-17)">
+                <select class="odd-even-select">
+                    <option value="全部">全部</option>
+                    <option value="单周">单周</option>
+                    <option value="双周">双周</option>
+                </select>
+                <input type="text" class="location-input" placeholder="地点(可选)">
+                <input type="text" class="teacher-input" placeholder="教师(可选)">
+                <button class="remove-row-btn" onclick="removeManualCourseRow('${rowId}')">❌</button>
+            `;
+            list.appendChild(row);
+        }
+
+        function removeManualCourseRow(rowId) {
+            var row = document.getElementById(rowId);
+            if (row) row.remove();
+        }
+
+        function submitManualCourses(importId) {
+            var headers = { 'Content-Type': 'application/json' };
+            var token = localStorage.getItem('token');
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+            var userId = localStorage.getItem('userId');
+            
+            var rows = document.querySelectorAll('.manual-course-row');
+            var courses = [];
+            rows.forEach(function(row) {
+                var course = {
+                    courseName: row.querySelector('.course-name-input').value,
+                    dayOfWeek: row.querySelector('.day-of-week-select').value,
+                    sectionRange: row.querySelector('.section-range-input').value,
+                    weekRange: row.querySelector('.week-range-input').value,
+                    oddEvenWeek: row.querySelector('.odd-even-select').value,
+                    location: row.querySelector('.location-input').value,
+                    teacher: row.querySelector('.teacher-input').value
+                };
+                if (course.courseName) courses.push(course);
+            });
+
+            if (courses.length === 0) {
+                addMessage('bot', '⚠️ 请至少添加一门课程');
+                return;
+            }
+
+            var config = {
+                semesterStartDate: document.getElementById('manualSemesterStart').value,
+                totalWeeks: parseInt(document.getElementById('manualTotalWeeks').value) || 16,
+                courses: courses,
+                importId: importId
+            };
+            console.log('📝 submitManualCourses Request Payload:', JSON.stringify(config, null, 2));
+
+            fetch('/api/schedule/manual?userId=' + userId, {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify(config)
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(result) {
+                if (result.success) {
+                    showSchedulePreview(result);
+                } else {
+                    addMessage('bot', '❌ ' + result.message);
+                }
+            })
+            .catch(function(err) {
+                addMessage('bot', '❌ 请求失败: ' + err.message);
+            });
         }
 
         function handleWebSocketMessage(msg) {
@@ -1932,6 +2908,9 @@
                 handleCardConfirmed(msg);
             } else if (msg.type === 'card_cancelled') {
                 handleCardCancelled(msg);
+            } else if (msg.type === 'import_result') {
+                addMessage('bot', msg.message);
+                renderCalendar();
             } else {
                 addMessage('bot', msg.message || JSON.stringify(msg));
             }
@@ -2628,6 +3607,51 @@
                     addMessage('bot', '❌ 已取消导入');
                     document.getElementById('confirmationContainer').innerHTML = '';
                     currentConfirmationSessionId = null;
+                } else if (action === 'schedule_direct' || action === 'schedule_skip' || action === 'schedule_overwrite') {
+                    var importId = sessionId;
+                    if (!importId || importId === 'undefined' || importId === 'null' || importId === '') {
+                        importId = getImportIdFromCard();
+                    }
+                    if (!importId) {
+                        addMessage('bot', '❌ 无法获取导入ID，请重试');
+                        isProcessing = false;
+                        buttons.forEach(function(btn) { btn.disabled = false; });
+                        return;
+                    }
+                    
+                    var scheduleUrlMap = {
+                        'schedule_direct': '/api/schedule/confirm/direct',
+                        'schedule_skip': '/api/schedule/confirm/skip',
+                        'schedule_overwrite': '/api/schedule/confirm/overwrite-all'
+                    };
+                    var scheduleBtnLabelMap = {
+                        'schedule_direct': '⏳ 创建中...',
+                        'schedule_skip': '⏳ 创建中...',
+                        'schedule_overwrite': '⏳ 覆盖中...'
+                    };
+                    var scheduleBtn = Array.from(buttons).find(function(btn) {
+                        return btn.textContent.indexOf('⏳') === -1 && !btn.textContent.includes('取消') && !btn.textContent.includes('修改');
+                    });
+                    if (scheduleBtn) scheduleBtn.textContent = scheduleBtnLabelMap[action] || '⏳ 处理中...';
+
+                    const scheduleResponse = await fetch(scheduleUrlMap[action] + '?importId=' + importId + '&userId=' + currentUserId, {
+                        method: 'POST',
+                        headers: headers
+                    });
+                    const scheduleResult = await scheduleResponse.json();
+                    if (scheduleResult.success) {
+                        addMessage('bot', '✅ ' + scheduleResult.message);
+                        document.getElementById('confirmationContainer').innerHTML = '';
+                        currentConfirmationSessionId = null;
+                        conflictStates = {};
+                        currentConflictList = [];
+                        renderCalendar();
+                    } else {
+                        addMessage('bot', '❌ ' + (scheduleResult.message || '操作失败'));
+                        if (scheduleBtn) {
+                            scheduleBtn.textContent = action === 'schedule_overwrite' ? '📝 全部覆盖' : '✅ 直接创建';
+                        }
+                    }
                 }
             } catch (e) {
                 addMessage('bot', '❌ 网络错误，请重试');
@@ -3386,23 +4410,56 @@
                 var result = await response.json();
 
                 if (result.success) {
-                    var card = {
-                        type: 'confirmation_card',
-                        message: '📋 已识别 ' + result.totalCount + ' 个日程，请确认：',
-                        data: {
-                            isBatch: true,
-                            sourceFile: file.name,
-                            items: result.items,
-                            totalCount: result.totalCount,
-                            hasConflict: result.hasConflict,
-                            importId: result.importId
-                        },
-                        actions: [
-                            { id: 'confirm_import', label: '✅ 全部创建', style: 'primary' },
-                            { id: 'cancel_import', label: '❌ 取消', style: 'danger' }
-                        ]
-                    };
-                    showConfirmationCard(card);
+                    if (result.needTimeConfig) {
+                        // 课表场景：后端已通过 WebSocket 推送 schedule_table_confirm 卡片
+                        addMessage('bot', '✅ ' + (result.message || '课表识别完成'));
+                        // 5 秒兜底：若 WebSocket 卡片未到达，使用 HTTP 响应数据直接渲染
+                        setTimeout(function() {
+                            var container = document.getElementById('confirmationContainer');
+                            if (container && container.innerHTML === '') {
+                                var items = [];
+                                if (result.courses && Array.isArray(result.courses)) {
+                                    result.courses.forEach(function(c) {
+                                        items.push({
+                                            title: c.title,
+                                            time: c.dayOfWeek,
+                                            location: c.location
+                                        });
+                                    });
+                                }
+                                var fallbackCard = {
+                                    type: 'schedule_table_confirm',
+                                    message: '📚 课表识别完成，请配置时间后确认',
+                                    data: {
+                                        importId: result.importId || '',
+                                        totalCount: result.totalCount || 0,
+                                        items: items,
+                                        semesterStartDate: result.semesterStartDate
+                                    }
+                                };
+                                showConfirmationCard(fallbackCard);
+                            }
+                        }, 5000);
+                    } else {
+                        // 普通日程场景
+                        var card = {
+                            type: 'confirmation_card',
+                            message: '📋 已识别 ' + result.totalCount + ' 个日程，请确认：',
+                            data: {
+                                isBatch: true,
+                                sourceFile: file.name,
+                                items: result.items,
+                                totalCount: result.totalCount,
+                                hasConflict: result.hasConflict,
+                                importId: result.importId
+                            },
+                            actions: [
+                                { id: 'confirm_import', label: '✅ 全部创建', style: 'primary' },
+                                { id: 'cancel_import', label: '❌ 取消', style: 'danger' }
+                            ]
+                        };
+                        showConfirmationCard(card);
+                    }
                 } else {
                     addMessage('bot', '❌ 识别失败：' + (result.message || '请重试'));
                 }

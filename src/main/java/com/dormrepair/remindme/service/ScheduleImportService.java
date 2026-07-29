@@ -1,11 +1,25 @@
 package com.dormrepair.remindme.service;
 
+import com.dormrepair.remindme.dto.CourseTimeConfigDTO;
+import com.dormrepair.remindme.dto.ManualCourseDTO;
 import com.dormrepair.remindme.dto.ScheduleItemDTO;
+import com.dormrepair.remindme.dto.ScheduleTableDTO;
+import com.dormrepair.remindme.dto.TimeSlotDTO;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse;
+import com.dormrepair.remindme.dto.response.ConflictResponse;
+import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.entity.ScheduleImport;
 import com.dormrepair.remindme.entity.ScheduleImportItem;
+import com.dormrepair.remindme.entity.User;
+import com.dormrepair.remindme.enums.ConfirmStatus;
+import com.dormrepair.remindme.enums.ExecutionStatus;
+import com.dormrepair.remindme.enums.Priority;
+import com.dormrepair.remindme.enums.ReminderSource;
+import com.dormrepair.remindme.enums.ReminderStatus;
+import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.repository.ScheduleImportItemRepository;
 import com.dormrepair.remindme.repository.ScheduleImportRepository;
+import com.dormrepair.remindme.repository.UserRepository;
 import com.dormrepair.remindme.utils.FileParserUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,11 +27,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
@@ -36,10 +53,16 @@ public class ScheduleImportService {
     private final QwenRecognitionService qwenRecognitionService;
     private final WebSocketPushService webSocketPushService;
     private final ReminderService reminderService;
+    private final ConflictDetectionService conflictDetectionService;
+    private final UserRepository userRepository;
+    private final ReminderRepository reminderRepository;
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm");
     private static final DateTimeFormatter REMIND_TIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /** 课表识别结果缓存（importId → ScheduleTableDTO） */
+    private final Map<Long, ScheduleTableDTO> scheduleTableCache = new ConcurrentHashMap<>();
 
     /**
      * 处理文件上传 → 解析 → 识别 → 创建导入记录 → 推送确认卡片
@@ -59,14 +82,25 @@ public class ScheduleImportService {
         log.info("开始处理文件上传：userId={}, fileName={}, fileType={}", userId, fileName, fileType);
 
         // 1. 解析文件
-        String content;
-        List<ScheduleItemDTO> recognizedItems;
+        String content = null;
+        boolean isImage = isImage(fileName);
+        List<ScheduleItemDTO> recognizedItems = new ArrayList<>();
 
-        if (isImage(fileName)) {
+        if (isImage) {
             String base64 = FileParserUtil.parseImage(file);
             recognizedItems = qwenRecognitionService.recognizeImage(base64);
         } else {
             content = FileParserUtil.parseFile(file);
+        }
+
+        // 2. 检测是否为课表格式
+        if (!isImage && content != null && isScheduleTable(content)) {
+            log.info("检测到课表格式：fileName={}", fileName);
+            return processScheduleTable(content, fileType, userId, fileName);
+        }
+
+        // 3. 非课表走原有流程
+        if (!isImage && content != null) {
             recognizedItems = qwenRecognitionService.recognize(content, fileType);
         }
 
@@ -80,10 +114,10 @@ public class ScheduleImportService {
             return result;
         }
 
-        // 2. 创建导入记录
+        // 4. 创建导入记录
         ScheduleImport importRecord = createImportRecord(userId, fileName, fileType, recognizedItems);
 
-        // 3. 创建明细记录
+        // 5. 创建明细记录
         List<ScheduleImportItem> itemEntities = new ArrayList<>();
         for (int i = 0; i < recognizedItems.size(); i++) {
             ScheduleItemDTO dto = recognizedItems.get(i);
@@ -99,7 +133,7 @@ public class ScheduleImportService {
         }
         importItemRepository.saveAll(itemEntities);
 
-        // 4. 构建识别结果（供前端展示）
+        // 6. 构建识别结果（供前端展示）
         List<Map<String, Object>> itemsList = new ArrayList<>();
         for (ScheduleItemDTO dto : recognizedItems) {
             Map<String, Object> map = new HashMap<>();
@@ -111,10 +145,10 @@ public class ScheduleImportService {
             itemsList.add(map);
         }
 
-        // 5. 推送确认卡片到前端
+        // 7. 推送确认卡片到前端
         pushConfirmCardToUser(userId, importRecord.getId(), importRecord.getFileName(), itemsList);
 
-        // 6. 返回结果
+        // 8. 返回结果
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
         result.put("importId", importRecord.getId());
@@ -125,6 +159,98 @@ public class ScheduleImportService {
 
         log.info("文件上传处理完成：importId={}, totalCount={}", importRecord.getId(), recognizedItems.size());
         return result;
+    }
+
+    /**
+     * 处理课表文件
+     */
+    private Map<String, Object> processScheduleTable(String content, String fileType, Long userId, String fileName) {
+        // 调用 AI 课表识别
+        ScheduleTableDTO tableResult = qwenRecognitionService.recognizeScheduleTable(content, fileType);
+
+        if (tableResult.getSuccess() == null || !tableResult.getSuccess()) {
+            log.warn("课表识别失败：confidence={}", tableResult.getConfidence());
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", false);
+            result.put("message", "课表识别失败，请手动创建课程或上传更清晰的文件");
+            result.put("needManualCreate", true);
+            return result;
+        }
+
+        log.info("课表识别成功：courses={}, confidence={}, semesterStartDate={}",
+                tableResult.getCourses() != null ? tableResult.getCourses().size() : 0,
+                tableResult.getConfidence(),
+                tableResult.getSemesterStartDate());
+
+        // 保存学期开始日期到用户
+        if (tableResult.getSemesterStartDate() != null) {
+            User user = userRepository.findById(userId).orElse(null);
+            if (user != null) {
+                user.setSemesterStartDate(LocalDate.parse(tableResult.getSemesterStartDate(), DATE_FMT));
+                userRepository.save(user);
+                log.info("保存学期开始日期：userId={}, semesterStartDate={}", userId, tableResult.getSemesterStartDate());
+            }
+        }
+
+        // 创建导入记录获取 importId
+        int courseCount = tableResult.getCourses() != null ? tableResult.getCourses().size() : 0;
+        ScheduleImport importRecord = new ScheduleImport();
+        importRecord.setUserId(userId);
+        importRecord.setFileName(fileName);
+        importRecord.setFileType(fileType);
+        importRecord.setTotalCount(courseCount);
+        importRecord.setSuccessCount(0);
+        importRecord.setFailedCount(0);
+        importRecord.setStatus("PENDING");
+        importRecord = importRepository.save(importRecord);
+        Long importId = importRecord.getId();
+        log.info("课表导入记录已创建：importId={}, courseCount={}", importId, courseCount);
+
+        // 缓存识别结果，供后续时间配置使用
+        scheduleTableCache.put(importId, tableResult);
+
+        // 推送课表确认卡片
+        pushScheduleTableCard(userId, importId, tableResult, fileName);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "课表识别完成，请确认时间表配置");
+        result.put("importId", String.valueOf(importId));
+        result.put("totalCount", courseCount);
+        result.put("courses", tableResult.getCourses());
+        result.put("timeSections", tableResult.getTimeSections());
+        result.put("semesterStartDate", tableResult.getSemesterStartDate());
+        result.put("needTimeConfig", true);
+        return result;
+    }
+
+    /**
+     * 检测文本是否为课表格式
+     */
+    private boolean isScheduleTable(String content) {
+        if (content == null || content.trim().isEmpty()) return false;
+        String lower = content.toLowerCase();
+        // 扩展关键词，支持简写和繁体
+        String[] keywords = {
+                "星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日",
+                "周一", "周二", "周三", "周四", "周五", "周六", "周日",
+                "第一二节", "第三四节", "第五六节", "第七八节", "第九十节",
+                "第1节", "第2节", "第3节", "第4节", "第5节", "第6节", "第7节", "第8节", "第9节", "第10节",
+                "第1-2节", "第3-4节", "第5-6节", "第7-8节", "第9-10节",
+                "周次", "星期", "节次", "课程表", "课表",
+                "教室", "教学楼", "上课", "课程", "时间/节次",
+                "08:00", "08:50", "09:50", "10:40", "14:00", "14:50"
+        };
+        int matchCount = 0;
+        for (String kw : keywords) {
+            if (content.contains(kw)) {
+                matchCount++;
+                log.debug("课表关键词匹配：{}", kw);
+            }
+        }
+        log.debug("课表关键词匹配数：{} / {}", matchCount, keywords.length);
+        // 降低阈值，匹配 2 个以上即判定为课表
+        return matchCount >= 2;
     }
 
     /**
@@ -148,7 +274,7 @@ public class ScheduleImportService {
      * 批量创建提醒（用户确认后调用）
      */
     @Transactional
-    public Map<String, Object> batchCreateReminders(Long importId, Long userId) {
+    public Map<String, Object> batchCreateReminders(Long importId, Long userId, String action) {
         if (userId == null) {
             throw new IllegalArgumentException("用户ID不能为空");
         }
@@ -162,6 +288,12 @@ public class ScheduleImportService {
 
         if ("CONFIRMED".equals(importRecord.getStatus()) || "CANCELLED".equals(importRecord.getStatus())) {
             throw new IllegalArgumentException("该导入记录已处理，无法再次确认");
+        }
+
+        // 优先使用缓存中的课表数据生成日程
+        ScheduleTableDTO cached = scheduleTableCache.get(importId);
+        if (cached != null && cached.getCourses() != null && !cached.getCourses().isEmpty()) {
+            return createRemindersFromCache(importId, userId, action, importRecord, cached);
         }
 
         // 查询所有 PENDING 明细
@@ -180,49 +312,156 @@ public class ScheduleImportService {
             return result;
         }
 
+        return createRemindersFromItems(importId, userId, items, importRecord);
+    }
+
+    /**
+     * 从缓存创建提醒（课表场景）
+     */
+    private Map<String, Object> createRemindersFromCache(Long importId, Long userId, String action,
+                                                          ScheduleImport importRecord, ScheduleTableDTO tableResult) {
+        User user = userRepository.findById(userId).orElseThrow();
+
+        // 确定学期开始日期：importRecord 优先（用户在时间配置卡片中修改过）
+        LocalDate semesterStart;
+        if (importRecord.getSemesterStartDate() != null) {
+            semesterStart = importRecord.getSemesterStartDate();
+            user.setSemesterStartDate(semesterStart);
+            userRepository.save(user);
+        } else if (user.getSemesterStartDate() != null) {
+            semesterStart = user.getSemesterStartDate();
+        } else if (tableResult.getSemesterStartDate() != null) {
+            semesterStart = LocalDate.parse(tableResult.getSemesterStartDate(), DATE_FMT);
+            user.setSemesterStartDate(semesterStart);
+            userRepository.save(user);
+        } else {
+            semesterStart = LocalDate.now();
+            user.setSemesterStartDate(semesterStart);
+            userRepository.save(user);
+        }
+
+        // 获取时间配置
+        List<ScheduleTableDTO.TimeSection> timeSections;
+        if (tableResult.getTimeSections() != null && !tableResult.getTimeSections().isEmpty()) {
+            timeSections = tableResult.getTimeSections();
+        } else {
+            timeSections = getDefaultTimeSections();
+        }
+
+        // 获取学期总周数
+        int totalWeeks = 16;
+        if (importRecord.getTotalWeeks() != null && importRecord.getTotalWeeks() > 0) {
+            totalWeeks = importRecord.getTotalWeeks();
+        } else if (tableResult.getSuggestedWeeks() != null && tableResult.getSuggestedWeeks() > 0) {
+            totalWeeks = tableResult.getSuggestedWeeks();
+        }
+
         int successCount = 0;
         int failedCount = 0;
 
-        for (ScheduleImportItem item : items) {
+        for (ScheduleTableDTO.CourseItem course : tableResult.getCourses()) {
             try {
-                // 调用 ReminderService 创建提醒
-                String remindTimeStr = item.getRemindDate().format(DATE_FMT) + " "
-                        + item.getRemindTime().format(TIME_FMT) + ":00";
+                List<LocalDateTime> courseTimes = calculateCourseTimesFromCourseItem(
+                        semesterStart, course, timeSections, totalWeeks);
 
-                Map<String, Object> createResult = reminderService.createReminderForAgent(
-                        userId,
-                        item.getTitle(),
-                        remindTimeStr,
-                        null,
-                        item.getLocation(),
-                        "NORMAL"
-                );
+                for (LocalDateTime courseTime : courseTimes) {
+                    LocalDateTime endTime = courseTime.plusMinutes(90);
 
-                boolean success = Boolean.TRUE.equals(createResult.get("success"));
-                if (success) {
-                    // 注意：批量导入场景下，直接通过 confirm 流程创建
-                    // createReminderForAgent 会创建确认会话，前端需要二次确认
-                    // 这里改为直接创建（跳过冲突检测和确认卡片）
-                    item.setStatus("CONFIRMED");
+                    // 处理冲突
+                    if ("overwrite-all".equals(action)) {
+                        ConflictResponse conflict = conflictDetectionService.checkConflict(
+                                userId, courseTime, endTime, null);
+                        if (conflict.isHasConflict() && conflict.getConflicts() != null) {
+                            for (ConflictResponse.ConflictItem ci : conflict.getConflicts()) {
+                                Reminder conflictReminder = reminderRepository.findById(ci.getId()).orElse(null);
+                                if (conflictReminder != null) {
+                                    conflictReminder.setStatus(ReminderStatus.CANCELLED);
+                                    reminderRepository.save(conflictReminder);
+                                }
+                            }
+                        }
+                    } else if ("skip".equals(action)) {
+                        ConflictResponse conflict = conflictDetectionService.checkConflict(
+                                userId, courseTime, endTime, null);
+                        if (conflict.isHasConflict()) {
+                            failedCount++;
+                            continue;
+                        }
+                    }
+
+                    // 创建提醒
+                    Reminder reminder = new Reminder();
+                    reminder.setUserId(userId);
+                    reminder.setTitle(course.getTitle());
+                    reminder.setRemindTime(courseTime);
+                    reminder.setEndTime(endTime);
+                    reminder.setPriority(Priority.NORMAL);
+                    reminder.setLocation(course.getLocation());
+                    reminder.setStatus(ReminderStatus.PENDING);
+                    reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
+                    reminder.setExecutionStatus(ExecutionStatus.PENDING);
+                    reminder.setSource(ReminderSource.USER_INPUT);
+                    reminder.setTimezone("Asia/Shanghai");
+                    reminderRepository.save(reminder);
+
                     successCount++;
-                    log.info("提醒创建成功：importId={}, title={}", importId, item.getTitle());
-                } else {
-                    item.setStatus("FAILED");
-                    item.setErrorMessage(String.valueOf(createResult.get("error")));
-                    failedCount++;
-                    log.warn("提醒创建失败：importId={}, title={}", importId, item.getTitle());
                 }
             } catch (Exception e) {
-                item.setStatus("FAILED");
-                item.setErrorMessage(e.getMessage());
                 failedCount++;
-                log.error("提醒创建异常：importId={}, title={}", importId, item.getTitle(), e);
+                log.warn("课表提醒创建失败：course={}, error={}", course.getTitle(), e.getMessage());
             }
         }
 
+        // 更新导入记录
+        importRecord.setStatus("CONFIRMED");
+        importRecord.setSuccessCount(successCount);
+        importRecord.setFailedCount(failedCount);
+        importRecord.setTotalCount(successCount + failedCount);
+        importRepository.save(importRecord);
+
+        // 清理缓存
+        scheduleTableCache.remove(importId);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "已创建 " + successCount + " 条提醒" +
+                (failedCount > 0 ? "（跳过 " + failedCount + " 条冲突）" : ""));
+        result.put("successCount", successCount);
+        result.put("failedCount", failedCount);
+
+        log.info("课表导入完成：importId={}, success={}, failed={}, action={}", importId, successCount, failedCount, action);
+        return result;
+    }
+
+    /**
+     * 从 DB 明细创建提醒（通用场景）
+     */
+    private Map<String, Object> createRemindersFromItems(Long importId, Long userId,
+                                                          List<ScheduleImportItem> items,
+                                                          ScheduleImport importRecord) {
+        // 转换为批量静默创建所需的格式
+        List<Map<String, Object>> silentItems = new ArrayList<>();
+        for (ScheduleImportItem item : items) {
+            Map<String, Object> silentItem = new HashMap<>();
+            silentItem.put("title", item.getTitle());
+            silentItem.put("remindTime", item.getRemindDate().format(DATE_FMT) + " "
+                    + item.getRemindTime().format(TIME_FMT) + ":00");
+            silentItem.put("location", item.getLocation());
+            silentItems.add(silentItem);
+        }
+
+        // 调用静默批量创建，不触发逐条确认和推送
+        Map<String, Object> createResult = batchCreateSilently(userId, silentItems);
+
+        int successCount = (int) createResult.getOrDefault("successCount", 0);
+        int failedCount = (int) createResult.getOrDefault("failedCount", 0);
+
+        // 更新明细状态
+        for (ScheduleImportItem item : items) {
+            item.setStatus("CONFIRMED");
+        }
         importItemRepository.saveAll(items);
 
-        // 更新导入记录
         importRecord.setStatus("CONFIRMED");
         importRecord.setSuccessCount(successCount);
         importRecord.setFailedCount(failedCount);
@@ -230,12 +469,95 @@ public class ScheduleImportService {
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
-        result.put("message", "已创建 " + successCount + " 条提醒");
+        result.put("message", createResult.getOrDefault("message", "已创建 " + successCount + " 条提醒"));
         result.put("successCount", successCount);
         result.put("failedCount", failedCount);
 
         log.info("批量导入完成：importId={}, success={}, failed={}", importId, successCount, failedCount);
         return result;
+    }
+
+    /**
+     * 批量静默创建提醒（不触发确认会话，不逐条推送）
+     * <p>
+     * 用于课表导入场景，一次性创建所有提醒，仅推送一条汇总消息
+     * </p>
+     */
+    @Transactional
+    public Map<String, Object> batchCreateSilently(Long userId, List<Map<String, Object>> items) {
+        if (items == null || items.isEmpty()) {
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", false);
+            result.put("message", "没有待创建的日程");
+            return result;
+        }
+
+        int successCount = 0;
+        int failedCount = 0;
+        List<String> createdTitles = new ArrayList<>();
+        List<String> failedTitles = new ArrayList<>();
+
+        for (Map<String, Object> item : items) {
+            try {
+                String title = (String) item.get("title");
+                String remindTimeStr = (String) item.get("remindTime");
+                String location = (String) item.get("location");
+
+                if (title == null || remindTimeStr == null) {
+                    failedCount++;
+                    failedTitles.add(title != null ? title : "未知");
+                    continue;
+                }
+
+                LocalDateTime remindTime = LocalDateTime.parse(remindTimeStr, REMIND_TIME_FMT);
+
+                Reminder reminder = new Reminder();
+                reminder.setUserId(userId);
+                reminder.setTitle(title);
+                reminder.setRemindTime(remindTime);
+                reminder.setPriority(Priority.NORMAL);
+                reminder.setLocation(location);
+                reminder.setStatus(ReminderStatus.PENDING);
+                reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
+                reminder.setExecutionStatus(ExecutionStatus.PENDING);
+                reminder.setSource(ReminderSource.EXCEL_IMPORT);
+                reminder.setTimezone("Asia/Shanghai");
+
+                reminderRepository.save(reminder);
+                successCount++;
+                createdTitles.add(title);
+
+            } catch (Exception e) {
+                failedCount++;
+                String title = (String) item.get("title");
+                failedTitles.add(title != null ? title : "未知");
+                log.error("批量静默创建提醒失败：title={}", title, e);
+            }
+        }
+
+        String summaryMessage = String.format("📌 成功创建 %d 条提醒", successCount);
+        if (failedCount > 0) {
+            summaryMessage += String.format("，%d 条失败", failedCount);
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", summaryMessage);
+        result.put("successCount", successCount);
+        result.put("failedCount", failedCount);
+        result.put("createdTitles", createdTitles);
+        result.put("failedTitles", failedTitles);
+
+        pushSummaryMessage(userId, summaryMessage);
+
+        return result;
+    }
+
+    private void pushSummaryMessage(Long userId, String message) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("type", "import_result");
+        data.put("message", message);
+        webSocketPushService.pushToUser(userId, "/queue/messages", data);
     }
 
     /**
@@ -305,7 +627,683 @@ public class ScheduleImportService {
         result.put("successCount", importRecord.getSuccessCount());
         result.put("failedCount", importRecord.getFailedCount());
         result.put("items", itemList);
+
+        // 从缓存中获取课表识别结果（含 timeSections 和 semesterStartDate）
+        ScheduleTableDTO cached = scheduleTableCache.get(importId);
+        if (cached != null) {
+            List<Map<String, Object>> timeSectionList = new ArrayList<>();
+            if (cached.getTimeSections() != null) {
+                for (ScheduleTableDTO.TimeSection ts : cached.getTimeSections()) {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("index", ts.getIndex());
+                    map.put("startTime", ts.getStartTime());
+                    map.put("endTime", ts.getEndTime());
+                    timeSectionList.add(map);
+                }
+            }
+            result.put("timeSections", timeSectionList);
+            result.put("semesterStartDate", cached.getSemesterStartDate());
+            result.put("suggestedWeeks", cached.getSuggestedWeeks() != null ? cached.getSuggestedWeeks() : 16);
+            result.put("totalWeeks", cached.getSuggestedWeeks() != null ? cached.getSuggestedWeeks() : 16);
+
+            // 课程列表
+            List<Map<String, Object>> courseList = new ArrayList<>();
+            if (cached.getCourses() != null) {
+                for (ScheduleTableDTO.CourseItem course : cached.getCourses()) {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("title", course.getTitle());
+                    map.put("teacher", course.getTeacher());
+                    map.put("dayOfWeek", course.getDayOfWeek());
+                    map.put("sectionIndices", course.getSectionIndices());
+                    map.put("weeks", course.getWeeks());
+                    map.put("oddWeek", course.getOddWeek());
+                    map.put("evenWeek", course.getEvenWeek());
+                    map.put("location", course.getLocation());
+                    courseList.add(map);
+                }
+            }
+            result.put("courses", courseList);
+        }
+
         return result;
+    }
+
+    /**
+     * 推送课表确认卡片
+     */
+    private void pushScheduleTableCard(Long userId, Long importId, ScheduleTableDTO tableResult, String fileName) {
+        try {
+            // 构建课程列表信息
+            List<Map<String, Object>> courseList = new ArrayList<>();
+            if (tableResult.getCourses() != null) {
+                for (ScheduleTableDTO.CourseItem course : tableResult.getCourses()) {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("title", course.getTitle());
+                    map.put("teacher", course.getTeacher());
+                    map.put("dayOfWeek", course.getDayOfWeek());
+                    map.put("sectionIndices", course.getSectionIndices());
+                    map.put("weeks", course.getWeeks());
+                    map.put("oddWeek", course.getOddWeek());
+                    map.put("evenWeek", course.getEvenWeek());
+                    map.put("location", course.getLocation());
+                    courseList.add(map);
+                }
+            }
+
+            // 构建时间信息
+            List<Map<String, Object>> timeSectionList = new ArrayList<>();
+            if (tableResult.getTimeSections() != null) {
+                for (ScheduleTableDTO.TimeSection ts : tableResult.getTimeSections()) {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("index", ts.getIndex());
+                    map.put("startTime", ts.getStartTime());
+                    map.put("endTime", ts.getEndTime());
+                    timeSectionList.add(map);
+                }
+            }
+
+            int totalCount = courseList.size();
+
+            // 构建卡片 items
+            List<ConfirmationCardResponse.ScheduleItem> items = new ArrayList<>();
+            for (Map<String, Object> course : courseList) {
+                items.add(ConfirmationCardResponse.ScheduleItem.builder()
+                        .title((String) course.get("title"))
+                        .date("")
+                        .time((String) course.get("dayOfWeek"))
+                        .location((String) course.get("location"))
+                        .repeatType("WEEKLY")
+                        .build());
+            }
+
+            ConfirmationCardResponse card = ConfirmationCardResponse.builder()
+                    .type("schedule_table_confirm")
+                    .message("📚 课表识别完成，请配置时间后确认")
+                    .data(ConfirmationCardResponse.ConfirmationData.builder()
+                            .sessionId("schedule-table-" + System.currentTimeMillis())
+                            .importId(String.valueOf(importId))
+                            .sourceFile(fileName)
+                            .isBatch(true)
+                            .totalCount(totalCount)
+                            .items(items)
+                            .timeSections(timeSectionList)
+                            .semesterStartDate(tableResult.getSemesterStartDate())
+                            .suggestedWeeks(tableResult.getSuggestedWeeks() != null ? tableResult.getSuggestedWeeks() : 16)
+                            .totalWeeks(tableResult.getSuggestedWeeks() != null ? tableResult.getSuggestedWeeks() : 16)
+                            .build())
+                    .actions(List.of(
+                            ConfirmationCardResponse.Action.builder()
+                                    .id("confirm")
+                                    .label("✅ 确认生成")
+                                    .style("primary")
+                                    .build(),
+                            ConfirmationCardResponse.Action.builder()
+                                    .id("adjust")
+                                    .label("✏️ 手动调整")
+                                    .style("secondary")
+                                    .build(),
+                            ConfirmationCardResponse.Action.builder()
+                                    .id("cancel")
+                                    .label("❌ 取消")
+                                    .style("danger")
+                                    .build()
+                    ))
+                    .timeout(600)
+                    .build();
+
+            webSocketPushService.pushToUser(userId, "/queue/confirmations", card);
+            log.info("课表确认卡片已推送：userId={}, importId={}, courseCount={}", userId, importId, totalCount);
+        } catch (Exception e) {
+            log.error("推送课表确认卡片失败：userId={}, importId={}", userId, importId, e);
+        }
+    }
+
+    /**
+     * 根据用户配置的时间表生成具体日程
+     */
+    @Transactional
+    public Map<String, Object> generateScheduleFromConfig(Long userId, CourseTimeConfigDTO config) {
+        log.info("根据配置生成日程：userId={}, semesterStartDate={}, linkMode={}",
+                userId, config.getSemesterStartDate(), config.getLinkMode());
+
+        if (config.getSemesterStartDate() == null || config.getSemesterStartDate().isEmpty()) {
+            throw new IllegalArgumentException("学期开始日期不能为空");
+        }
+
+        LocalDate semesterStart = LocalDate.parse(config.getSemesterStartDate(), DATE_FMT);
+
+        // 保存学期开始日期
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+        user.setSemesterStartDate(semesterStart);
+        userRepository.save(user);
+
+        // 使用默认时间配置（从 AI 识别结果或用户自定义）
+        List<ScheduleTableDTO.TimeSection> timeSections = new ArrayList<>();
+        if (config.getSectionTimes() != null) {
+            for (CourseTimeConfigDTO.SectionTime st : config.getSectionTimes()) {
+                ScheduleTableDTO.TimeSection ts = ScheduleTableDTO.TimeSection.builder()
+                        .index(st.getIndex())
+                        .startTime(st.getStartTime())
+                        .endTime(st.getEndTime())
+                        .build();
+                timeSections.add(ts);
+            }
+        }
+        // 如果没有用户配置，使用默认时间
+        if (timeSections.isEmpty()) {
+            timeSections = getDefaultTimeSections();
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "时间表配置已保存");
+        result.put("semesterStartDate", config.getSemesterStartDate());
+        result.put("timeSections", timeSections);
+        result.put("totalWeeks", config.getTotalWeeks() != null ? config.getTotalWeeks() : 16);
+        return result;
+    }
+
+    /**
+     * 根据手动输入的课程列表生成具体日程
+     */
+    @Transactional
+    public Map<String, Object> generateScheduleFromManual(Long userId, List<ManualCourseDTO> courses,
+                                                           CourseTimeConfigDTO config) {
+        log.info("根据手动输入生成日程：userId={}, courseCount={}", userId, courses != null ? courses.size() : 0);
+
+        if (courses == null || courses.isEmpty()) {
+            throw new IllegalArgumentException("课程列表不能为空");
+        }
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+
+        // 获取学期开始日期
+        LocalDate semesterStart;
+        if (config != null && config.getSemesterStartDate() != null) {
+            semesterStart = LocalDate.parse(config.getSemesterStartDate(), DATE_FMT);
+            user.setSemesterStartDate(semesterStart);
+            userRepository.save(user);
+        } else if (user.getSemesterStartDate() != null) {
+            semesterStart = user.getSemesterStartDate();
+        } else {
+            semesterStart = LocalDate.now();
+            user.setSemesterStartDate(semesterStart);
+            userRepository.save(user);
+        }
+
+        // 获取时间配置
+        List<ScheduleTableDTO.TimeSection> timeSections = getTimeSections(config);
+
+        // 获取学期总周数
+        int totalWeeks = 16;
+        if (config != null && config.getTotalWeeks() != null && config.getTotalWeeks() > 0) {
+            totalWeeks = config.getTotalWeeks();
+        }
+
+        List<Map<String, Object>> generatedItems = new ArrayList<>();
+        List<Map<String, Object>> conflictItems = new ArrayList<>();
+
+        for (ManualCourseDTO course : courses) {
+            try {
+                List<LocalDateTime> courseTimes = calculateCourseTimes(
+                        semesterStart, course, timeSections, totalWeeks);
+
+                for (LocalDateTime courseTime : courseTimes) {
+                    // 冲突检测
+                    ConflictResponse conflict = conflictDetectionService.checkConflict(userId, courseTime, (LocalDateTime) null, null);
+
+                    Map<String, Object> item = new HashMap<>();
+                    item.put("courseName", course.getCourseName());
+                    item.put("time", courseTime.format(REMIND_TIME_FMT));
+                    item.put("location", course.getLocation());
+                    item.put("teacher", course.getTeacher());
+                    item.put("dayOfWeek", course.getDayOfWeek());
+                    item.put("sectionRange", course.getSectionRange());
+                    item.put("weekRange", course.getWeekRange());
+                    item.put("oddEvenWeek", course.getOddEvenWeek());
+
+                    if (conflict.isHasConflict()) {
+                        item.put("hasConflict", true);
+                        int conflictCount = conflict.getConflicts() != null ? conflict.getConflicts().size() : 0;
+                        item.put("conflictMessage", "与 " + conflictCount + " 个提醒时间冲突");
+                        item.put("conflictCount", conflictCount);
+                        conflictItems.add(item);
+                    } else {
+                        item.put("hasConflict", false);
+                    }
+                    generatedItems.add(item);
+                }
+            } catch (Exception e) {
+                log.warn("生成课程时间失败：course={}, error={}", course.getCourseName(), e.getMessage());
+            }
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "生成 " + generatedItems.size() + " 条日程，其中 " + conflictItems.size() + " 条有冲突");
+        result.put("items", generatedItems);
+        result.put("conflictItems", conflictItems);
+        result.put("totalCount", generatedItems.size());
+        result.put("conflictCount", conflictItems.size());
+        result.put("totalWeeks", totalWeeks);
+        return result;
+    }
+
+    /**
+     * 根据缓存中的课表识别结果生成具体日程（含冲突检测）
+     */
+    @Transactional
+    public Map<String, Object> generateScheduleFromImport(Long userId, Long importId,
+                                                          CourseTimeConfigDTO config) {
+        log.info("根据导入记录生成日程：userId={}, importId={}", userId, importId);
+
+        ScheduleTableDTO tableResult = scheduleTableCache.get(importId);
+        if (tableResult == null) {
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", false);
+            result.put("message", "课表识别结果已过期，请重新上传");
+            return result;
+        }
+
+        // 加载导入记录，用于保存用户配置
+        ScheduleImport importRecord = importRepository.findById(importId).orElse(null);
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+
+        // 获取学期总周数
+        int totalWeeks = 16;
+        if (config != null && config.getTotalWeeks() != null && config.getTotalWeeks() > 0) {
+            totalWeeks = config.getTotalWeeks();
+        } else if (tableResult.getSuggestedWeeks() != null && tableResult.getSuggestedWeeks() > 0) {
+            totalWeeks = tableResult.getSuggestedWeeks();
+        }
+
+        // 确定学期开始日期
+        LocalDate semesterStart;
+        if (config != null && config.getSemesterStartDate() != null && !config.getSemesterStartDate().isEmpty()) {
+            semesterStart = LocalDate.parse(config.getSemesterStartDate(), DATE_FMT);
+            user.setSemesterStartDate(semesterStart);
+            userRepository.save(user);
+        } else if (tableResult.getSemesterStartDate() != null) {
+            semesterStart = LocalDate.parse(tableResult.getSemesterStartDate(), DATE_FMT);
+            user.setSemesterStartDate(semesterStart);
+            userRepository.save(user);
+        } else if (user.getSemesterStartDate() != null) {
+            semesterStart = user.getSemesterStartDate();
+        } else {
+            semesterStart = LocalDate.now();
+            user.setSemesterStartDate(semesterStart);
+            userRepository.save(user);
+        }
+
+        // 保存用户配置到 importRecord（周数 + 学期开始日期），供后续确认创建时使用
+        if (importRecord != null) {
+            importRecord.setTotalWeeks(totalWeeks);
+            importRecord.setSemesterStartDate(semesterStart);
+            importRepository.save(importRecord);
+            log.debug("保存导入记录配置：importId={}, totalWeeks={}, semesterStartDate={}",
+                    importId, totalWeeks, semesterStart);
+        }
+
+        // 获取时间段
+        List<ScheduleTableDTO.TimeSection> timeSections;
+        if (config != null) {
+            timeSections = getTimeSections(config);
+            // 用户修改了时间配置，写回缓存供后续"直接创建"使用
+            tableResult.setTimeSections(timeSections);
+            scheduleTableCache.put(importId, tableResult);
+        } else if (tableResult.getTimeSections() != null && !tableResult.getTimeSections().isEmpty()) {
+            timeSections = tableResult.getTimeSections();
+        } else {
+            timeSections = getDefaultTimeSections();
+        }
+
+        List<Map<String, Object>> generatedItems = new ArrayList<>();
+        List<Map<String, Object>> conflictItems = new ArrayList<>();
+
+        if (tableResult.getCourses() != null) {
+            for (ScheduleTableDTO.CourseItem course : tableResult.getCourses()) {
+                try {
+                    List<LocalDateTime> courseTimes = calculateCourseTimesFromCourseItem(
+                            semesterStart, course, timeSections, totalWeeks);
+
+                    for (LocalDateTime courseTime : courseTimes) {
+                        LocalDateTime endTime = courseTime.plusMinutes(90);
+                        ConflictResponse conflict = conflictDetectionService.checkConflict(
+                                userId, courseTime, endTime, null);
+
+                        Map<String, Object> item = new HashMap<>();
+                        item.put("title", course.getTitle());
+                        item.put("time", courseTime.format(REMIND_TIME_FMT));
+                        item.put("location", course.getLocation());
+                        item.put("teacher", course.getTeacher());
+                        item.put("dayOfWeek", course.getDayOfWeek());
+
+                        if (conflict.isHasConflict()) {
+                            item.put("hasConflict", true);
+                            int conflictCount = conflict.getConflicts() != null ? conflict.getConflicts().size() : 0;
+                            item.put("conflictMessage", "与 " + conflictCount + " 个提醒时间冲突");
+                            item.put("conflictCount", conflictCount);
+                            conflictItems.add(item);
+                        } else {
+                            item.put("hasConflict", false);
+                        }
+                        generatedItems.add(item);
+                    }
+                } catch (Exception e) {
+                    log.warn("生成课程时间失败：course={}, error={}", course.getTitle(), e.getMessage());
+                }
+            }
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "生成 " + generatedItems.size() + " 条日程，其中 " + conflictItems.size() + " 条有冲突");
+        result.put("items", generatedItems);
+        result.put("conflictItems", conflictItems);
+        result.put("totalCount", generatedItems.size());
+        result.put("conflictCount", conflictItems.size());
+        result.put("totalWeeks", totalWeeks);
+        return result;
+    }
+
+    /**
+     * 从 CourseItem 计算具体上课时间列表
+     */
+    private List<LocalDateTime> calculateCourseTimesFromCourseItem(
+            LocalDate semesterStart, ScheduleTableDTO.CourseItem course,
+            List<ScheduleTableDTO.TimeSection> timeSections, int totalWeeks) {
+        List<LocalDateTime> times = new ArrayList<>();
+
+        DayOfWeek dayOfWeek = parseDayOfWeek(course.getDayOfWeek());
+        if (dayOfWeek == null) return times;
+
+        List<Integer> sectionIndices = course.getSectionIndices();
+        if (sectionIndices == null || sectionIndices.isEmpty()) return times;
+
+        // 用户配置的 totalWeeks 优先：用它作为完整周次范围，覆盖课程自带的 weeks
+        List<Integer> weeks;
+        if (totalWeeks > 0) {
+            weeks = new ArrayList<>();
+            for (int w = 1; w <= totalWeeks; w++) {
+                weeks.add(w);
+            }
+        } else {
+            weeks = course.getWeeks();
+            if (weeks == null || weeks.isEmpty()) {
+                weeks = new ArrayList<>();
+                for (int w = 1; w <= 16; w++) {
+                    weeks.add(w);
+                }
+            }
+        }
+
+        boolean oddWeek = Boolean.TRUE.equals(course.getOddWeek());
+        boolean evenWeek = Boolean.TRUE.equals(course.getEvenWeek());
+
+        for (int week : weeks) {
+            LocalDate courseDate = semesterStart.plusWeeks(week - 1).with(dayOfWeek);
+
+            boolean skipWeek = false;
+            if (oddWeek && !evenWeek && week % 2 == 0) skipWeek = true;
+            if (!oddWeek && evenWeek && week % 2 == 1) skipWeek = true;
+            if (skipWeek) continue;
+
+            for (int sectionIndex : sectionIndices) {
+                ScheduleTableDTO.TimeSection ts = timeSections.stream()
+                        .filter(t -> t.getIndex() == sectionIndex)
+                        .findFirst().orElse(null);
+                if (ts != null) {
+                    try {
+                        LocalTime time = LocalTime.parse(ts.getStartTime(), TIME_FMT);
+                        LocalDateTime courseTime = LocalDateTime.of(courseDate, time);
+                        times.add(courseTime);
+                    } catch (Exception e) {
+                        log.warn("解析课程时间失败：section={}, startTime={}", sectionIndex, ts.getStartTime());
+                    }
+                }
+            }
+        }
+        return times;
+    }
+
+    /**
+     * 确认并创建课表日程
+     */
+    @Transactional
+    public Map<String, Object> confirmSchedule(Long userId, String action, List<ScheduleItemDTO> items) {
+        log.info("确认课表日程：userId={}, action={}, itemCount={}", userId, action, items != null ? items.size() : 0);
+
+        if (items == null || items.isEmpty()) {
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", false);
+            result.put("message", "没有待创建的日程");
+            return result;
+        }
+
+        int successCount = 0;
+        int failedCount = 0;
+        List<String> createdReminders = new ArrayList<>();
+
+        for (ScheduleItemDTO item : items) {
+            try {
+                User user = userRepository.findById(userId)
+                        .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
+
+                String remindTimeStr = item.getDate() + " " + item.getTime() + ":00";
+                LocalDateTime remindTime = LocalDateTime.parse(remindTimeStr, REMIND_TIME_FMT);
+
+                // 计算结束时间（默认 90 分钟）
+                LocalDateTime endTime = remindTime.plusMinutes(90);
+
+                // 根据 action 处理冲突
+                if ("overwrite-all".equals(action)) {
+                    // 覆盖所有冲突
+                    ConflictResponse conflict = conflictDetectionService.checkConflict(userId, remindTime, endTime, null);
+                    if (conflict.isHasConflict() && conflict.getConflicts() != null) {
+                        for (ConflictResponse.ConflictItem ci : conflict.getConflicts()) {
+                            Reminder conflictReminder = reminderRepository.findById(ci.getId()).orElse(null);
+                            if (conflictReminder != null) {
+                                conflictReminder.setStatus(ReminderStatus.CANCELLED);
+                                reminderRepository.save(conflictReminder);
+                            }
+                        }
+                        log.info("覆盖冲突提醒：userId={}, remindTime={}, conflictCount={}",
+                                userId, remindTime, conflict.getConflicts().size());
+                    }
+                }
+
+                // 创建新提醒
+                Reminder reminder = new Reminder();
+                reminder.setUserId(userId);
+                reminder.setTitle(item.getTitle());
+                reminder.setRemindTime(remindTime);
+                reminder.setEndTime(endTime);
+                reminder.setPriority(Priority.NORMAL);
+                reminder.setLocation(item.getLocation());
+                reminder.setStatus(ReminderStatus.PENDING);
+                reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
+                reminder.setExecutionStatus(ExecutionStatus.PENDING);
+                reminder.setSource(ReminderSource.USER_INPUT);
+                reminder.setTimezone("Asia/Shanghai");
+                reminderRepository.save(reminder);
+
+                successCount++;
+                createdReminders.add(item.getTitle());
+                log.info("课表提醒创建成功：userId={}, title={}, remindTime={}",
+                        userId, item.getTitle(), remindTime);
+            } catch (Exception e) {
+                failedCount++;
+                log.error("课表提醒创建失败：userId={}, title={}", userId, item.getTitle(), e);
+            }
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "课表日程创建完成：成功 " + successCount + " 条，失败 " + failedCount + " 条");
+        result.put("successCount", successCount);
+        result.put("failedCount", failedCount);
+        result.put("createdReminders", createdReminders);
+        return result;
+    }
+
+    /**
+     * 计算课程的所有上课时间
+     */
+    private List<LocalDateTime> calculateCourseTimes(LocalDate semesterStart, ManualCourseDTO course,
+                                                      List<ScheduleTableDTO.TimeSection> timeSections, int totalWeeks) {
+        List<LocalDateTime> times = new ArrayList<>();
+
+        // 解析星期几
+        DayOfWeek dayOfWeek = parseDayOfWeek(course.getDayOfWeek());
+        if (dayOfWeek == null) return times;
+
+        // 解析节次范围
+        int[] sectionRange = parseSectionRange(course.getSectionRange());
+        if (sectionRange == null) return times;
+
+        // 解析周次范围，如果为空则使用总周数作为默认
+        List<Integer> weeks = parseWeekRange(course.getWeekRange());
+        if (weeks.isEmpty()) {
+            for (int w = 1; w <= totalWeeks; w++) {
+                weeks.add(w);
+            }
+        }
+
+        // 解析单双周
+        String oddEven = course.getOddEvenWeek();
+
+        for (int week : weeks) {
+            // 计算该周的星期几日期
+            LocalDate courseDate = semesterStart.plusWeeks(week - 1)
+                    .with(dayOfWeek);
+
+            // 检查单双周
+            if ("单周".equals(oddEven) && week % 2 == 0) continue;
+            if ("双周".equals(oddEven) && week % 2 == 1) continue;
+
+            for (int section = sectionRange[0]; section <= sectionRange[1]; section++) {
+                final int currentSection = section;
+                // 找到对应的时间段
+                ScheduleTableDTO.TimeSection ts = timeSections.stream()
+                        .filter(t -> t.getIndex() == currentSection)
+                        .findFirst().orElse(null);
+                if (ts != null) {
+                    try {
+                        LocalTime time = LocalTime.parse(ts.getStartTime(), TIME_FMT);
+                        LocalDateTime courseTime = LocalDateTime.of(courseDate, time);
+                        times.add(courseTime);
+                    } catch (Exception e) {
+                        log.warn("解析课程时间失败：section={}, startTime={}", section, ts.getStartTime());
+                    }
+                }
+            }
+        }
+        return times;
+    }
+
+    /**
+     * 解析星期几
+     */
+    private DayOfWeek parseDayOfWeek(String dayStr) {
+        if (dayStr == null) return null;
+        return switch (dayStr.trim()) {
+            case "星期一", "周一", "1" -> DayOfWeek.MONDAY;
+            case "星期二", "周二", "2" -> DayOfWeek.TUESDAY;
+            case "星期三", "周三", "3" -> DayOfWeek.WEDNESDAY;
+            case "星期四", "周四", "4" -> DayOfWeek.THURSDAY;
+            case "星期五", "周五", "5" -> DayOfWeek.FRIDAY;
+            case "星期六", "周六", "6" -> DayOfWeek.SATURDAY;
+            case "星期日", "周日", "7" -> DayOfWeek.SUNDAY;
+            default -> null;
+        };
+    }
+
+    /**
+     * 解析节次范围
+     */
+    private int[] parseSectionRange(String range) {
+        if (range == null || range.isEmpty()) return null;
+        try {
+            if (range.contains("-")) {
+                String[] parts = range.split("-");
+                int start = Integer.parseInt(parts[0].trim());
+                int end = Integer.parseInt(parts[1].trim());
+                return new int[]{start, end};
+            } else {
+                int single = Integer.parseInt(range.trim());
+                return new int[]{single, single};
+            }
+        } catch (NumberFormatException e) {
+            log.warn("节次范围解析失败：{}", range);
+            return null;
+        }
+    }
+
+    /**
+     * 解析周次范围
+     */
+    private List<Integer> parseWeekRange(String range) {
+        List<Integer> weeks = new ArrayList<>();
+        if (range == null || range.isEmpty()) return weeks;
+        try {
+            if (range.contains(",")) {
+                for (String part : range.split(",")) {
+                    weeks.add(Integer.parseInt(part.trim()));
+                }
+            } else if (range.contains("-")) {
+                String[] parts = range.split("-");
+                int start = Integer.parseInt(parts[0].trim());
+                int end = Integer.parseInt(parts[1].trim());
+                for (int i = start; i <= end; i++) {
+                    weeks.add(i);
+                }
+            } else {
+                weeks.add(Integer.parseInt(range.trim()));
+            }
+        } catch (NumberFormatException e) {
+            log.warn("周次范围解析失败：{}", range);
+        }
+        return weeks;
+    }
+
+    /**
+     * 获取时间配置
+     */
+    private List<ScheduleTableDTO.TimeSection> getTimeSections(CourseTimeConfigDTO config) {
+        if (config != null && config.getSectionTimes() != null && !config.getSectionTimes().isEmpty()) {
+            List<ScheduleTableDTO.TimeSection> sections = new ArrayList<>();
+            for (CourseTimeConfigDTO.SectionTime st : config.getSectionTimes()) {
+                sections.add(ScheduleTableDTO.TimeSection.builder()
+                        .index(st.getIndex())
+                        .startTime(st.getStartTime())
+                        .endTime(st.getEndTime())
+                        .build());
+            }
+            return sections;
+        }
+        return getDefaultTimeSections();
+    }
+
+    /**
+     * 获取默认时间表
+     */
+    private List<ScheduleTableDTO.TimeSection> getDefaultTimeSections() {
+        List<ScheduleTableDTO.TimeSection> sections = new ArrayList<>();
+        sections.add(ScheduleTableDTO.TimeSection.builder().index(1).startTime("08:00").endTime("08:45").build());
+        sections.add(ScheduleTableDTO.TimeSection.builder().index(2).startTime("08:55").endTime("09:40").build());
+        sections.add(ScheduleTableDTO.TimeSection.builder().index(3).startTime("10:00").endTime("10:45").build());
+        sections.add(ScheduleTableDTO.TimeSection.builder().index(4).startTime("10:55").endTime("11:40").build());
+        sections.add(ScheduleTableDTO.TimeSection.builder().index(5).startTime("14:00").endTime("14:45").build());
+        sections.add(ScheduleTableDTO.TimeSection.builder().index(6).startTime("14:55").endTime("15:40").build());
+        sections.add(ScheduleTableDTO.TimeSection.builder().index(7).startTime("16:00").endTime("16:45").build());
+        sections.add(ScheduleTableDTO.TimeSection.builder().index(8).startTime("16:55").endTime("17:40").build());
+        sections.add(ScheduleTableDTO.TimeSection.builder().index(9).startTime("19:00").endTime("19:45").build());
+        sections.add(ScheduleTableDTO.TimeSection.builder().index(10).startTime("19:55").endTime("20:40").build());
+        return sections;
     }
 
     /**

@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
@@ -40,6 +41,14 @@ public class ScheduleImport {
 
     @Column(name = "failed_count")
     private Integer failedCount;
+
+    /** 学期总周数 */
+    @Column(name = "total_weeks")
+    private Integer totalWeeks;
+
+    /** 学期开始日期 */
+    @Column(name = "semester_start_date")
+    private LocalDate semesterStartDate;
 
     @Column(nullable = false)
     private String status = "PENDING";
