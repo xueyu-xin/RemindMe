@@ -56,7 +56,7 @@ public class ConfirmationService {
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-    private static final int TIMEOUT_SECONDS = 15;
+    private static final int TIMEOUT_SECONDS = 300;
 
     @Transactional
     public ConfirmationCardResponse createSession(Long userId, String originalInput, Map<String, Object> parsedData) {
@@ -896,7 +896,7 @@ public class ConfirmationService {
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", createResult.get("success"));
-        result.put("message", "⏰ 15秒未确认，已自动创建周期提醒：" + createResult.get("message"));
+        result.put("message", "⏰ 5分钟未确认，已自动创建周期提醒：" + createResult.get("message"));
         result.put("sessionId", session.getSessionId());
         result.put("title", title);
         result.put("isRecurring", true);
@@ -1351,7 +1351,7 @@ public class ConfirmationService {
     private String buildAutoConfirmMessage(Reminder reminder) {
         String title = reminder.getTitle();
         String remindTime = reminder.getRemindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
-        return "⏳ 15秒未确认，已自动确认提醒：\"" + title + "\"，" + remindTime + " 执行\n" +
+        return "⏳ 5分钟未确认，已自动确认提醒：\"" + title + "\"，" + remindTime + " 执行\n" +
                "⏰ 我将在 " + remindTime + " 提醒您" + title;
     }
 

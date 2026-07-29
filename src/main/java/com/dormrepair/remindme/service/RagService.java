@@ -365,7 +365,7 @@ public class RagService {
 
     @AgentTool(
             name = "retrieve_public_knowledge",
-            description = "从公共知识库中检索生活小技巧、系统说明等通用知识。"
+            description = "从公共知识库中检索系统使用手册（提醒管理、天气查询、个人记忆、经期管理、用户设置、位置与时间等功能说明）。注意：公共知识库仅承载使用手册，不再记录生活小常识/科普内容。"
     )
     public List<KnowledgeResult> retrievePublicKnowledgeForAgent(Long userId, String query, Integer topK) {
         log.info("Agent调用检索公共知识: userId={}, query={}, topK={}", userId, query, topK);

@@ -295,7 +295,7 @@ public class ToolRegistry implements SmartInitializingSingleton {
         ));
         paramDescriptions.put("retrievePublicKnowledgeForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
-            "query", "查询关键词，如'夏天省电'、'考试技巧'",
+            "query", "查询关键词，用于检索系统使用手册，如'怎么创建提醒'、'能查天气吗'、'怎么记经期'",
             "topK", "返回结果数量，默认为5"
         ));
         // 女性健康工具参数描述（含限制说明，供LLM调用前判断）

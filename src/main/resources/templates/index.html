@@ -2211,7 +2211,7 @@
                 if (isBatch) {
                     html += '<div class="card-timer" id="timerText">📋 请确认以上日程信息</div>';
                 } else {
-                    html += '<div class="card-timer" id="timerText">⏳ 15秒后未确认自动确认</div>';
+                    html += '<div class="card-timer" id="timerText">⏳ 5分钟后未确认自动确认</div>';
                 }
                 html += '</div>';
                 
@@ -4102,7 +4102,7 @@
                 html += '<button class="action-btn warning" onclick="handleConfirmationAction(\'edit\', \'' + sessionId + '\')">✏️ 修改</button>';
                 html += '<button class="action-btn danger" onclick="handleConfirmationAction(\'cancel\', \'' + sessionId + '\')">❌ 取消</button>';
                 html += '</div>';
-                html += '<div class="card-timer" id="timerText">⏳ 15秒后未确认自动确认</div>';
+                html += '<div class="card-timer" id="timerText">⏳ 5分钟后未确认自动确认</div>';
                 html += '</div>';
                 container.innerHTML = html;
             }

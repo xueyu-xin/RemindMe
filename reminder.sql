@@ -1,17 +1,17 @@
 /*
  Navicat Premium Dump SQL
 
- Source Server         : localhost_3307
+ Source Server         : localhost_3306
  Source Server Type    : MySQL
  Source Server Version : 80400 (8.4.0)
- Source Host           : localhost:3307
+ Source Host           : localhost:3306
  Source Schema         : reminder
 
  Target Server Type    : MySQL
  Target Server Version : 80400 (8.4.0)
  File Encoding         : 65001
 
- Date: 29/07/2026 21:42:29
+ Date: 30/07/2026 04:13:48
 */
 
 SET NAMES utf8mb4;
@@ -46,7 +46,7 @@ CREATE TABLE `confirmation_sessions`  (
   INDEX `idx_user_status`(`user_id` ASC, `status` ASC) USING BTREE,
   INDEX `idx_expires_at`(`expires_at` ASC) USING BTREE,
   INDEX `idx_stage`(`stage` ASC) USING BTREE
-) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Records of confirmation_sessions
@@ -478,6 +478,7 @@ INSERT INTO `confirmation_sessions` VALUES ('8688bb92-0f16-4976-a8f7-f21c5fcb167
 INSERT INTO `confirmation_sessions` VALUES ('86c1f85c-d3f3-47f0-adde-c44e0605e3d8', '2026-07-27 23:30:07.626076', NULL, NULL, NULL, 0, 'PENDING', '2026-07-27 23:30:07.626076', 2, 4, 10, 3, 113, 'REMINDER_EXECUTE', 10, NULL, 'NORMAL', '2026-07-27 22:45:21.000000', '切苹果', NULL);
 INSERT INTO `confirmation_sessions` VALUES ('86d930b9-7735-44ea-9d6d-9378c31bbd8b', '2026-07-22 22:52:00.008362', NULL, NULL, NULL, 0, 'PENDING', '2026-07-22 22:52:00.008362', 2, 3, 10, 3, 27, 'REMINDER_EXECUTE', 10, 'null', 'NORMAL', '2026-07-22 22:21:53.000000', '买巧克力苹果', NULL);
 INSERT INTO `confirmation_sessions` VALUES ('8729fff1-bdc4-4879-9a08-ac85a3b1d99b', '2026-07-22 21:01:00.055965', NULL, NULL, NULL, 0, 'PENDING', '2026-07-22 21:01:00.055965', 2, 40, 10, 3, 9, 'REMINDER_EXECUTE', 10, 'null', 'NORMAL', '2026-07-21 18:56:02.000000', '提醒', NULL);
+INSERT INTO `confirmation_sessions` VALUES ('872d2a22-2c3a-4268-bb3e-573299946401', '2026-07-30 03:09:33.440740', '2026-07-30 03:09:48.427580', '背诵英语单词', '{\"title\": \"背诵英语单词\", \"source\": \"AGENT\", \"endDate\": \"2027-07-31\", \"location\": null, \"priority\": \"NORMAL\", \"startDate\": \"2026-07-31\", \"totalDays\": 366, \"remindTime\": \"2026-07-31 13:00:00\", \"repeatType\": \"DAILY\", \"isRecurring\": true, \"recurringEndDate\": \"2027-07-31\", \"recurringStartDate\": \"2026-07-31\", \"recurringRemindTime\": \"13:00:00\", \"recurringRepeatType\": \"DAILY\"}', 0, 'CANCELLED', '2026-07-30 03:09:43.320854', 1, 0, 10, 3, NULL, 'INFO_CONFIRM', 10, NULL, 'NORMAL', '2026-07-31 13:00:00.000000', '背诵英语单词', NULL);
 INSERT INTO `confirmation_sessions` VALUES ('87e0caca-e4cf-48ef-8233-09641dfc5631', '2026-07-29 20:38:05.240317', '2026-07-29 20:38:20.217733', '去打工', '{\"title\": \"去打工\", \"source\": \"USER_INPUT\", \"endTime\": \"2026-07-31 17:00:00\", \"location\": null, \"priority\": \"NORMAL\", \"intentType\": \"REMINDER\", \"remindTime\": \"2026-07-31 16:00:00\", \"hasConflict\": false, \"advanceMinutes\": 10}', 0, 'CONFIRMED', '2026-07-29 20:38:12.874965', 1, 0, 10, 3, 974, 'REMINDER_EXECUTE', 10, NULL, 'NORMAL', '2026-07-31 16:00:00.000000', '去打工', '2026-07-31 17:00:00.000000');
 INSERT INTO `confirmation_sessions` VALUES ('88017727-56c8-4b73-95d0-366ad2c0e824', '2026-07-26 00:29:00.278681', '2026-07-26 00:29:15.277160', '四点钟', '{\"title\": \"四点钟\", \"location\": \"null\", \"priority\": \"NORMAL\", \"confidence\": 0.95, \"intentType\": \"REMINDER\", \"remindTime\": \"2026-07-26 16:00:00\", \"advanceMinutes\": 10}', 0, 'CONFIRMED', '2026-07-26 00:29:22.768940', 2, 0, 10, 3, 88, 'REMINDER_EXECUTE', 10, 'null', 'NORMAL', '2026-07-26 16:00:00.000000', '四点钟', NULL);
 INSERT INTO `confirmation_sessions` VALUES ('88506b44-eaa1-420c-8341-9190c5a41ee2', '2026-07-22 20:29:00.040996', NULL, NULL, NULL, 0, 'PENDING', '2026-07-22 20:29:00.040996', 2, 10, 10, 3, 15, 'REMINDER_EXECUTE', 10, '拼多多', 'NORMAL', '2026-07-21 16:44:00.000000', '下单', NULL);
@@ -854,7 +855,7 @@ CREATE TABLE `push_logs`  (
   INDEX `idx_push_logs_reminder`(`reminder_id` ASC) USING BTREE,
   CONSTRAINT `fk_push_logs_reminder_id` FOREIGN KEY (`reminder_id`) REFERENCES `reminders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT,
   CONSTRAINT `fk_push_logs_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 11 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '推送日志表' ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 11 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '推送日志表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Records of push_logs
@@ -890,7 +891,7 @@ CREATE TABLE `recurring_instances`  (
   INDEX `idx_status`(`status` ASC) USING BTREE,
   CONSTRAINT `recurring_instances_ibfk_1` FOREIGN KEY (`recurring_id`) REFERENCES `recurring_reminders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT,
   CONSTRAINT `recurring_instances_ibfk_2` FOREIGN KEY (`reminder_id`) REFERENCES `reminders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 793 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '周期提醒实例表' ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 793 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '周期提醒实例表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Records of recurring_instances
@@ -933,7 +934,7 @@ CREATE TABLE `recurring_reminders`  (
   INDEX `idx_repeat_type`(`repeat_type` ASC) USING BTREE,
   INDEX `idx_date_range`(`start_date` ASC, `end_date` ASC) USING BTREE,
   CONSTRAINT `recurring_reminders_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 261 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '周期提醒模板表' ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 261 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '周期提醒模板表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Records of recurring_reminders
@@ -972,7 +973,7 @@ CREATE TABLE `reminders`  (
   INDEX `idx_reminders_execution_status`(`execution_status` ASC) USING BTREE,
   INDEX `idx_reminders_user_end_time`(`user_id` ASC, `end_time` ASC) USING BTREE,
   CONSTRAINT `fk_reminders_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 976 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '提醒表' ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 976 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '提醒表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Records of reminders
@@ -1024,10 +1025,8 @@ INSERT INTO `reminders` VALUES (44, 1, '测试', '2026-07-24 14:00:00', NULL, 'A
 INSERT INTO `reminders` VALUES (45, 1, '测试', '2026-07-24 14:00:00', NULL, 'Asia/Shanghai', 10, NULL, 'null', 'NORMAL', 'PENDING', 'PENDING', 0, NULL, 'USER_INPUT', '2026-07-23 00:47:31', '2026-07-23 00:47:31', 'PENDING');
 INSERT INTO `reminders` VALUES (46, 1, '测试', '2026-07-24 14:00:00', NULL, 'Asia/Shanghai', 10, NULL, 'null', 'NORMAL', 'PENDING', 'PENDING', 0, NULL, 'USER_INPUT', '2026-07-23 00:50:30', '2026-07-23 00:50:30', 'PENDING');
 INSERT INTO `reminders` VALUES (47, 1, '测试', '2026-07-24 14:00:00', NULL, 'Asia/Shanghai', 10, NULL, 'null', 'NORMAL', 'PENDING', 'PENDING', 0, NULL, 'USER_INPUT', '2026-07-23 00:53:37', '2026-07-23 00:53:37', 'PENDING');
-INSERT INTO `reminders` VALUES (48, 1, '殴打zsy', '2026-07-23 01:08:27', NULL, 'Asia/Shanghai', 10, NULL, 'null', 'NORMAL', 'PENDING', 'PENDING', 0, NULL, 'USER_INPUT', '2026-07-23 01:05:55', '2026-07-23 01:05:55', 'PENDING');
 INSERT INTO `reminders` VALUES (49, 1, '买雪糕', '2026-07-23 01:09:57', NULL, 'Asia/Shanghai', 10, NULL, 'null', 'NORMAL', 'PENDING', 'PENDING', 0, NULL, 'USER_INPUT', '2026-07-23 01:08:25', '2026-07-23 01:08:25', 'PENDING');
 INSERT INTO `reminders` VALUES (50, 1, '吃饭', '2026-07-24 13:00:00', NULL, 'Asia/Shanghai', 10, NULL, 'null', 'NORMAL', 'PENDING', 'PENDING', 0, NULL, 'USER_INPUT', '2026-07-23 01:19:15', '2026-07-23 01:19:15', 'PENDING');
-INSERT INTO `reminders` VALUES (51, 1, '殴打zsy', '2026-07-23 01:34:39', NULL, 'Asia/Shanghai', 10, NULL, 'null', 'NORMAL', 'PENDING', 'PENDING', 0, NULL, 'USER_INPUT', '2026-07-23 01:25:13', '2026-07-23 01:25:13', 'PENDING');
 INSERT INTO `reminders` VALUES (52, 1, '还书', '2026-07-24 15:00:00', NULL, 'Asia/Shanghai', 10, NULL, 'null', 'NORMAL', 'PENDING', 'PENDING', 0, NULL, 'USER_INPUT', '2026-07-23 01:32:39', '2026-07-23 01:32:39', 'PENDING');
 INSERT INTO `reminders` VALUES (53, 1, '还书', '2026-07-24 15:00:00', NULL, 'Asia/Shanghai', 10, NULL, 'null', 'NORMAL', 'PENDING', 'PENDING', 0, NULL, 'USER_INPUT', '2026-07-23 01:40:09', '2026-07-23 01:40:09', 'PENDING');
 INSERT INTO `reminders` VALUES (54, 1, '还书', '2026-07-24 15:00:00', NULL, 'Asia/Shanghai', 10, NULL, 'null', 'NORMAL', 'PENDING', 'PENDING', 0, NULL, 'USER_INPUT', '2026-07-23 01:45:37', '2026-07-23 01:45:37', 'PENDING');
@@ -1158,7 +1157,7 @@ CREATE TABLE `schedule_import_items`  (
   INDEX `idx_reminder`(`reminder_id` ASC) USING BTREE,
   CONSTRAINT `schedule_import_items_ibfk_1` FOREIGN KEY (`import_id`) REFERENCES `schedule_imports` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT,
   CONSTRAINT `schedule_import_items_ibfk_2` FOREIGN KEY (`reminder_id`) REFERENCES `reminders` (`id`) ON DELETE SET NULL ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 13 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '日程导入明细表' ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 13 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '日程导入明细表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Records of schedule_import_items
@@ -1190,15 +1189,17 @@ CREATE TABLE `schedule_imports`  (
   `failed_count` int NOT NULL DEFAULT 0 COMMENT '失败数',
   `status` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '导入时间',
+  `semester_start_date` date NULL DEFAULT NULL,
+  `total_weeks` int NULL DEFAULT NULL,
   PRIMARY KEY (`id`) USING BTREE,
   INDEX `idx_user_created`(`user_id` ASC, `created_at` ASC) USING BTREE,
   CONSTRAINT `schedule_imports_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 2 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '日程导入记录表' ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 2 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '日程导入记录表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Records of schedule_imports
 -- ----------------------------
-INSERT INTO `schedule_imports` VALUES (1, 1, '学生个人课表_202321314318.xls', 'xls', 12, 12, 0, 'CONFIRMED', '2026-07-29 18:17:25');
+INSERT INTO `schedule_imports` VALUES (1, 1, '学生个人课表_202321314318.xls', 'xls', 12, 12, 0, 'CONFIRMED', '2026-07-29 18:17:25', NULL, NULL);
 
 -- ----------------------------
 -- Table structure for user_dialog_stats
@@ -1221,7 +1222,7 @@ CREATE TABLE `user_dialog_stats`  (
   INDEX `idx_user_dialog_stats_intent`(`intent_type` ASC) USING BTREE,
   INDEX `idx_user_created`(`user_id` ASC, `created_at` ASC) USING BTREE,
   CONSTRAINT `fk_user_dialog_stats_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 159 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '对话统计表' ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 191 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '对话统计表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Records of user_dialog_stats
@@ -1384,6 +1385,24 @@ INSERT INTO `user_dialog_stats` VALUES (155, 1, '后天下午四点到五点我�
 INSERT INTO `user_dialog_stats` VALUES (156, 1, '✅ 已创建提醒：\"去打工\"，2026-07-31 16:00 执行\n⏰ 我将在 2026-07-31 16:00 提醒您去打工', NULL, NULL, NULL, '2026-07-29 20:38:13', b'0', '✅ 已创建提醒：\"去打工\"，2026-07-31 16:00 执行\n⏰ 我将在 2026-07-31 16:00 提醒您去打工', 'bot', NULL);
 INSERT INTO `user_dialog_stats` VALUES (157, 1, '后天下午三点到四点我要去看雪', NULL, NULL, NULL, '2026-07-29 20:39:08', b'0', '后天下午三点到四点我要去看雪', 'user', NULL);
 INSERT INTO `user_dialog_stats` VALUES (158, 1, '⏳ 15秒未确认，已自动确认提醒：\"去看雪\"，2026-07-31 15:00 执行\n⏰ 我将在 2026-07-31 15:00 提醒您去看雪', NULL, NULL, NULL, '2026-07-29 20:39:29', b'0', '⏳ 15秒未确认，已自动确认提醒：\"去看雪\"，2026-07-31 15:00 执行\n⏰ 我将在 2026-07-31 15:00 提醒您去看雪', 'bot', NULL);
+INSERT INTO `user_dialog_stats` VALUES (169, 1, '你觉得我早上八点吃的怎么样', NULL, NULL, NULL, '2026-07-30 02:51:31', b'0', '你觉得我早上八点吃的怎么样', 'user', NULL);
+INSERT INTO `user_dialog_stats` VALUES (170, 1, '你早上的「巧克力 + 咖啡」组合🍫☕，说实话有亮点也有可优化的地方：\n\n**✅ 好的方面：**\n- 黑巧（70%以上）富含抗氧化物，能提神醒脑\n- 纯咖啡能加速代谢、提高专注力\n- 如果能控制量，这个组合热量不高\n\n**⚠️ 需要注意的：**\n- 空腹吃巧克力 + 喝咖啡，对胃刺激比较大，容易反酸或胃不舒服\n- 缺少蛋白质和膳食纤维，上午容易饿，血糖也可能先升后降\n- 如果是甜巧或加糖咖啡，糖分摄入偏高\n\n**💡 建议优化搭配：**\n加点 **蛋白质和纤维**，比如：\n- 一小杯酸奶/牛奶 🥛\n- 一个水煮蛋 🥚\n- 一小把坚果或半个苹果 🍎\n\n这样吃完既有精神又撑得久，不会十点多就饿了～😊\n\n要不要我帮你更新一下记忆，把明天早上的搭配调整得更健康？', NULL, NULL, NULL, '2026-07-30 02:51:38', b'0', '你早上的「巧克力 + 咖啡」组合🍫☕，说实话有亮点也有可优化的地方：\n\n**✅ 好的方面：**\n- 黑巧（70%以上）富含抗氧化物，能提神醒脑\n- 纯咖啡能加速代谢、提高专注力\n- 如果能控制量，这个组合热量不高\n\n**⚠️ 需要注意的：**\n- 空腹吃巧克力 + 喝咖啡，对胃刺激比较大，容易反酸或胃不舒服\n- 缺少蛋白质和膳食纤维，上午容易饿，血糖也可能先升后降\n- 如果是甜巧或加糖咖啡，糖分摄入偏高\n\n**💡 建议优化搭配：**\n加点 **蛋白质和纤维**，比如：\n- 一小杯酸奶/牛奶 🥛\n- 一个水煮蛋 🥚\n- 一小把坚果或半个苹果 🍎\n\n这样吃完既有精神又撑得久，不会十点多就饿了～😊\n\n要不要我帮你更新一下记忆，把明天早上的搭配调整得更健康？', 'bot', NULL);
+INSERT INTO `user_dialog_stats` VALUES (171, 1, '我打算每天早上八点喝一杯咖啡，你觉得如何', NULL, NULL, NULL, '2026-07-30 02:52:17', b'0', '我打算每天早上八点喝一杯咖啡，你觉得如何', 'user', NULL);
+INSERT INTO `user_dialog_stats` VALUES (172, 1, '每天早上一杯咖啡，提神又醒脑，是个不错的习惯呢！☕ 记得尽量在早餐后喝，别空腹，这样对胃更友好哦～', NULL, NULL, NULL, '2026-07-30 02:52:26', b'0', '每天早上一杯咖啡，提神又醒脑，是个不错的习惯呢！☕ 记得尽量在早餐后喝，别空腹，这样对胃更友好哦～', 'bot', NULL);
+INSERT INTO `user_dialog_stats` VALUES (173, 1, '我一般早上八点还会吃什么来着', NULL, NULL, NULL, '2026-07-30 02:52:44', b'0', '我一般早上八点还会吃什么来着', 'user', NULL);
+INSERT INTO `user_dialog_stats` VALUES (174, 1, '📋 根据记录，你每天早上八点会吃巧克力哦！🍫 搭配咖啡，提神又补充能量，还不错呢～', NULL, NULL, NULL, '2026-07-30 02:52:54', b'0', '📋 根据记录，你每天早上八点会吃巧克力哦！🍫 搭配咖啡，提神又补充能量，还不错呢～', 'bot', NULL);
+INSERT INTO `user_dialog_stats` VALUES (177, 1, '你觉得我早上八点的搭配食物怎么样', NULL, NULL, NULL, '2026-07-30 03:06:54', b'0', '你觉得我早上八点的搭配食物怎么样', 'user', NULL);
+INSERT INTO `user_dialog_stats` VALUES (178, 1, '你早上八点的搭配是巧克力+咖啡，甜苦交织很经典呀😄 巧克力提供能量和好心情，咖啡提神醒脑，这个组合算是早起快乐套餐了～建议巧克力选黑巧（少糖）搭配无糖咖啡，会更健康哦！', NULL, NULL, NULL, '2026-07-30 03:07:02', b'0', '你早上八点的搭配是巧克力+咖啡，甜苦交织很经典呀😄 巧克力提供能量和好心情，咖啡提神醒脑，这个组合算是早起快乐套餐了～建议巧克力选黑巧（少糖）搭配无糖咖啡，会更健康哦！', 'bot', NULL);
+INSERT INTO `user_dialog_stats` VALUES (179, 1, '我好想8月出去旅游啊', NULL, NULL, NULL, '2026-07-30 03:07:31', b'0', '我好想8月出去旅游啊', 'user', NULL);
+INSERT INTO `user_dialog_stats` VALUES (180, 1, '我记得你之前说过计划8月去北京旅游呢！🎉 现在正好是7月30号，8月马上就到了，很适合规划起来哦～\n\n不过我也有记录你**8月有考试**，如果想出去旅游的话，要不要先看看考试时间，避开考试安排再出发？这样玩起来也更安心呀～😊 你是打算去北京吗？还是想换个地方？', NULL, NULL, NULL, '2026-07-30 03:07:37', b'0', '我记得你之前说过计划8月去北京旅游呢！🎉 现在正好是7月30号，8月马上就到了，很适合规划起来哦～\n\n不过我也有记录你**8月有考试**，如果想出去旅游的话，要不要先看看考试时间，避开考试安排再出发？这样玩起来也更安心呀～😊 你是打算去北京吗？还是想换个地方？', 'bot', NULL);
+INSERT INTO `user_dialog_stats` VALUES (181, 1, '夏天怎么省电', NULL, NULL, NULL, '2026-07-30 03:08:11', b'0', '夏天怎么省电', 'user', NULL);
+INSERT INTO `user_dialog_stats` VALUES (182, 1, '夏天省电小妙招来啦～☀️ 试试这些方法，空调和电费一起降：\n\n1. **空调调高1-2℃**：26-28℃最省电，配合风扇体感更舒服～\n2. **睡前定时**：设2-3小时后关机或调至睡眠模式，别一整夜猛吹❄️\n3. **出门前关空调**：提前10-20分钟关，余温还能凉一会儿～\n4. **冰箱别塞太满**：留出冷气循环空间，减少压缩机频繁启动\n5. **关掉待机电器**：机顶盒、路由器等\"偷电贼\"不用时拔插头\n6. **多用自然光**：白天窗帘半拉，少开灯也能省一笔\n7. **洗衣机选冷水**：夏天衣服不脏，冷水模式照样洗干净\n\n你最近是有考试安排，8月初出发旅游的话，走之前记得把家里不用的电器都断电，省电又安全～😄', NULL, NULL, NULL, '2026-07-30 03:08:15', b'0', '夏天省电小妙招来啦～☀️ 试试这些方法，空调和电费一起降：\n\n1. **空调调高1-2℃**：26-28℃最省电，配合风扇体感更舒服～\n2. **睡前定时**：设2-3小时后关机或调至睡眠模式，别一整夜猛吹❄️\n3. **出门前关空调**：提前10-20分钟关，余温还能凉一会儿～\n4. **冰箱别塞太满**：留出冷气循环空间，减少压缩机频繁启动\n5. **关掉待机电器**：机顶盒、路由器等\"偷电贼\"不用时拔插头\n6. **多用自然光**：白天窗帘半拉，少开灯也能省一笔\n7. **洗衣机选冷水**：夏天衣服不脏，冷水模式照样洗干净\n\n你最近是有考试安排，8月初出发旅游的话，走之前记得把家里不用的电器都断电，省电又安全～😄', 'bot', NULL);
+INSERT INTO `user_dialog_stats` VALUES (183, 1, '提醒我每天下午一点背诵英语单词', NULL, NULL, NULL, '2026-07-30 03:09:03', b'0', '提醒我每天下午一点背诵英语单词', 'user', NULL);
+INSERT INTO `user_dialog_stats` VALUES (184, 1, '好的，你想设置每天下午一点背诵英语单词的提醒～不过需要确认一下开始和结束时间哦：\n\n📅 你希望从**哪天开始**，到**哪天结束**呢？比如：\n- 从**明天（7月31日）**开始，先坚持一个月到**8月31日**？\n- 或者从**今天（7月30日）**下午一点就开始？\n- 如果是长期循环，也可以告诉我一个大概的结束日期～\n\n你定个时间，我马上帮你设置好！😊', NULL, NULL, NULL, '2026-07-30 03:09:10', b'0', '好的，你想设置每天下午一点背诵英语单词的提醒～不过需要确认一下开始和结束时间哦：\n\n📅 你希望从**哪天开始**，到**哪天结束**呢？比如：\n- 从**明天（7月31日）**开始，先坚持一个月到**8月31日**？\n- 或者从**今天（7月30日）**下午一点就开始？\n- 如果是长期循环，也可以告诉我一个大概的结束日期～\n\n你定个时间，我马上帮你设置好！😊', 'bot', NULL);
+INSERT INTO `user_dialog_stats` VALUES (185, 1, '明天开始', NULL, NULL, NULL, '2026-07-30 03:09:15', b'0', '明天开始', 'user', NULL);
+INSERT INTO `user_dialog_stats` VALUES (186, 1, '好的，明天（7月31日）开始！那你想坚持到**什么时候结束**呢？比如：\n\n- 先背到**8月底**？\n- 背到**考试完**（8月份考试结束那天）？\n- 或者长期一直持续下去，暂时不设结束日期？\n\n你定个时间，我立马帮你安排上～😊', NULL, NULL, NULL, '2026-07-30 03:09:17', b'0', '好的，明天（7月31日）开始！那你想坚持到**什么时候结束**呢？比如：\n\n- 先背到**8月底**？\n- 背到**考试完**（8月份考试结束那天）？\n- 或者长期一直持续下去，暂时不设结束日期？\n\n你定个时间，我立马帮你安排上～😊', 'bot', NULL);
+INSERT INTO `user_dialog_stats` VALUES (187, 1, '长期坚持', NULL, NULL, NULL, '2026-07-30 03:09:27', b'0', '长期坚持', 'user', NULL);
+INSERT INTO `user_dialog_stats` VALUES (188, 1, '❌ 已取消创建提醒', NULL, NULL, NULL, '2026-07-30 03:09:43', b'0', '❌ 已取消创建提醒', 'bot', NULL);
 
 -- ----------------------------
 -- Table structure for users
@@ -1416,13 +1435,14 @@ CREATE TABLE `users`  (
   UNIQUE INDEX `uk_users_phone`(`phone` ASC) USING BTREE,
   INDEX `idx_users_phone`(`phone` ASC) USING BTREE,
   INDEX `idx_users_gender`(`gender` ASC) USING BTREE
-) ENGINE = InnoDB AUTO_INCREMENT = 3 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '用户表' ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 4 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '用户表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Records of users
 -- ----------------------------
-INSERT INTO `users` VALUES (1, '13800138001', '$2a$10$Y.7V8nhiZcZnPUOHQXxnFezn6Grf7/QIRXorq2vHOYrYYwno4zyou', '用户8001', NULL, 'FEMALE', '广州', 10, 10, 28, NULL, 5, 0, 'PENDING', NULL, 0, '2026-07-18 21:28:01', '2026-07-28 23:04:30', 0, b'0', 0, NULL);
+INSERT INTO `users` VALUES (1, '13800138001', '$2a$10$Y.7V8nhiZcZnPUOHQXxnFezn6Grf7/QIRXorq2vHOYrYYwno4zyou', '小佳', 'avatars/2026/07/30/1785354322710_avatar_1785354322683.png', 'FEMALE', '广东省-揭阳市-揭东区', 10, 10, 28, '2026-07-18', 5, 0, 'PENDING', NULL, 0, '2026-07-18 21:28:01', '2026-07-30 03:45:45', 0, b'0', 0, NULL);
 INSERT INTO `users` VALUES (2, '15989669556', '$2a$10$hLsh49s5YX.h4awzJJQKG.Zyj35kRLrlfmZwcpgfHNTIT.1vCg.AK', '用户9556', NULL, 'FEMALE', '广东省-汕头市-潮阳区', 10, 10, 28, '2026-07-27', 5, 1, 'CONFIRMED', NULL, 0, '2026-07-20 17:08:25', '2026-07-28 03:24:39', 16, b'0', 0, NULL);
+INSERT INTO `users` VALUES (3, '13012345678', '$2a$10$HXnTBWJkhjuPRN870YPSi.bLchDq5C9e/tkJQpNGp5PSzmBZ8HAqO', '用户5678', NULL, 'MALE', '广州', 10, 10, 28, NULL, 5, 1, 'PENDING', NULL, 0, '2026-07-30 03:44:00', '2026-07-30 03:44:29', 0, b'0', 0, NULL);
 
 -- ----------------------------
 -- Table structure for verification_codes
@@ -1438,10 +1458,14 @@ CREATE TABLE `verification_codes`  (
   PRIMARY KEY (`id`) USING BTREE,
   INDEX `idx_verification_codes_phone`(`phone` ASC) USING BTREE,
   INDEX `idx_verification_codes_expires`(`expires_at` ASC) USING BTREE
-) ENGINE = InnoDB AUTO_INCREMENT = 4 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '验证码表' ROW_FORMAT = Dynamic;
+) ENGINE = InnoDB AUTO_INCREMENT = 9 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '验证码表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Records of verification_codes
 -- ----------------------------
+INSERT INTO `verification_codes` VALUES (5, '15989669556', '297833', '2026-07-30 03:47:35', 0, '2026-07-30 03:42:35');
+INSERT INTO `verification_codes` VALUES (6, '15018424539', '669300', '2026-07-30 03:48:28', 0, '2026-07-30 03:43:28');
+INSERT INTO `verification_codes` VALUES (7, '13012345678', '431113', '2026-07-30 03:48:55', 1, '2026-07-30 03:43:55');
+INSERT INTO `verification_codes` VALUES (8, '16989556339', '675570', '2026-07-30 03:49:40', 0, '2026-07-30 03:44:40');
 
 SET FOREIGN_KEY_CHECKS = 1;
