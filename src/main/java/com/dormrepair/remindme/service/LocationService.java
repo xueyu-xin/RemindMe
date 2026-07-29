@@ -25,14 +25,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
-/**
- * 位置服务
- * <p>
- * 集成两类位置能力：
- * 1. 高德地图逆地理编码（经纬度 → "省-市-区"地址）
- * 2. 和风天气城市搜索 API（城市名 → 经纬度/LocationID）
- * </p>
- */
+// 位置服务：封装高德逆地理编码与和风天气城市搜索，
+// 对 Agent 暴露 get_location（当前定位）和 geocode_city（城市名转坐标）两个工具。
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -43,12 +37,11 @@ public class LocationService {
     private final UserService userService;
     private final WeatherConfig weatherConfig;
 
+    // 高德地图 API Key，未配置时逆地理编码会回退到默认地址
     @Value("${amap.api.key:}")
     private String amapKey;
 
-    /**
-     * 逆地理编码：根据经纬度获取"省-市-区"格式地址
-     */
+    // 逆地理编码：经纬度转成"省-市-区"格式地址
     public String reverseGeocode(Double latitude, Double longitude) {
         // 检查 Key 是否配置
         if (amapKey == null || amapKey.isBlank()) {
@@ -95,14 +88,9 @@ public class LocationService {
         }
     }
 
-    /**
-     * 获取用户当前地理位置
-     * 有GPS坐标则调用高德API转地址并更新默认城市，否则返回数据库中的默认城市。
-     * <p>
-     * 返回值始终会包含 latitude / longitude（若有 GPS 就用 GPS；没有 GPS 但有默认城市，
-     * 则用默认城市名通过和风天气搜索转换成经纬度兜底；真的拿不到就为 null）。
-     * 这样「查天气」「查空气质量」类工具可以直接拿来用，不必再自己猜。
-     */
+    // 获取用户当前地理位置：有 GPS 就逆地理编码并刷新默认城市，
+    // 没有 GPS 则回退到数据库里的默认城市，并尽量通过城市搜索补出经纬度，
+    // 保证返回结果能直接喂给天气、空气质量等后续工具。
     @AgentTool(name = "get_location", description = "获取用户当前地理位置。有GPS时返回实时定位地址+经纬度；没GPS时返回我的页面设置的默认城市+默认城市的经纬度。只在用户问【我在哪】、【当前位置是哪】、以及任何提到「当前位置」的查询时调用。用户没提到当前位置就不要调这个工具。")
     public Map<String, Object> getLocation(Long userId, Double latitude, Double longitude) {
         Map<String, Object> result = new HashMap<>();
@@ -159,13 +147,7 @@ public class LocationService {
         return result;
     }
 
-    /**
-     * 把具体的城市名（比如"上海"、"广州"、"北京市朝阳区"）解析成经纬度，供 Agent 调用。
-     * <p>
-     * 用法：用户明确说了某个具体城市名（"上海空气质量如何？"、"去北京出差天气？"）时，
-     * 先调 geocode_city 拿到 latitude/longitude，再把它们传给 query_weather_now 等天气工具。
-     * 严禁直接凭印象写死（比如"上海=31.23,121.47"），必须调用这个工具查询。
-     */
+    // 调此工具拿到真实坐标，再传给天气/空气质量类工具
     @AgentTool(name = "geocode_city", description = "把具体城市名解析成经纬度。用户明确提到了一个具体城市名（上海、广州、北京…）时，调用这个工具拿真实坐标，再用坐标查天气/空气质量。禁止自己脑补。")
     public Map<String, Object> geocodeCity(String city) {
         Map<String, Object> result = new HashMap<>();
@@ -204,15 +186,8 @@ public class LocationService {
 
     // ==================== 和风天气城市搜索 ====================
 
-    /**
-     * 搜索城市（调用和风天气城市搜索API）
-     * <p>
-     * 调用 /geo/v2/city/lookup 接口，返回匹配的城市列表
-     * </p>
-     *
-     * @param keyword 搜索关键词，最多返回5条
-     * @return 城市搜索结果列表，查询失败返回空列表
-     */
+    // 调用和风天气 /geo/v2/city/lookup 接口搜索城市，最多返回 5 条匹配结果，
+    // 查询失败或无匹配时返回空列表。
     public List<CitySearchResult> searchCities(String keyword) {
         if (keyword == null || keyword.isBlank()) {
             return Collections.emptyList();
@@ -265,19 +240,12 @@ public class LocationService {
         }
     }
 
-    /**
-     * 将城市名转换为经纬度（供 WeatherService 调用）
-     * <p>
-     * 处理流程：
-     * 1. 已为经纬度格式（如 "113.2644,23.1291"）→ 直接返回
-     * 2. "省-市-区"格式 → 提取市部分用于搜索
-     * 3. 调用和风城市搜索API，取第一条结果的经纬度
-     * 4. 转换失败 → 返回原值（降级处理，由和风天气API自行处理）
-     * </p>
-     *
-     * @param location 城市名或经纬度
-     * @return 经纬度字符串（格式"经度,纬度"），转换失败返回原值
-     */
+    // 城市名转经纬度（WeatherService 也会调）：
+    // 1. 入参已是经纬度格式 → 原样返回；
+    // 2. "省-市-区"格式 → 取市部分去搜索；
+    // 3. 其他城市名 → 调和风城市搜索取第一条结果的经纬度；
+    // 4. 都拿不到 → 返回原值，交给和风天气 API 自行兜底。
+    // 返回格式为"经度,纬度"。
     public String resolveLocationToCoord(String location) {
         // 1. null/空 → 返回默认城市"广州"
         if (location == null || location.isBlank()) {
@@ -315,9 +283,7 @@ public class LocationService {
         return location;
     }
 
-    /**
-     * 判断字符串是否为经纬度格式（如 "113.2644,23.1291"）
-     */
+    // 判断字符串是否为经纬度格式（如 "113.2644,23.1291"）
     private boolean isCoordinate(String location) {
         if (location == null || location.isBlank()) {
             return false;
@@ -327,13 +293,8 @@ public class LocationService {
 
     // ==================== HTTP 工具方法 ====================
 
-    /**
-     * 发送 HTTP GET 请求（和风天气API）
-     * <p>
-     * 使用原生 HttpURLConnection + GZIP 解压，与 WeatherService 保持一致，
-     * 避免 RestTemplate 对 gzip 响应处理不当导致 400 错误
-     * </p>
-     */
+    // 和风天气 API 的 HTTP GET 请求：用原生 HttpURLConnection + 手动 gzip 解压，
+    // 与 WeatherService 保持一致，规避 RestTemplate 处理 gzip 响应时的 400 问题。
     private String httpGet(String urlStr) {
         try {
             URI uri = URI.create(urlStr);
@@ -387,9 +348,7 @@ public class LocationService {
         }
     }
 
-    /**
-     * 读取错误流（自动处理 gzip 解压）
-     */
+    // 读取错误响应流，同样处理 gzip 解压，避免错误信息乱码
     private String readErrorStream(HttpURLConnection conn) {
         try {
             if (conn.getErrorStream() != null) {
@@ -417,16 +376,12 @@ public class LocationService {
         return "Unknown error";
     }
 
-    /**
-     * 构建和风天气API URL
-     */
+    // 拼接和风天气 API 完整 URL
     private String buildWeatherUrl(String path) {
         return weatherConfig.getHost() + path;
     }
 
-    /**
-     * URL 编码（处理中文等特殊字符）
-     */
+    // URL 编码，处理中文等特殊字符
     private String encode(String value) {
         try {
             return URLEncoder.encode(value, StandardCharsets.UTF_8);

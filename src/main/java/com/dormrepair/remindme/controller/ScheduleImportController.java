@@ -13,27 +13,19 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 日程导入控制器
- * <p>
- * 处理文件上传、确认导入、取消导入、查询结果
- * </p>
- */
+// 日程批量导入控制器。统一前缀 /api/schedule，覆盖课表/考试安排等场景的批量日程识别流程：上传文件→AI 识别→（课表场景）配置时间→确认导入/跳过冲突/覆盖全部，最终批量生成提醒
 @Slf4j
 @RestController
 @RequestMapping("/api/schedule")
 @RequiredArgsConstructor
 public class ScheduleImportController {
 
+    // 导入服务：封装文件解析、AI 识别课表结构、冲突判定、批量落库等完整流程
     private final ScheduleImportService scheduleImportService;
 
-    /**
-     * 上传文件，触发识别
-     *
-     * @param file   上传的文件（Excel/PDF/图片）
-     * @param userId 用户ID
-     * @return 识别结果
-     */
+    // 上传入口：接收 Excel/PDF/图片等课表或日程文件，转存后触发 OCR+AI 识别，返回识别出的原始日程条目
+    // file   - 表单上传的二进制文件
+    // userId - 当前登录用户
     @PostMapping("/upload")
     public Map<String, Object> uploadFile(
             @RequestParam("file") MultipartFile file,
@@ -58,13 +50,7 @@ public class ScheduleImportController {
         return scheduleImportService.processUpload(file, userId);
     }
 
-    /**
-     * 确认导入，批量创建提醒
-     *
-     * @param importId 导入ID
-     * @param userId   用户ID
-     * @return 创建结果
-     */
+    // 确认导入（通用入口）：对已识别的条目直接批量创建提醒，对与现有提醒冲突的条目按 direct 策略（保留两者或报冲突）处理
     @PostMapping("/confirm/{importId}")
     public Map<String, Object> confirmImport(
             @PathVariable Long importId,
@@ -82,13 +68,7 @@ public class ScheduleImportController {
         return scheduleImportService.batchCreateReminders(importId, userId, "direct");
     }
 
-    /**
-     * 取消导入
-     *
-     * @param importId 导入ID
-     * @param userId   用户ID
-     * @return 取消结果
-     */
+    // 取消导入：删除本次导入的临时识别记录，不产生任何提醒数据
     @PostMapping("/cancel/{importId}")
     public Map<String, Object> cancelImport(
             @PathVariable Long importId,
@@ -106,13 +86,7 @@ public class ScheduleImportController {
         return scheduleImportService.cancelImport(importId, userId);
     }
 
-    /**
-     * 查询导入结果
-     *
-     * @param importId 导入ID
-     * @param userId   用户ID
-     * @return 导入结果详情
-     */
+    // 查询导入结果详情：返回识别到的日程条目、已创建/冲突/跳过数量等
     @GetMapping("/result/{importId}")
     public Map<String, Object> getImportResult(
             @PathVariable Long importId,
@@ -128,23 +102,19 @@ public class ScheduleImportController {
         return scheduleImportService.getImportResult(importId, userId);
     }
 
-    /**
-     * AI 识别确认（课表场景）
-     */
+    // 课表场景 - AI 识别后立即生成日程：采用系统默认的节次时间表直接生成，不进入配置节次时间的流程
     @PostMapping("/confirm-ai")
     public Map<String, Object> confirmAi(
             @RequestParam("importId") Long importId,
             @RequestParam("userId") Long userId) {
         log.info("AI识别确认：importId={}, userId={}", importId, userId);
-        // 使用 AI 识别结果 + 默认时间表生成具体日程
+        // config 传 null → 内部按默认节次时间表（8:00-8:45 等）构造
         Map<String, Object> result = scheduleImportService.generateScheduleFromImport(userId, importId, null);
         result.put("importId", String.valueOf(importId));
         return result;
     }
 
-    /**
-     * 获取时间配置（课表场景）
-     */
+    // 课表场景 - 获取已配置的节次时间表：进入配置时调用，回填已有配置方便用户修改
     @GetMapping("/get-time-config")
     public Map<String, Object> getTimeConfig(
             @RequestParam("importId") Long importId,
@@ -154,15 +124,13 @@ public class ScheduleImportController {
         result.put("success", true);
         result.put("message", "请配置课程时间");
         result.put("importId", String.valueOf(importId));
-        // 从导入记录中获取时间配置
+        // 配置数据与导入详情复用同一个服务方法返回
         Map<String, Object> configData = scheduleImportService.getImportResult(importId, userId);
         result.put("data", configData);
         return result;
     }
 
-    /**
-     * 提交时间配置（课表场景）
-     */
+    // 课表场景 - 提交节次时间表配置：用户自定义每节课开始/结束时间后，按配置重新推算所有课程的真实提醒时间
     @PostMapping("/config-time")
     public Map<String, Object> configTime(
             @RequestBody CourseTimeConfigDTO config,
@@ -174,9 +142,7 @@ public class ScheduleImportController {
         return result;
     }
 
-    /**
-     * 手动创建课程
-     */
+    // 课表场景 - 纯手动输入课程：不依赖文件上传，用户手动录入课程名/星期/节次/周次/地点等批量生成
     @PostMapping("/manual")
     public Map<String, Object> manualCreate(
             @RequestBody Map<String, Object> body,
@@ -186,6 +152,7 @@ public class ScheduleImportController {
         String semesterStartDate = (String) body.get("semesterStartDate");
         Object totalWeeksObj = body.get("totalWeeks");
         Integer totalWeeks = null;
+        // 总周次兼容 Number / String / null 三类输入
         if (totalWeeksObj instanceof Number) {
             totalWeeks = ((Number) totalWeeksObj).intValue();
         } else if (totalWeeksObj instanceof String) {
@@ -195,12 +162,14 @@ public class ScheduleImportController {
             }
         }
 
+        // 组装时间表配置对象，linkMode=NONE 表示不关联任何 AI 识别结果
         CourseTimeConfigDTO config = new CourseTimeConfigDTO();
         config.setSemesterStartDate(semesterStartDate);
         config.setLinkMode("NONE");
         config.setImportId(importId);
         config.setTotalWeeks(totalWeeks);
 
+        // 把 courses 数组逐行转为 ManualCourseDTO 对象
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> courseMaps = (List<Map<String, Object>>) body.get("courses");
         List<ManualCourseDTO> courses = courseMaps.stream().map(m -> {
@@ -220,9 +189,7 @@ public class ScheduleImportController {
         return result;
     }
 
-    /**
-     * 直接创建（课表场景）
-     */
+    // 课表场景 - 直接创建冲突条目：即使与已有提醒时间重叠也照常生成，交给用户自行判断
     @PostMapping("/confirm/direct")
     public Map<String, Object> confirmDirect(
             @RequestParam("importId") Long importId,
@@ -231,9 +198,7 @@ public class ScheduleImportController {
         return scheduleImportService.batchCreateReminders(importId, userId, "direct");
     }
 
-    /**
-     * 跳过冲突创建（课表场景）
-     */
+    // 课表场景 - 跳过冲突条目：只生成不冲突的日程，与现有提醒重叠的条目被丢弃并计入跳过数
     @PostMapping("/confirm/skip")
     public Map<String, Object> confirmSkip(
             @RequestParam("importId") Long importId,
@@ -242,9 +207,7 @@ public class ScheduleImportController {
         return scheduleImportService.batchCreateReminders(importId, userId, "skip");
     }
 
-    /**
-     * 全部覆盖创建（课表场景）
-     */
+    // 课表场景 - 全部覆盖：先删除时间冲突的既有提醒，再把本次导入的所有条目生成进来
     @PostMapping("/confirm/overwrite-all")
     public Map<String, Object> confirmOverwriteAll(
             @RequestParam("importId") Long importId,

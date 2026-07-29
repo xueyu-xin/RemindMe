@@ -8,32 +8,21 @@ import lombok.NoArgsConstructor;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * 工具调用类
- * <p>
- * 封装工具调用信息，用于LLM工具调用和Agent执行
- * </p>
- */
+// 工具调用请求结构。封装工具名和参数，用于 LLM JSON 解析 → Agent 执行，以及会话历史落盘
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
 public class ToolCall {
 
-    /**
-     * 工具名称
-     */
+    // 被调用工具名
     private String toolName;
 
-    /**
-     * 工具参数
-     */
+    // 参数键值表，key=参数名 value=参数值
     @Builder.Default
     private Map<String, Object> arguments = new HashMap<>();
 
-    /**
-     * 创建工具调用
-     */
+    // 构造空参数调用
     public static ToolCall of(String toolName) {
         return ToolCall.builder()
                 .toolName(toolName)
@@ -41,9 +30,7 @@ public class ToolCall {
                 .build();
     }
 
-    /**
-     * 创建工具调用（带参数）
-     */
+    // 构造带参数调用，null 安全兜底为空 Map
     public static ToolCall of(String toolName, Map<String, Object> arguments) {
         return ToolCall.builder()
                 .toolName(toolName)
@@ -51,9 +38,7 @@ public class ToolCall {
                 .build();
     }
 
-    /**
-     * 添加参数
-     */
+    // 链式追加参数，返回自身便于流式构建
     public ToolCall addArgument(String key, Object value) {
         if (this.arguments == null) {
             this.arguments = new HashMap<>();
@@ -62,24 +47,18 @@ public class ToolCall {
         return this;
     }
 
-    /**
-     * 获取参数值
-     */
+    // 取原始参数值，无则返回 null
     public Object getArgument(String key) {
         return arguments != null ? arguments.get(key) : null;
     }
 
-    /**
-     * 获取字符串参数
-     */
+    // 转字符串；非字符串先 toString
     public String getStringArgument(String key) {
         Object value = getArgument(key);
         return value != null ? String.valueOf(value) : null;
     }
 
-    /**
-     * 获取整数参数
-     */
+    // 转 int；支持 Number 和纯数字字符串，其它返回 null
     public Integer getIntArgument(String key) {
         Object value = getArgument(key);
         if (value instanceof Number) {
@@ -91,9 +70,7 @@ public class ToolCall {
         return null;
     }
 
-    /**
-     * 获取长整数参数
-     */
+    // 转 long；支持 Number 和纯数字字符串
     public Long getLongArgument(String key) {
         Object value = getArgument(key);
         if (value instanceof Number) {
@@ -105,9 +82,7 @@ public class ToolCall {
         return null;
     }
 
-    /**
-     * 获取布尔参数
-     */
+    // 转 boolean；支持 Boolean 和 "true"/"1"/"yes" 等字符串
     public Boolean getBooleanArgument(String key) {
         Object value = getArgument(key);
         if (value instanceof Boolean) {
@@ -119,16 +94,12 @@ public class ToolCall {
         return null;
     }
 
-    /**
-     * 检查是否包含参数
-     */
+    // 是否包含指定参数
     public boolean hasArgument(String key) {
         return arguments != null && arguments.containsKey(key);
     }
 
-    /**
-     * 获取参数数量
-     */
+    // 参数数量；arguments 为 null 返回 0
     public int getArgumentCount() {
         return arguments != null ? arguments.size() : 0;
     }

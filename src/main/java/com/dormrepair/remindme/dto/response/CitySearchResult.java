@@ -2,54 +2,30 @@ package com.dormrepair.remindme.dto.response;
 
 import lombok.Data;
 
-/**
- * 城市搜索结果 DTO
- * <p>
- * 对应和风天气 /geo/v2/city/lookup API 返回的单个城市信息
- * </p>
- */
+// 城市搜索结果 DTO。对应和风天气 /geo/v2/city/lookup API 返回的单个城市条目，用于城市名联想与 LocationID 反查
 @Data
 public class CitySearchResult {
 
-    /**
-     * 城市名（区/县名）
-     */
+    // 城市/区县名称（如「海淀区」「浦东新区」）
     private String name;
 
-    /**
-     * 省（上级行政区划一）
-     */
+    // 一级行政区（省/直辖市/自治区），如「北京」「广东」
     private String adm1;
 
-    /**
-     * 市（上级行政区划二）
-     */
+    // 二级行政区（地级市/州），如「北京市」「深圳市」
     private String adm2;
 
-    /**
-     * 和风天气 LocationID
-     */
+    // 和风天气的 LocationID，后续查询天气/空气质量时都需要传此 id
     private String id;
 
-    /**
-     * 纬度
-     */
+    // 纬度字符串
     private String lat;
 
-    /**
-     * 经度
-     */
+    // 经度字符串
     private String lon;
 
-    /**
-     * 返回 "省-市-区" 格式的显示名称
-     * <p>
-     * 自动处理直辖市（adm2 与 adm1 相同）和同名情况（name 与 adm2 相同），
-     * 避免出现 "北京-北京-北京" 这样的冗余显示
-     * </p>
-     *
-     * @return 格式化后的显示名称
-     */
+    // 返回拼装好的「省-市-区」显示名称，自动跳过与上级同名的层级
+    // 规则：直辖市（如 adm1=北京，adm2=北京）不重复显示；区县与市同名的区县也不重复显示，避免「北京-北京-北京」
     public String getDisplayName() {
         StringBuilder sb = new StringBuilder();
 

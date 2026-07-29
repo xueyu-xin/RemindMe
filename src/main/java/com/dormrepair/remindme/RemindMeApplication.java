@@ -8,9 +8,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 import java.util.TimeZone;
 
-/**
- * 校园生活提醒助手 - 启动类
- */
+// Spring Boot 启动入口。
 @SpringBootApplication(exclude = {
         org.springframework.ai.model.ollama.autoconfigure.OllamaChatAutoConfiguration.class,
         org.springframework.ai.model.openai.autoconfigure.OpenAiEmbeddingAutoConfiguration.class
@@ -19,11 +17,13 @@ import java.util.TimeZone;
 @EnableScheduling
 public class RemindMeApplication {
 
+    // 启动后立即执行的初始化钩子：JVM 默认时区锁死为 Asia/Shanghai，保证 LocalDateTime、调度 cron、日志时间等与北京时间一致
     @PostConstruct
     public void init() {
         TimeZone.setDefault(TimeZone.getTimeZone("Asia/Shanghai"));
     }
 
+    // JVM 主入口，启动内嵌 Tomcat 并初始化 Spring 容器
     public static void main(String[] args) {
         SpringApplication.run(RemindMeApplication.class, args);
     }

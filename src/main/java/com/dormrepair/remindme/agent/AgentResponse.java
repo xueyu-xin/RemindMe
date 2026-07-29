@@ -7,97 +7,57 @@ import lombok.NoArgsConstructor;
 
 import java.util.Map;
 
-/**
- * Agent响应类
- * <p>
- * 统一封装Agent的响应结果
- * </p>
- */
+// Agent 统一响应结构。封装纯文本、工具调用、确认卡片、错误四类输出，供 Controller 下发
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
 public class AgentResponse {
 
-    /**
-     * 响应类型
-     */
+    // 响应类型：TEXT / TOOL_CALL / CONFIRMATION / ERROR
     private ResponseType type;
 
-    /**
-     * 响应内容（文本）
-     */
+    // 面向用户的自然语言正文
     private String content;
 
-    /**
-     * 工具名称（当type为tool_call时）
-     */
+    // type=TOOL_CALL 时：被调用的工具名
     private String toolName;
 
-    /**
-     * 工具参数（当type为tool_call时）
-     */
+    // type=TOOL_CALL 时：工具参数 Map
     private Map<String, Object> toolArgs;
 
-    /**
-     * 是否需要确认（当type为confirmation时）
-     */
+    // type=CONFIRMATION 时：是否需要用户二次确认
     private boolean needConfirmation;
 
-    /**
-     * 确认会话ID（当type为confirmation时）
-     */
+    // type=CONFIRMATION 时：确认会话 ID，与 ConfirmationSession 对应
     private String sessionId;
 
-    /**
-     * 确认数据（当type为confirmation时，包含title、remindTime、location等）
-     */
+    // type=CONFIRMATION 时：确认卡片所需结构化数据（title/remindTime/location/endTime 等）
     private Map<String, Object> confirmationData;
 
-    /**
-     * 工具执行结果（当type为text且包含工具执行结果时）
-     */
+    // type=TEXT 时：附带的工具执行结果（供展示或调试用）
     private Object toolResult;
 
-    /**
-     * 是否成功
-     */
+    // 执行成功标记，失败时与 errorMessage 配套
     @Builder.Default
     private boolean success = true;
 
-    /**
-     * 错误信息（当success为false时）
-     */
+    // success=false 时：错误描述
     private String errorMessage;
 
-    /**
-     * 响应类型枚举
-     */
+    // 响应类型枚举
     public enum ResponseType {
-        /**
-         * 纯文本响应
-         */
+        // 普通自然语言回复
         TEXT,
-
-        /**
-         * 工具调用
-         */
+        // 要求执行一次工具调用
         TOOL_CALL,
-
-        /**
-         * 需要用户确认
-         */
+        // 返回确认卡片，等待用户确认/取消
         CONFIRMATION,
-
-        /**
-         * 错误响应
-         */
+        // 处理异常，走错误分支
         ERROR
     }
 
-    /**
-     * 创建文本响应
-     */
+    // 快速构造文本响应
     public static AgentResponse text(String content) {
         return AgentResponse.builder()
                 .type(ResponseType.TEXT)
@@ -106,9 +66,7 @@ public class AgentResponse {
                 .build();
     }
 
-    /**
-     * 创建工具调用响应
-     */
+    // 快速构造工具调用响应
     public static AgentResponse toolCall(String toolName, Map<String, Object> toolArgs) {
         return AgentResponse.builder()
                 .type(ResponseType.TOOL_CALL)
@@ -118,9 +76,7 @@ public class AgentResponse {
                 .build();
     }
 
-    /**
-     * 创建确认响应
-     */
+    // 快速构造确认响应
     public static AgentResponse confirmation(String content) {
         return AgentResponse.builder()
                 .type(ResponseType.CONFIRMATION)
@@ -130,9 +86,7 @@ public class AgentResponse {
                 .build();
     }
 
-    /**
-     * 创建确认响应（带sessionId和确认数据）
-     */
+    // 快速构造确认响应（带 sessionId 与卡片数据）
     public static AgentResponse confirmation(String sessionId, String content, Map<String, Object> confirmationData) {
         return AgentResponse.builder()
                 .type(ResponseType.CONFIRMATION)
@@ -144,9 +98,7 @@ public class AgentResponse {
                 .build();
     }
 
-    /**
-     * 创建错误响应
-     */
+    // 快速构造错误响应
     public static AgentResponse error(String errorMessage) {
         return AgentResponse.builder()
                 .type(ResponseType.ERROR)

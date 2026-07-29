@@ -28,12 +28,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 通义千问识别服务
- * <p>
- * 调用通义千问 API，将文本或图片内容识别为结构化日程列表
- * </p>
- */
+// 通义千问识别服务
+// 调用阿里通义千问多模态模型，把图片/文本识别为结构化日程列表
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -42,6 +38,7 @@ public class QwenRecognitionService {
     private final QwenConfig qwenConfig;
     private final ObjectMapper objectMapper;
 
+    // Bean 初始化时把 API Key 写入系统变量，供 DashScope SDK 读取
     @PostConstruct
     public void init() {
         String key = qwenConfig.getKey();
@@ -54,6 +51,7 @@ public class QwenRecognitionService {
         }
     }
 
+    // 文本日程识别 Prompt：要求模型只输出 JSON 数组，覆盖标题/日期/时间/地点/重复类型
     private static final String RECOGNIZE_PROMPT = """
             你是一个课程表/日程识别助手。请从以下内容中提取所有日程信息，返回 JSON 数组。
 
@@ -75,6 +73,7 @@ public class QwenRecognitionService {
             内容：
             %s""";
 
+    // 图片日程识别 Prompt：与文本版字段一致，强调仔细识别图中所有文字
     private static final String IMAGE_PROMPT = """
             你是一个课程表/日程识别助手。请识别图片中的所有日程信息，返回 JSON 数组。
 
@@ -93,13 +92,8 @@ public class QwenRecognitionService {
             5. 如果无法识别任何日程，返回空数组 []
             """;
 
-    /**
-     * 从文本内容识别日程
-     *
-     * @param content  文本内容
-     * @param fileType 文件类型（excel/pdf/image）
-     * @return 识别到的日程列表
-     */
+    // 从文本内容识别日程
+    // content 文本内容；fileType 文件类型（excel/pdf/image）；返回识别到的日程列表
     public List<ScheduleItemDTO> recognize(String content, String fileType) {
         if (content == null || content.trim().isEmpty()) {
             log.warn("识别内容为空");
@@ -134,12 +128,8 @@ public class QwenRecognitionService {
         }
     }
 
-    /**
-     * 从图片 Base64 识别日程
-     *
-     * @param base64Image 图片的 Base64 data URI
-     * @return 识别到的日程列表
-     */
+    // 从图片 Base64 识别日程
+    // base64Image 图片的 Base64 data URI；返回识别到的日程列表
     public List<ScheduleItemDTO> recognizeImage(String base64Image) {
         if (base64Image == null || base64Image.isEmpty()) {
             log.warn("图片 Base64 为空");
@@ -179,9 +169,7 @@ public class QwenRecognitionService {
         }
     }
 
-    /**
-     * 解析 AI 返回的 JSON 为 ScheduleItemDTO 列表
-     */
+    // 解析 AI 返回的 JSON 为 ScheduleItemDTO 列表
     private List<ScheduleItemDTO> parseScheduleItems(String responseText) {
         try {
             String json = extractJsonArray(responseText);
@@ -212,9 +200,7 @@ public class QwenRecognitionService {
         }
     }
 
-    /**
-     * 从 AI 返回中提取 JSON 数组
-     */
+    // 从 AI 返回中提取 JSON 数组（截取第一个 [ 到最后一个 ]）
     private String extractJsonArray(String text) {
         if (text == null) return null;
 
@@ -226,9 +212,8 @@ public class QwenRecognitionService {
         return null;
     }
 
-    /**
-     * 从 GenerationResult 提取文本
-     */
+    // 从 GenerationResult 提取文本
+    // 兼容 choices.message.content、output.text 以及 JSON 兜底三种来源
     private String extractText(GenerationResult result) {
         if (result == null || result.getOutput() == null) {
             log.warn("GenerationResult output 为空");
@@ -274,9 +259,8 @@ public class QwenRecognitionService {
         return "";
     }
 
-    /**
-     * 从 MultiModalConversationResult 提取文本
-     */
+    // 从 MultiModalConversationResult 提取文本
+    // 多模态返回的 content 是 List<Map>，需要筛出 type 为 text 的内容拼接
     private String extractMultiModalText(MultiModalConversationResult result) {
         if (result == null || result.getOutput() == null) {
             log.warn("MultiModalConversationResult output 为空");
@@ -316,6 +300,7 @@ public class QwenRecognitionService {
         return "";
     }
 
+    // 课表识别 Prompt：解析用 | 分隔的表格结构，输出带节次/周次/单双周/时间表的完整课程 JSON
     private static final String SCHEDULE_TABLE_PROMPT = """
             注意：如果输入内容包含"周一"、"周二"、"第1节"、"08:00-08:45"等课表特征，直接识别为课表格式。
             如果内容本身就是课表结构，直接输出课程信息，不要推断日期。
@@ -373,13 +358,8 @@ public class QwenRecognitionService {
             课表内容：
             %s""";
 
-    /**
-     * 识别课表结构化数据
-     *
-     * @param content  课表文本内容
-     * @param fileType 文件类型
-     * @return 识别结果
-     */
+    // 识别课表结构化数据
+    // content 课表文本内容；fileType 文件类型；返回识别结果（含课程列表、节次映射、时间表、学期起始日）
     public ScheduleTableDTO recognizeScheduleTable(String content, String fileType) {
         if (content == null || content.trim().isEmpty()) {
             log.warn("课表识别内容为空");
@@ -429,10 +409,8 @@ public class QwenRecognitionService {
         }
     }
 
-    /**
-     * 解析课表识别结果
-     */
-    
+    // 解析课表识别结果
+    // 提取 JSON 对象后反序列化为 DTO，并做置信度门槛与无效课程过滤
     private ScheduleTableDTO parseScheduleTableResult(String responseText) {
         log.info("AI 返回的原始 JSON：{}", responseText);
         try {
@@ -475,9 +453,7 @@ public class QwenRecognitionService {
         }
     }
 
-    /**
-     * 从 AI 返回中提取 JSON 对象
-     */
+    // 从 AI 返回中提取 JSON 对象（截取第一个 { 到最后一个 }）
     private String extractJsonObject(String text) {
         if (text == null) return null;
 

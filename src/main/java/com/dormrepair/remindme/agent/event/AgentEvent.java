@@ -6,37 +6,24 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 
-/**
- * Agent事件基类
- * <p>
- * 所有Agent相关事件的基类，包含用户ID、时间戳和事件类型
- * </p>
- */
+// Agent 事件基类
+// 所有 Agent 相关事件的基类，包含用户 ID、时间戳和事件类型
 @Data
 public class AgentEvent {
 
-    /**
-     * 用户ID
-     */
+    // 用户 ID
     private Long userId;
 
-    /**
-     * 事件时间戳
-     */
+    // 事件时间戳
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
     private LocalDateTime timestamp;
 
-    /**
-     * 事件类型
-     */
+    // 事件类型
     private String eventType;
 
-    /**
-     * 构造方法
-     *
-     * @param userId    用户ID
-     * @param eventType 事件类型
-     */
+    // 构造方法
+    // @param userId    用户 ID
+    // @param eventType 事件类型
     public AgentEvent(Long userId, String eventType) {
         this.userId = userId;
         this.eventType = eventType;

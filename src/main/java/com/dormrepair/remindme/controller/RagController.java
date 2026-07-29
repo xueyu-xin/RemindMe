@@ -13,40 +13,18 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-/**
- * RAG 测试接口控制器
- * <p>
- * 提供 6 个测试接口用于验证 RAG 模块的核心功能：
- * </p>
- * <ul>
- *   <li>检索私人记忆</li>
- *   <li>添加私人记忆</li>
- *   <li>更新私人记忆</li>
- *   <li>删除私人记忆</li>
- *   <li>获取所有私人记忆</li>
- *   <li>检索公共知识</li>
- * </ul>
- *
- * <p><b>注意</b>：本 Controller 仅用于测试，调用的是 RagService 的核心方法（非 ForAgent 方法）。
- * Agent 系统通过 @AgentTool 注解直接调用 ForAgent 方法，不经过此 Controller。</p>
- */
+// RAG 测试接口控制器。统一前缀 /api/rag/test，提供私人记忆增删改查、公共知识检索共 6 个调试接口，
+// 直接调用 RagService 核心方法用于联调与功能自测；Agent 线上流程走 @AgentTool 标注的 ForAgent 方法，不经过此 Controller
 @Slf4j
 @RestController
 @RequestMapping("/api/rag/test")
 @RequiredArgsConstructor
 public class RagController {
 
+    // RAG 服务：封装向量库读写、Embedding、相似度检索等全部核心逻辑
     private final RagService ragService;
 
-    /**
-     * 测试检索私人记忆
-     * <p>
-     * 从用户私有库中检索与查询最相关的记忆。
-     * </p>
-     *
-     * @param request 请求参数（userId、query、topK）
-     * @return 检索结果列表
-     */
+    // 检索私人记忆：在对应用户的 user_{userId}_knowledge 集合中按 topK 返回与 query 相似度最高的片段
     @PostMapping("/retrievePrivateKnowledge")
     public Result<List<KnowledgeResult>> testRetrievePrivateKnowledge(
             @RequestBody RagTestRequest.RetrievePrivateKnowledgeRequest request) {
@@ -66,15 +44,7 @@ public class RagController {
         }
     }
 
-    /**
-     * 测试添加私人记忆
-     * <p>
-     * 将一条记忆存入用户私有库。
-     * </p>
-     *
-     * @param request 请求参数（userId、content、category）
-     * @return 新建记忆的文档ID
-     */
+    // 新增私人记忆：把用户输入的内容 + 分类写入用户私有向量库，返回生成的 memoryId 便于后续定位
     @PostMapping("/addPrivateMemory")
     public Result<String> testAddPrivateMemory(
             @RequestBody RagTestRequest.AddPrivateMemoryRequest request) {
@@ -98,15 +68,7 @@ public class RagController {
         }
     }
 
-    /**
-     * 测试更新私人记忆
-     * <p>
-     * 更新指定记忆的内容（先删后增策略）。
-     * </p>
-     *
-     * @param request 请求参数（memoryId、userId、newContent）
-     * @return 更新是否成功
-     */
+    // 更新私人记忆：按「先删旧→再写新」的幂等策略更新一条记忆的内容，解决向量库 update 成本高的问题
     @PostMapping("/updatePrivateMemory")
     public Result<Boolean> testUpdatePrivateMemory(
             @RequestBody RagTestRequest.UpdatePrivateMemoryRequest request) {
@@ -126,15 +88,7 @@ public class RagController {
         }
     }
 
-    /**
-     * 测试删除私人记忆
-     * <p>
-     * 从用户私有库中删除指定记忆（幂等操作）。
-     * </p>
-     *
-     * @param request 请求参数（memoryId、userId）
-     * @return 删除是否成功
-     */
+    // 删除私人记忆：从用户私有库中移除指定 memoryId 的文档，多次调用同一条目仍返回成功（幂等）
     @PostMapping("/deletePrivateMemory")
     public Result<Boolean> testDeletePrivateMemory(
             @RequestBody RagTestRequest.DeletePrivateMemoryRequest request) {
@@ -153,15 +107,7 @@ public class RagController {
         }
     }
 
-    /**
-     * 测试获取所有私人记忆
-     * <p>
-     * 返回用户私有库中的全部记忆，按创建时间倒序。
-     * </p>
-     *
-     * @param request 请求参数（userId）
-     * @return 用户所有记忆列表
-     */
+    // 拉取用户全部私人记忆：不做相似度检索，直接从向量库返回该用户名下所有记忆，按创建时间倒序
     @PostMapping("/getAllPrivateMemories")
     public Result<List<KnowledgeResult>> testGetAllPrivateMemories(
             @RequestBody RagTestRequest.GetAllPrivateMemoriesRequest request) {
@@ -176,15 +122,7 @@ public class RagController {
         }
     }
 
-    /**
-     * 测试检索公共知识
-     * <p>
-     * 从公共知识库中检索相关知识（生活小技巧、系统说明等）。
-     * </p>
-     *
-     * @param request 请求参数（query、topK）
-     * @return 检索结果列表
-     */
+    // 检索公共知识：在 public_knowledge 集合中检索，内容仅含系统使用手册类说明
     @PostMapping("/retrievePublicKnowledge")
     public Result<List<KnowledgeResult>> testRetrievePublicKnowledge(
             @RequestBody RagTestRequest.RetrievePublicKnowledgeRequest request) {

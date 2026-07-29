@@ -12,9 +12,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Random;
 
-/**
- * 验证码业务逻辑服务
- */
+// 短信验证码服务：负责验证码的生成、校验与过期清理，配合注册/登录流程做手机号实名
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -22,11 +20,15 @@ public class VerificationCodeService {
 
     private final VerificationCodeRepository verificationCodeRepository;
 
+    // 验证码有效期 5 分钟
     private static final int EXPIRATION_MINUTES = 5;
+    // 同一手机号最小重发间隔，避免短信轰炸
     private static final int SEND_INTERVAL_MINUTES = 60;
 
+    // 发送验证码：先做频率限制，再生成 6 位数字码并落库
     @Transactional
     public String sendCode(String phone) {
+        // 取近 60 分钟内已发送的记录，存在则判定为频繁
         List<VerificationCode> recentCodes = verificationCodeRepository
                 .findByPhoneAndCreatedAtAfter(phone, LocalDateTime.now().minusMinutes(SEND_INTERVAL_MINUTES));
 
@@ -36,6 +38,7 @@ public class VerificationCodeService {
 
         String code = generateCode();
 
+        // 落库，过期时间设为当前时间 + 5 分钟
         VerificationCode verificationCode = new VerificationCode();
         verificationCode.setPhone(phone);
         verificationCode.setCode(code);
@@ -49,12 +52,14 @@ public class VerificationCodeService {
         return code;
     }
 
+    // 校验验证码：命中未使用记录且未过期则标记为已用
     @Transactional
     public void verifyCode(String phone, String code) {
         VerificationCode verificationCode = verificationCodeRepository
                 .findByPhoneAndCodeAndUsedFalse(phone, code)
                 .orElseThrow(() -> new IllegalArgumentException("验证码错误"));
 
+        // 命中后还要再校一次过期时间，防止临界态
         if (verificationCode.getExpiresAt().isBefore(LocalDateTime.now())) {
             throw new IllegalArgumentException("验证码已过期");
         }
@@ -63,6 +68,7 @@ public class VerificationCodeService {
         verificationCodeRepository.save(verificationCode);
     }
 
+    // 定时清理过期验证码，每小时跑一次
     @Transactional
     @Scheduled(fixedRate = 3600000)
     public void cleanExpiredCodes() {
@@ -70,6 +76,7 @@ public class VerificationCodeService {
         log.info("已清理过期验证码");
     }
 
+    // 生成 6 位随机数字验证码，范围 [100000, 999999]
     private String generateCode() {
         Random random = new Random();
         int code = 100000 + random.nextInt(900000);

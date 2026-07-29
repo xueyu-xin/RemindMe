@@ -25,12 +25,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * LLM服务
- * <p>
- * 调用DeepSeek API进行时间解析和意图识别，支持Function Calling模式
- * </p>
- */
+// LLM 服务核心：将用户输入解析为结构化提醒、支撑带工具调用的对话、生成系统提示词、解析 LLM 输出中的工具调用 JSON
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -42,16 +37,12 @@ public class LLMService {
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
-    /**
-     * 解析用户输入（原有方法，保持兼容，使用默认10分钟）
-     */
+    // 解析用户输入（兼容入口，使用默认 10 分钟提前量）
     public ParsedResult parseReminder(String userInput) {
         return parseReminder(userInput, null);
     }
 
-    /**
-     * 解析用户输入，并根据用户ID获取其默认提前量
-     */
+    // 解析用户输入为结构化提醒，按 userId 读取用户的默认提前量
     public ParsedResult parseReminder(String userInput, Long userId) {
         int defaultAdvance = 10;
         if (userId != null) {
@@ -97,14 +88,7 @@ public class LLMService {
         }
     }
 
-    /**
-     * 带工具调用的对话方法
-     * 
-     * @param userInput 用户当前输入
-     * @param tools 可用工具列表
-     * @param history 对话历史
-     * @return LLM响应内容
-     */
+    // 带工具调用的对话：拼装系统提示词、历史消息和当前输入，调用 LLM 返回响应文本
     public String chatWithTools(String userInput, List<ToolDefinition> tools, List<Message> history) {
         log.info("开始带工具调用的对话: userInput={}, toolCount={}, historySize={}", userInput, tools.size(), history.size());
         
@@ -126,22 +110,9 @@ public class LLMService {
         return content;
     }
 
-    /**
-     * 兜底总结方法：不挂任何工具，基于"本次对话"的消息让 LLM 生成最终自然语言总结。
-     * <p>
-     * 适用场景：
-     * 1. Agent 达到最大迭代次数仍未结束循环（往往因为 LLM 陷入重复工具调用）；
-     * 2. 连续多次检测到 LLM 重复调用相同工具+相同参数，强制收尾。
-     * <p>
-     * 调用方应只传入"本次对话"的消息切片（从用户当前轮请求开始），
-     * 不能传全量历史——否则 LLM 会把历史轮次的任务也总结进去。
-     * <p>
-     * 要求 LLM 明确分三类回复用户：
-     *   ✅ 已完成的、❌ 未完成的、❓ 需要向用户询问的。
-     *
-     * @param history 本次对话的消息切片（含用户原始请求、工具调用与结果）
-     * @return 自然语言总结回复；若 LLM 失败返回 null
-     */
+    // 兜底总结：不挂任何工具，基于"本次对话"的消息切片让 LLM 生成最终自然语言总结
+    // 触发场景：Agent 达到最大迭代仍未结束循环、或检测到重复工具调用需强制收尾
+    // 调用方只能传本次对话切片，不能传全量历史；要求 LLM 分已完成/未完成/需询问三类回复
     public String generateSummaryFromHistory(List<Message> history) {
         log.info("开始生成兜底总结回复: currentTurnHistorySize={}", history == null ? 0 : history.size());
 
@@ -214,28 +185,14 @@ public class LLMService {
         }
     }
 
-    /**
-     * 解析LLM响应，判断是否包含工具调用
-     *
-     * @param llmResponse LLM响应内容
-     * @return ToolCall对象，如果不是工具调用则返回null
-     */
+    // 解析 LLM 响应，判断是否包含工具调用，非工具调用返回 null
     public ToolCall parseToolCall(String llmResponse) {
         List<ToolCall> calls = parseToolCalls(llmResponse);
         return calls.isEmpty() ? null : calls.get(0);
     }
 
-    /**
-     * 解析LLM响应中的所有工具调用（支持一次返回多个 {"tool_call":{...}}）。
-     * <p>
-     * 修复点：原 parseToolCall 仅用 Jackson readTree 读取第一个 JSON value，
-     * 当 LLM 一次返回多行工具调用时，后面的会被丢弃。
-     * 本方法用平衡括号扫描，逐个提取顶层 JSON 对象并解析为 ToolCall。
-     * </p>
-     *
-     * @param llmResponse LLM响应内容
-     * @return 工具调用列表（可能为空，但永不为null）
-     */
+    // 解析 LLM 响应中的所有工具调用，支持一次返回多个 {"tool_call":{...}}
+    // 先尝试整段作为单个 JSON 解析，失败则用平衡括号扫描逐个提取顶层 JSON 对象
     public List<ToolCall> parseToolCalls(String llmResponse) {
         List<ToolCall> results = new ArrayList<>();
         if (llmResponse == null || llmResponse.isBlank()) {
@@ -279,9 +236,7 @@ public class LLMService {
         return results;
     }
 
-    /**
-     * 尝试把一段文本当作单个 JSON 解析为 ToolCall（含 fixJson 修复 + extractJsonFragment 兜底）
-     */
+    // 尝试把一段文本当作单个 JSON 解析为 ToolCall，依次走标准解析、修复后解析、正则提取片段三层兜底
     private ToolCall tryParseSingleJson(String text) {
         if (text == null || text.isBlank()) {
             return null;
@@ -333,11 +288,7 @@ public class LLMService {
         return null;
     }
 
-    /**
-     * 用平衡括号扫描，从文本中提取所有顶层 JSON 对象（{ ... } 配对）。
-     * 用于 LLM 一次返回多个 {"tool_call":{...}} 拼在一起的情况。
-     * 注意：会跳过字符串内部的 { }，避免被 JSON 字符串值里的括号干扰。
-     */
+    // 用平衡括号扫描提取所有顶层 JSON 对象，跳过字符串内部的括号，仅保留含工具调用字段的片段
     private List<String> extractAllTopLevelJsonObjects(String text) {
         List<String> objects = new ArrayList<>();
         if (text == null || text.isEmpty()) {
@@ -402,9 +353,7 @@ public class LLMService {
         return objects;
     }
 
-    /**
-     * 解析标准JSON格式的工具调用
-     */
+    // 解析标准 JSON：兼容自定义 tool_call、OpenAI function_call 和简化 tool 三种格式
     private ToolCall parseStandardJson(JsonNode root) {
         // 检查是否包含工具调用（自定义格式）
         if (root.has("tool_call")) {
@@ -485,9 +434,7 @@ public class LLMService {
         return null;
     }
 
-    /**
-     * 修复常见的JSON格式问题
-     */
+    // 修复常见 JSON 格式问题：去除代码块标记、补齐闭合括号、移除尾随逗号、处理未转义引号
     private String fixJson(String json) {
         String fixed = json.trim();
         
@@ -529,9 +476,7 @@ public class LLMService {
         return fixed;
     }
 
-    /**
-     * 修复JSON字符串中未转义的引号
-     */
+    // 修复 JSON 字符串值中未转义的引号，按后续字符是否为合法分隔符判断是否需转义
     private String fixUnescapedQuotes(String json) {
         StringBuilder result = new StringBuilder();
         boolean inString = false;
@@ -575,9 +520,7 @@ public class LLMService {
         return result.toString();
     }
 
-    /**
-     * 从文本中提取JSON片段
-     */
+    // 从文本中提取首个完整 JSON 片段（首 { 到匹配的 }），括号不匹配时返回 null
     private String extractJsonFragment(String text) {
         int start = text.indexOf('{');
         if (start == -1) {
@@ -614,9 +557,7 @@ public class LLMService {
         return null;
     }
 
-    /**
-     * 统计字符串中字符出现的次数
-     */
+    // 统计字符在字符串中出现的次数
     private int countOccurrences(String str, char c) {
         int count = 0;
         for (int i = 0; i < str.length(); i++) {
@@ -627,9 +568,7 @@ public class LLMService {
         return count;
     }
 
-    /**
-     * 将JsonNode转换为Java对象
-     */
+    // 将 JsonNode 递归转换为 Java 对象（文本/数值/布尔/数组/对象）
     private Object convertJsonNode(JsonNode node) {
         if (node.isTextual()) {
             return node.asText();
@@ -656,10 +595,8 @@ public class LLMService {
         }
     }
 
-    /**
-     * 构建包含工具定义的消息列表
-     */
-    private List<org.springframework.ai.chat.messages.Message> buildMessagesWithTools(String userInput, 
+    // 构建包含工具定义的消息列表：系统提示词 + 历史对话（含工具消息）+ 当前用户输入
+    private List<org.springframework.ai.chat.messages.Message> buildMessagesWithTools(String userInput,
             List<ToolDefinition> tools, List<Message> history) {
         
         List<org.springframework.ai.chat.messages.Message> messages = new ArrayList<>();
@@ -702,9 +639,7 @@ public class LLMService {
         return messages;
     }
 
-    /**
-     * 构建包含工具定义的系统提示词
-     */
+    // 构建包含工具定义的系统提示词，拼入当前时间和工具列表
     private String buildSystemPromptWithTools(List<ToolDefinition> tools) {
         String currentDate = LocalDateTime.now().format(FORMATTER);
         
@@ -1446,9 +1381,7 @@ public class LLMService {
             """.formatted(currentDate, toolsJson);
     }
 
-    /**
-     * 将参数定义转换为JSON字符串
-     */
+    // 将工具参数定义转换为 JSON 字符串，失败时返回空对象兜底
     private String convertParametersToJson(ToolDefinition.Parameters parameters) {
         if (parameters == null) {
             return "{\"type\": \"object\", \"properties\": {}, \"required\": []}";
@@ -1480,9 +1413,7 @@ public class LLMService {
         }
     }
 
-    /**
-     * 原有方法：构建解析提醒的Prompt
-     */
+    // 构建解析提醒的 Prompt，要求 LLM 返回严格 JSON 并内置时间解析与时间段识别规则
     private String buildPrompt(String userInput) {
         String currentDate = LocalDateTime.now().format(FORMATTER);
         return """
@@ -1533,9 +1464,7 @@ public class LLMService {
             """.formatted(currentDate, currentDate, userInput);
     }
 
-    /**
-     * 解析日期时间字符串
-     */
+    // 解析日期时间字符串，失败返回 null
     private LocalDateTime parseDateTime(String dateTimeStr) {
         try {
             return LocalDateTime.parse(dateTimeStr, FORMATTER);
@@ -1545,16 +1474,7 @@ public class LLMService {
         }
     }
 
-    /**
-     * 智能解析用户的修改意图
-     * <p>
-     * 根据用户输入和当前确认卡片数据，分析用户想修改哪个字段（时间/地点/标题/优先级）
-     * </p>
-     *
-     * @param userInput   用户输入的修改文本
-     * @param currentData 当前确认卡片中的完整数据
-     * @return EditIntent 对象，包含 field 和 newValue
-     */
+    // 智能解析用户的修改意图：结合当前确认卡片数据，判断用户想改哪个字段（时间/地点/标题/优先级）
     public EditIntent parseEditIntent(String userInput, Map<String, Object> currentData) {
         log.info("开始解析修改意图: userInput={}, currentData={}", userInput, currentData);
 
@@ -1595,18 +1515,14 @@ public class LLMService {
         }
     }
 
-    /**
-     * 校验 field 是否合法
-     */
+    // 校验 field 取值是否在合法集合内
     private boolean isValidField(String field) {
         return "time".equals(field) || "location".equals(field)
                 || "title".equals(field) || "priority".equals(field)
                 || "unknown".equals(field);
     }
 
-    /**
-     * 构建修改意图解析的 Prompt
-     */
+    // 构建修改意图解析的 Prompt，注入当前提醒信息和时间解析规则
     private String buildEditIntentPrompt(String userInput, Map<String, Object> currentData) {
         String currentTime = TimeUtils.format(TimeUtils.now());
 
@@ -1656,23 +1572,19 @@ public class LLMService {
                 """.formatted(currentTime, title, remindTime, location, priority, userInput);
     }
 
-    /**
-     * 修改意图解析结果
-     */
+    // 修改意图解析结果
     @Data
     @Builder
     public static class EditIntent {
-        /** 修改的字段名：time/location/title/priority/unknown */
+        // 修改的字段名：time/location/title/priority/unknown
         private String field;
-        /** 新值 */
+        // 新值
         private String newValue;
-        /** 简短说明 */
+        // 简短说明
         private String reason;
     }
 
-    /**
-     * 解析结果记录类（原有）
-     */
+    // 解析结果记录类，承载 LLM 解析出的提醒字段
     public record ParsedResult(
             String title,
             LocalDateTime remindTime,
@@ -1736,18 +1648,7 @@ public class LLMService {
         }
     }
 
-    /**
-     * 生成天气建议
-     * <p>
-     * 根据天气信息和提醒标题生成贴心建议
-     * </p>
-     *
-     * @param weatherText   天气状况文字描述（如"晴"、"小雨"、"雷阵雨"）
-     * @param temperature   温度（摄氏度）
-     * @param remindTitle   提醒标题（用于上下文）
-     * @param location      提醒地点（用于上下文）
-     * @return 天气建议字符串，如果天气正常则返回null
-     */
+    // 生成天气建议：根据天气状况、温度和提醒上下文产出一句贴心提示，天气正常时返回 null
     public String generateWeatherSuggestion(String weatherText, String temperature, String remindTitle, String location) {
         log.info("生成天气建议: weatherText={}, temperature={}, title={}, location={}", 
                 weatherText, temperature, remindTitle, location);
@@ -1799,9 +1700,7 @@ public class LLMService {
         }
     }
 
-    /**
-     * 判断是否为正常天气
-     */
+    // 判断是否为正常天气：晴、多云、阴视为正常，其余需生成建议
     private boolean isNormalWeather(String weatherText) {
         if (weatherText == null || weatherText.isBlank()) {
             return true;

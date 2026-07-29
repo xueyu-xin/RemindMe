@@ -16,9 +16,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * 用户业务逻辑服务
- */
+// 用户业务：注册、登录、资料维护，以及供 Agent 调用的偏好设置读写工具
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -28,6 +26,7 @@ public class UserService {
     private final PasswordEncoder passwordEncoder;
     private final VerificationCodeService verificationCodeService;
 
+    // 注册：校验手机号唯一 + 验证码，密码加密入库，昵称默认取手机号后 4 位
     @Transactional
     public User register(RegisterRequest request) {
         if (userRepository.existsByPhone(request.getPhone())) {
@@ -44,6 +43,7 @@ public class UserService {
         return userRepository.save(user);
     }
 
+    // 登录：按手机号查用户，比对密码后返回基础信息
     public LoginResponse login(LoginRequest request) {
         User user = userRepository.findByPhone(request.getPhone())
                 .orElseThrow(() -> new IllegalArgumentException("账号或密码错误"));
@@ -60,14 +60,17 @@ public class UserService {
         return response;
     }
 
+    // 按 ID 查用户
     public Optional<User> getUserById(Long userId) {
         return userRepository.findById(userId);
     }
 
+    // 判断手机号是否已注册
     public boolean existsByPhone(String phone) {
         return userRepository.existsByPhone(phone);
     }
 
+    // 通用保存入口
     @Transactional
     public User save(User user) {
         return userRepository.save(user);
@@ -75,12 +78,7 @@ public class UserService {
 
     // ==================== Agent工具 ====================
 
-    /**
-     * 获取用户偏好设置
-     * <p>
-     * 用户询问默认城市、默认提前量、时区时调用
-     * </p>
-     */
+    // Agent 工具：读取用户偏好（默认城市、提前量、提醒间隔、周期提醒开关等），时区固定 Asia/Shanghai
     @AgentTool(name = "get_user_preferences", description = "获取用户偏好设置，用户询问默认城市、默认提前量、时区时调用")
     public Map<String, Object> getUserPreferences(Long userId) {
         log.info("Agent调用获取用户偏好: userId={}", userId);
@@ -106,17 +104,10 @@ public class UserService {
         return result;
     }
 
-    /**
-     * 修改用户偏好设置
-     * <p>
-     * 用户要求更改默认城市、默认提前量、昵称时调用
-     * </p>
-     *
-     * @param userId     用户ID（系统自动填充）
-     * @param preference 偏好项名称：city / defaultAdvanceMinutes / nickname
-     * @param value      新值
-     * @return 修改结果
-     */
+    // Agent 工具：修改用户偏好
+    // userId     用户ID，由系统自动填充
+    // preference 偏好项：city / defaultAdvanceMinutes / nickname
+    // value      新值
     @AgentTool(name = "set_user_preferences", description = "修改用户偏好设置，用户要求更改默认城市、默认提前量、昵称时调用")
     @Transactional
     public Map<String, Object> setUserPreferences(Long userId, String preference, String value) {
@@ -126,7 +117,7 @@ public class UserService {
         result.put("preference", preference);
         result.put("newValue", value);
 
-        // 验证用户是否存在
+        // 用户不存在直接返回失败
         Optional<User> userOpt = userRepository.findById(userId);
         if (userOpt.isEmpty()) {
             result.put("success", false);
@@ -136,7 +127,7 @@ public class UserService {
 
         User user = userOpt.get();
 
-        // 验证 preference 是否支持
+        // preference 为空直接拦截
         if (preference == null || preference.trim().isEmpty()) {
             result.put("success", false);
             result.put("error", "偏好项不能为空，支持：city、defaultAdvanceMinutes、nickname");
@@ -146,6 +137,7 @@ public class UserService {
         preference = preference.trim();
         String fieldDisplayName;
 
+        // 按偏好项分别校验并写入
         switch (preference) {
             case "city":
                 if (value == null || value.trim().isEmpty()) {
@@ -158,6 +150,7 @@ public class UserService {
                 break;
 
             case "defaultAdvanceMinutes":
+                // 提前量必须为整数，范围 0~1440 分钟
                 int advanceMinutes;
                 try {
                     advanceMinutes = Integer.parseInt(value);
@@ -199,9 +192,7 @@ public class UserService {
         return result;
     }
 
-    /**
-     * 更新用户默认城市
-     */
+    // 更新默认城市
     @Transactional
     public void updateDefaultCity(Long userId, String city) {
         User user = userRepository.findById(userId)
@@ -211,26 +202,22 @@ public class UserService {
         log.info("已更新用户 {} 的默认城市为: {}", userId, city);
     }
 
-    /**
-     * 更新用户头像
-     *
-     * @param userId       用户ID
-     * @param avatarPath   头像相对路径（如 avatars/2026/07/28/xxx.png）
-     * @return 更新后的用户对象
-     */
+    // 更新头像：写入新路径后尝试删除旧头像文件，仅清理 avatars/ 前缀的自定义头像
+    // userId     用户ID
+    // avatarPath 头像相对路径，如 avatars/2026/07/28/xxx.png
     @Transactional
     public User updateAvatar(Long userId, String avatarPath) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在: " + userId));
 
-        // 记录旧头像路径，用于删除旧文件
+        // 先记下旧路径，更新后再清理
         String oldAvatar = user.getAvatar();
 
         user.setAvatar(avatarPath);
         User saved = userRepository.save(user);
         log.info("已更新用户 {} 的头像为: {}", userId, avatarPath);
 
-        // 删除旧头像文件（如果不是默认头像）
+        // 仅当旧头像属于自定义上传时才删除，避免误删默认头像
         if (oldAvatar != null && !oldAvatar.isEmpty() && oldAvatar.startsWith("avatars/")) {
             try {
                 java.nio.file.Path oldFile = java.nio.file.Paths.get("uploads", oldAvatar).toAbsolutePath();

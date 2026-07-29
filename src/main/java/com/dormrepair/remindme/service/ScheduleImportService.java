@@ -37,12 +37,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-/**
- * 日程导入服务
- * <p>
- * 处理文件上传 → 解析 → 识别 → 创建导入记录 → 推送确认卡片
- * </p>
- */
+// 课表导入服务：覆盖文件上传、解析、通义千问识别、导入记录创建、确认卡片推送及批量提醒生成的全流程
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -61,12 +56,10 @@ public class ScheduleImportService {
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm");
     private static final DateTimeFormatter REMIND_TIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
-    /** 课表识别结果缓存（importId → ScheduleTableDTO） */
+    // 课表识别结果缓存，importId 映射到识别出的 ScheduleTableDTO
     private final Map<Long, ScheduleTableDTO> scheduleTableCache = new ConcurrentHashMap<>();
 
-    /**
-     * 处理文件上传 → 解析 → 识别 → 创建导入记录 → 推送确认卡片
-     */
+    // 处理文件上传 → 解析 → 识别 → 创建导入记录 → 推送确认卡片
     @Transactional
     public Map<String, Object> processUpload(MultipartFile file, Long userId) {
         if (file == null || file.isEmpty()) {
@@ -161,9 +154,7 @@ public class ScheduleImportService {
         return result;
     }
 
-    /**
-     * 处理课表文件
-     */
+    // 处理课表文件：调用 AI 识别、保存学期开始日期、创建导入记录并推送课表确认卡片
     private Map<String, Object> processScheduleTable(String content, String fileType, Long userId, String fileName) {
         // 调用 AI 课表识别
         ScheduleTableDTO tableResult = qwenRecognitionService.recognizeScheduleTable(content, fileType);
@@ -224,9 +215,7 @@ public class ScheduleImportService {
         return result;
     }
 
-    /**
-     * 检测文本是否为课表格式
-     */
+    // 检测文本是否为课表格式：通过关键词命中数判断
     private boolean isScheduleTable(String content) {
         if (content == null || content.trim().isEmpty()) return false;
         String lower = content.toLowerCase();
@@ -253,9 +242,7 @@ public class ScheduleImportService {
         return matchCount >= 2;
     }
 
-    /**
-     * 创建导入记录
-     */
+    // 创建一条 PENDING 状态的导入记录，记录文件名、类型和总数
     @Transactional
     public ScheduleImport createImportRecord(Long userId, String fileName, String fileType,
                                              List<ScheduleItemDTO> items) {
@@ -270,9 +257,7 @@ public class ScheduleImportService {
         return importRepository.save(importRecord);
     }
 
-    /**
-     * 批量创建提醒（用户确认后调用）
-     */
+    // 批量创建提醒，由用户在确认卡片上确认后触发，action 控制冲突处理策略
     @Transactional
     public Map<String, Object> batchCreateReminders(Long importId, Long userId, String action) {
         if (userId == null) {
@@ -315,9 +300,7 @@ public class ScheduleImportService {
         return createRemindersFromItems(importId, userId, items, importRecord);
     }
 
-    /**
-     * 从缓存创建提醒（课表场景）
-     */
+    // 课表场景：从缓存的识别结果生成提醒，结合学期开始日期、时间表和周次逐课展开
     private Map<String, Object> createRemindersFromCache(Long importId, Long userId, String action,
                                                           ScheduleImport importRecord, ScheduleTableDTO tableResult) {
         User user = userRepository.findById(userId).orElseThrow();
@@ -433,9 +416,7 @@ public class ScheduleImportService {
         return result;
     }
 
-    /**
-     * 从 DB 明细创建提醒（通用场景）
-     */
+    // 通用场景：从数据库明细记录批量静默创建提醒，并更新明细和导入记录状态
     private Map<String, Object> createRemindersFromItems(Long importId, Long userId,
                                                           List<ScheduleImportItem> items,
                                                           ScheduleImport importRecord) {
@@ -477,12 +458,7 @@ public class ScheduleImportService {
         return result;
     }
 
-    /**
-     * 批量静默创建提醒（不触发确认会话，不逐条推送）
-     * <p>
-     * 用于课表导入场景，一次性创建所有提醒，仅推送一条汇总消息
-     * </p>
-     */
+    // 批量静默创建提醒：不触发确认会话、不逐条推送，一次性创建全部并仅推送一条汇总消息
     @Transactional
     public Map<String, Object> batchCreateSilently(Long userId, List<Map<String, Object>> items) {
         if (items == null || items.isEmpty()) {
@@ -553,6 +529,7 @@ public class ScheduleImportService {
         return result;
     }
 
+    // 推送一条汇总消息到用户的消息队列
     private void pushSummaryMessage(Long userId, String message) {
         Map<String, Object> data = new HashMap<>();
         data.put("type", "import_result");
@@ -560,9 +537,7 @@ public class ScheduleImportService {
         webSocketPushService.pushToUser(userId, "/queue/messages", data);
     }
 
-    /**
-     * 取消导入
-     */
+    // 取消导入：校验归属与状态后置为 CANCELLED，并把待处理明细一并取消
     @Transactional
     public Map<String, Object> cancelImport(Long importId, Long userId) {
         ScheduleImport importRecord = importRepository.findById(importId)
@@ -592,9 +567,7 @@ public class ScheduleImportService {
         return result;
     }
 
-    /**
-     * 查询导入结果
-     */
+    // 查询导入结果：返回导入记录状态、明细列表，以及缓存中的课表识别结果（时间段、课程、学期开始日期）
     @Transactional(readOnly = true)
     public Map<String, Object> getImportResult(Long importId, Long userId) {
         ScheduleImport importRecord = importRepository.findById(importId)
@@ -668,9 +641,7 @@ public class ScheduleImportService {
         return result;
     }
 
-    /**
-     * 推送课表确认卡片
-     */
+    // 推送课表确认卡片：组装课程、时间段和操作按钮，经 WebSocket 下发给用户
     private void pushScheduleTableCard(Long userId, Long importId, ScheduleTableDTO tableResult, String fileName) {
         try {
             // 构建课程列表信息
@@ -758,9 +729,7 @@ public class ScheduleImportService {
         }
     }
 
-    /**
-     * 根据用户配置的时间表生成具体日程
-     */
+    // 根据用户配置的时间表生成具体日程：保存学期开始日期和时间段配置，返回配置结果
     @Transactional
     public Map<String, Object> generateScheduleFromConfig(Long userId, CourseTimeConfigDTO config) {
         log.info("根据配置生成日程：userId={}, semesterStartDate={}, linkMode={}",
@@ -804,9 +773,7 @@ public class ScheduleImportService {
         return result;
     }
 
-    /**
-     * 根据手动输入的课程列表生成具体日程
-     */
+    // 根据手动输入的课程列表生成具体日程：逐课展开上课时间并做冲突检测
     @Transactional
     public Map<String, Object> generateScheduleFromManual(Long userId, List<ManualCourseDTO> courses,
                                                            CourseTimeConfigDTO config) {
@@ -891,9 +858,7 @@ public class ScheduleImportService {
         return result;
     }
 
-    /**
-     * 根据缓存中的课表识别结果生成具体日程（含冲突检测）
-     */
+    // 根据缓存的课表识别结果生成具体日程：写回用户的时间配置，逐课展开时间并做冲突检测
     @Transactional
     public Map<String, Object> generateScheduleFromImport(Long userId, Long importId,
                                                           CourseTimeConfigDTO config) {
@@ -1010,9 +975,7 @@ public class ScheduleImportService {
         return result;
     }
 
-    /**
-     * 从 CourseItem 计算具体上课时间列表
-     */
+    // 从 CourseItem 计算具体上课时间列表：按周次、节次、单双周规则展开到学期开始日期上
     private List<LocalDateTime> calculateCourseTimesFromCourseItem(
             LocalDate semesterStart, ScheduleTableDTO.CourseItem course,
             List<ScheduleTableDTO.TimeSection> timeSections, int totalWeeks) {
@@ -1070,9 +1033,7 @@ public class ScheduleImportService {
         return times;
     }
 
-    /**
-     * 确认并创建课表日程
-     */
+    // 确认并创建课表日程：按 action 处理冲突，逐条创建提醒并统计成败
     @Transactional
     public Map<String, Object> confirmSchedule(Long userId, String action, List<ScheduleItemDTO> items) {
         log.info("确认课表日程：userId={}, action={}, itemCount={}", userId, action, items != null ? items.size() : 0);
@@ -1150,9 +1111,7 @@ public class ScheduleImportService {
         return result;
     }
 
-    /**
-     * 计算课程的所有上课时间
-     */
+    // 计算手动输入课程的所有上课时间：解析星期、节次、周次和单双周后逐周展开
     private List<LocalDateTime> calculateCourseTimes(LocalDate semesterStart, ManualCourseDTO course,
                                                       List<ScheduleTableDTO.TimeSection> timeSections, int totalWeeks) {
         List<LocalDateTime> times = new ArrayList<>();
@@ -1205,9 +1164,7 @@ public class ScheduleImportService {
         return times;
     }
 
-    /**
-     * 解析星期几
-     */
+    // 解析星期几，支持"星期一/周一/1"等多种写法
     private DayOfWeek parseDayOfWeek(String dayStr) {
         if (dayStr == null) return null;
         return switch (dayStr.trim()) {
@@ -1222,9 +1179,7 @@ public class ScheduleImportService {
         };
     }
 
-    /**
-     * 解析节次范围
-     */
+    // 解析节次范围，支持"3-4"或单节"3"两种写法，返回 [start, end]
     private int[] parseSectionRange(String range) {
         if (range == null || range.isEmpty()) return null;
         try {
@@ -1243,9 +1198,7 @@ public class ScheduleImportService {
         }
     }
 
-    /**
-     * 解析周次范围
-     */
+    // 解析周次范围，支持"1-16"、"1,3,5"或单周"3"等写法
     private List<Integer> parseWeekRange(String range) {
         List<Integer> weeks = new ArrayList<>();
         if (range == null || range.isEmpty()) return weeks;
@@ -1270,9 +1223,7 @@ public class ScheduleImportService {
         return weeks;
     }
 
-    /**
-     * 获取时间配置
-     */
+    // 获取时间段配置：优先用用户配置，缺失时回退到默认时间表
     private List<ScheduleTableDTO.TimeSection> getTimeSections(CourseTimeConfigDTO config) {
         if (config != null && config.getSectionTimes() != null && !config.getSectionTimes().isEmpty()) {
             List<ScheduleTableDTO.TimeSection> sections = new ArrayList<>();
@@ -1288,9 +1239,7 @@ public class ScheduleImportService {
         return getDefaultTimeSections();
     }
 
-    /**
-     * 获取默认时间表
-     */
+    // 默认时间表，共 10 节，覆盖早八到晚课的常规作息
     private List<ScheduleTableDTO.TimeSection> getDefaultTimeSections() {
         List<ScheduleTableDTO.TimeSection> sections = new ArrayList<>();
         sections.add(ScheduleTableDTO.TimeSection.builder().index(1).startTime("08:00").endTime("08:45").build());
@@ -1306,9 +1255,7 @@ public class ScheduleImportService {
         return sections;
     }
 
-    /**
-     * 推送确认卡片到前端
-     */
+    // 推送批量导入确认卡片到用户，携带识别到的日程项和确认/取消按钮
     private void pushConfirmCardToUser(Long userId, Long importId, String fileName,
                                        List<Map<String, Object>> items) {
         try {

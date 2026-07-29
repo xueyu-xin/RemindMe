@@ -25,12 +25,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 月经周期服务
- * <p>
- * 经期计算、状态判断、提醒生成
- * </p>
- */
+// 经期服务：基于上次经期开始日期和周期参数，计算当前经期状态、排卵期与安全期，
+// 并在临近下次经期时生成提醒；对 Agent 暴露 4 个工具：查状态/查下次经期/记录经期开始/改周期设置。
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -40,11 +36,16 @@ public class PeriodService {
     private final ReminderRepository reminderRepository;
     private final PushService pushService;
 
+    // 默认月经周期（天）
     private static final int DEFAULT_CYCLE_LENGTH = 28;
     private static final int SAFE_DAYS_AFTER_PERIOD = 7;
+    // 排卵日相对下次经期的倒推天数
     private static final int OVULATION_OFFSET = 14;
+    // 经前期提醒窗口（天）
     private static final int PREMENSTRUAL_DAYS = 3;
 
+    // 计算用户当前经期状态：会自动推进已过期的周期基准日期并落库，
+    // 返回包含状态、下次经期、排卵日、距下次经期天数等信息的聚合对象。
     @Transactional
     public PeriodStatusResponse calculatePeriodStatus(User user) {
         if (user.getLastPeriodStart() == null) {
@@ -90,6 +91,8 @@ public class PeriodService {
         return response;
     }
 
+    // 定时检查是否需要创建经期提醒：仅在用户开启提醒、有经期记录、且距下次经期临近时，
+    // 才插入一条 PERIOD_REMINDER 类型的待办提醒（已存在则跳过）。
     @Transactional
     public void checkPeriodReminder(User user) {
         if (!user.getEnablePeriodReminder()) {
@@ -122,6 +125,7 @@ public class PeriodService {
         }
     }
 
+    // 用户确认经期已开始：以今天为新的经期开始日期，重置推迟状态，并累加确认次数
     @Transactional
     public void confirmPeriodStart(Long userId) {
         User user = userRepository.findById(userId)
@@ -141,6 +145,7 @@ public class PeriodService {
         log.info("用户确认经期开始: userId={}", userId);
     }
 
+    // 推迟经期提醒：标记推迟状态并累加推迟次数，最多 3 次
     @Transactional
     public void postponePeriodReminder(Long userId) {
         User user = userRepository.findById(userId)
@@ -161,6 +166,7 @@ public class PeriodService {
         log.info("用户推迟经期提醒: userId={}, count={}", userId, user.getPeriodRemindPostponedCount());
     }
 
+    // 根据上次经期开始日期 + 周期天数推算下次经期日期；无经期记录返回 null
     public LocalDate getNextPeriodDate(User user) {
         if (user.getLastPeriodStart() == null) {
             return null;
@@ -169,10 +175,7 @@ public class PeriodService {
         return user.getLastPeriodStart().plusDays(cycleLength);
     }
 
-    /**
-     * 判断某天是否在经期内
-     * 经期 = lastPeriodStart 到 lastPeriodStart + periodDuration
-     */
+    // 判断某天是否在经期内：经期区间为 [lastPeriodStart, lastPeriodStart + periodDuration)
     public boolean isMenstruating(User user, LocalDate date) {
         if (user == null || user.getLastPeriodStart() == null) {
             return false;
@@ -183,10 +186,7 @@ public class PeriodService {
         return !date.isBefore(periodStart) && date.isBefore(periodEnd);
     }
 
-    /**
-     * 判断某天是否为排卵期
-     * 排卵日 = nextPeriod - 14天，排卵期 = 排卵日 ± 2天
-     */
+    // 判断某天是否在排卵期：排卵日 = 下次经期 - 14 天，排卵窗口取排卵日 ± 2 天
     public boolean isOvulating(User user, LocalDate date) {
         if (user == null || user.getLastPeriodStart() == null) {
             return false;
@@ -199,6 +199,7 @@ public class PeriodService {
         return !date.isBefore(ovulationStart) && date.isBefore(ovulationEnd);
     }
 
+    // 按优先级判断今天所处的经期阶段：经期 > 经前期 > 排卵期 > 安全期
     private PeriodStatus determineStatus(LocalDate lastPeriod, LocalDate nextPeriod, 
                                          LocalDate ovulationDate, int cycleLength, int periodDuration) {
         LocalDate today = LocalDate.now();
@@ -226,6 +227,7 @@ public class PeriodService {
         return PeriodStatus.SAFE;
     }
 
+    // 各经期状态对应的展示图标
     private String getIcon(PeriodStatus status) {
         return switch (status) {
             case SAFE -> "♀️";
@@ -236,6 +238,7 @@ public class PeriodService {
         };
     }
 
+    // 是否需要触发经期提醒：开启提醒 + 未推迟 + 距下次经期不超过 3 天
     private boolean shouldRemind(User user, LocalDate today, LocalDate nextPeriod) {
         if (!user.getEnablePeriodReminder()) {
             return false;
@@ -248,6 +251,7 @@ public class PeriodService {
         return ChronoUnit.DAYS.between(today, nextPeriod) <= 3;
     }
 
+    // 构造无经期记录时的默认状态（UNKNOWN，不提醒）
     private PeriodStatusResponse createUnknownStatus() {
         PeriodStatusResponse response = new PeriodStatusResponse();
         response.setStatus(PeriodStatus.UNKNOWN.name());
@@ -257,6 +261,7 @@ public class PeriodService {
         return response;
     }
 
+    // Agent 工具：查询当前经期状态，需校验性别为女性且已记录经期
     @AgentTool(name = "get_period_status", description = "查询用户当前的经期状态，用户询问经期、月经、生理期、安全期、排卵期时调用")
     public Map<String, Object> getPeriodStatusForAgent(Long userId) {
         Map<String, Object> result = new HashMap<>();
@@ -293,6 +298,7 @@ public class PeriodService {
         return result;
     }
 
+    // Agent 工具：查询下次经期日期及距今天数
     @AgentTool(name = "get_next_period", description = "查询下次经期日期，用户询问下次月经、下次经期、月经什么时候来时调用")
     public Map<String, Object> getNextPeriodForAgent(Long userId) {
         Map<String, Object> result = new HashMap<>();
@@ -326,6 +332,8 @@ public class PeriodService {
         return result;
     }
 
+    // Agent 工具：记录或更新经期开始日期，不传日期则默认今天；
+    // 内部会触发周期推进逻辑，返回推进后的真实基准日期与最新状态。
     @AgentTool(name = "update_period_start", description = "记录或更新经期开始日期，用户说'经期来了'、'月经开始了'、'今天来月经'时调用")
     @Transactional
     public Map<String, Object> updatePeriodStartForAgent(Long userId, String startDate) {
@@ -353,7 +361,7 @@ public class PeriodService {
                 result.put("message", "日期格式不正确，请使用 yyyy-MM-dd 格式");
                 return result;
             }
-            // 校验不能晚于今天（与前端、UserController 保持一致）
+            // 校验不能晚于今天（与 UserController 的校验规则保持一致）
             if (periodStart.isAfter(LocalDate.now())) {
                 result.put("success", false);
                 result.put("message", "上次经期开始日期不能晚于今天");
@@ -411,6 +419,8 @@ public class PeriodService {
         return result;
     }
 
+    // Agent 工具：更新经期周期天数或持续天数，带交叉校验（周期须大于持续天数）；
+    // 更新成功后若有经期记录会重新计算状态并回传。
     @AgentTool(name = "update_period_settings", description = "更新经期周期设置，用户说'周期改成30天'、'经期持续5天'时调用")
     @Transactional
     public Map<String, Object> updatePeriodSettingsForAgent(Long userId, Integer cycleDays, Integer periodDuration) {

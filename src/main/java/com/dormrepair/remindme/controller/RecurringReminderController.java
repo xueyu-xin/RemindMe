@@ -13,14 +13,18 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+// 周期提醒接口控制器。统一前缀 /api/recurring-reminders，提供「课程表、每日打卡」类重复提醒模板的查询、编辑、取消、暂停、恢复 5 项能力
 @RestController
 @RequestMapping("/api/recurring-reminders")
 @RequiredArgsConstructor
 public class RecurringReminderController {
 
+    // 周期提醒服务：模板 CRUD、状态流转（ACTIVE→PAUSED→CANCELLED）、按用户过滤等核心逻辑
     private final RecurringReminderService recurringReminderService;
+    // 日期格式常量：起止日期（yyyy-MM-dd）统一用此格式解析，避免各处硬编码
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
+    // 列表接口：按用户返回其所有 ACTIVE/PAUSED/CANCELLED 状态的周期提醒模板，供调用方查询使用
     @GetMapping
     public ResponseEntity<Map<String, Object>> list(
             @RequestParam Long userId) {
@@ -38,6 +42,7 @@ public class RecurringReminderController {
         }
     }
 
+    // 详情接口：按模板 id + 用户 id 取单条详情；不存在返回 404，存在返回模板完整字段
     @GetMapping("/{id}")
     public ResponseEntity<Map<String, Object>> getById(
             @PathVariable Long id,
@@ -59,6 +64,8 @@ public class RecurringReminderController {
         }
     }
 
+    // 更新接口：修改周期提醒模板的标题、时间、起止范围、重复类型、地点、优先级；修改后已生成的后续实例会按新模板重建
+    // body 字段：title/remindTime(startDate/endDate/repeatType/location/priority 均为可选)
     @PutMapping("/{id}")
     public ResponseEntity<Map<String, Object>> update(
             @PathVariable Long id,
@@ -73,6 +80,7 @@ public class RecurringReminderController {
             String location = (String) body.get("location");
             String priority = (String) body.get("priority");
 
+            // 字符串转 LocalDate，空值保持 null 以便底层按"不修改该字段"处理
             LocalDate startDate = startDateStr != null ? LocalDate.parse(startDateStr, DATE_FORMATTER) : null;
             LocalDate endDate = endDateStr != null ? LocalDate.parse(endDateStr, DATE_FORMATTER) : null;
             RepeatType repeatType = repeatTypeStr != null ? RepeatType.valueOf(repeatTypeStr) : null;
@@ -93,6 +101,7 @@ public class RecurringReminderController {
         }
     }
 
+    // 取消周期提醒：把模板状态改为 CANCELLED，后续实例不再生成；已生成的实例不会被回溯删除
     @PostMapping("/{id}/cancel")
     public ResponseEntity<Map<String, Object>> cancel(
             @PathVariable Long id,
@@ -111,6 +120,7 @@ public class RecurringReminderController {
         }
     }
 
+    // 暂停周期提醒：把模板状态改为 PAUSED，未来日期的实例暂停生成；期间可随时 resume 恢复
     @PostMapping("/{id}/pause")
     public ResponseEntity<Map<String, Object>> pause(
             @PathVariable Long id,
@@ -129,6 +139,7 @@ public class RecurringReminderController {
         }
     }
 
+    // 恢复周期提醒：把 PAUSED 状态模板改回 ACTIVE，从当前日期起继续生成后续实例
     @PostMapping("/{id}/resume")
     public ResponseEntity<Map<String, Object>> resume(
             @PathVariable Long id,

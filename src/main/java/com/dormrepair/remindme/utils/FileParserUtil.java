@@ -10,26 +10,21 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.util.Base64;
 
-/**
- * 文件解析工具类
- * <p>
- * 根据文件类型（Excel、PDF、图片）解析文件内容，返回纯文本或 Base64 字符串
- * </p>
- */
+// 文件解析工具（final + 私有构造，不允许实例化）。按扩展名把三类上传文件转为文本：
+// Excel（.xls/.xlsx）→逐行逐单元格拼接成 工作表分隔+竖线分隔 的表格文本；
+// PDF → PDFTextStripper 抽纯文本；图片→Base64 data URI
 @Slf4j
 public final class FileParserUtil {
 
+    // 单个文件体积上限 10MB；超过仍继续解析但打印 warn 日志，提醒排查上传文件是否合理
     private static final long MAX_FILE_SIZE = 10 * 1024 * 1024L; // 10MB
 
+    // 私有构造，禁止实例化
     private FileParserUtil() {
     }
 
-    /**
-     * 根据文件类型分发解析
-     *
-     * @param file 上传的文件
-     * @return 解析后的文本内容，图片返回 Base64 data URI
-     */
+    // 解析分发入口。执行三步校验：文件非空/文件名非空/大小；取扩展名转小写后分支到 parseExcel / parsePdf / parseImage；
+    // 不支持的扩展名直接抛 IllegalArgumentException
     public static String parseFile(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("文件不能为空");
@@ -60,9 +55,9 @@ public final class FileParserUtil {
         }
     }
 
-    /**
-     * 解析 Excel 文件
-     */
+    // Excel 解析。遍历所有 Sheet，每张 sheet 开头加一行【工作表：XXX】；
+    // 同一行的单元格用「|」拼接；整行无内容则跳过，避免大量空行污染结果；
+    // try-with-resources 自动关 Workbook；最后走课表关键词特征检测
     public static String parseExcel(MultipartFile file) {
         try (Workbook workbook = WorkbookFactory.create(file.getInputStream())) {
             StringBuilder sb = new StringBuilder();
@@ -100,7 +95,7 @@ public final class FileParserUtil {
 
             String result = sb.toString();
 
-            // 检测是否为课表格式，保留原始表格结构不进行额外转换
+            // 匹配到课表关键字≥2个，打印 info 日志，保留原始表格不做其他变换
             if (isScheduleFormat(result)) {
                 log.info("检测到课表格式，保留原始表格结构：{}", file.getOriginalFilename());
             }
@@ -113,9 +108,8 @@ public final class FileParserUtil {
         }
     }
 
-    /**
-     * 解析 PDF 文件
-     */
+    // PDF 解析。Loader.loadPDF 读入字节后由 PDFTextStripper 抽纯文本；
+    // try-with-resources 自动关 PDDocument；成功打印文本长度，失败抛 RuntimeException 带 cause
     public static String parsePdf(MultipartFile file) {
         try (PDDocument document = Loader.loadPDF(file.getBytes())) {
             PDFTextStripper stripper = new PDFTextStripper();
@@ -128,9 +122,9 @@ public final class FileParserUtil {
         }
     }
 
-    /**
-     * 解析图片文件，返回 Base64 data URI（供多模态 AI 使用）
-     */
+    // 图片转 Base64。先读字节再 Base64 编码；contentType 优先取 MultipartFile#getContentType；
+    // 若为空或非 image/* 则根据扩展名兜底：.jpg/jpeg→image/jpeg，.png→image/png，gif/webp 同理；
+    // 最终拼成 data:<mime>;base64,<base64> 完整 data URI 字符串
     public static String parseImage(MultipartFile file) {
         try {
             byte[] bytes = file.getBytes();
@@ -138,7 +132,7 @@ public final class FileParserUtil {
 
             String contentType = file.getContentType();
             if (contentType == null || !contentType.startsWith("image/")) {
-                // 根据扩展名兜底
+                // 根据扩展名兜底推断 MIME
                 String name = file.getOriginalFilename().toLowerCase();
                 if (name.endsWith(".jpg") || name.endsWith(".jpeg")) {
                     contentType = "image/jpeg";
@@ -162,9 +156,9 @@ public final class FileParserUtil {
         }
     }
 
-    /**
-     * 获取单元格值为字符串
-     */
+    // 单元格取值转字符串。6 种 CellType 分支处理：
+    // STRING：trim 去前后空白；NUMERIC：日期格式单元格走 LocalDate 转字符串，整数用 long 精确显示避免科学计数法；
+    // BOOLEAN：直接 toString；FORMULA：先尝试 getString 失败再 try getNumeric；default 空串兜底
     private static String getCellValueAsString(Cell cell) {
         if (cell == null) {
             return "";
@@ -198,9 +192,8 @@ public final class FileParserUtil {
         }
     }
 
-    /**
-     * 检测解析后的文本是否包含课表特征
-     */
+    // 课表格式检测。扫描内容是否同时命中 2+ 课表特征词：时间/节次、周一~周五、第1/2/3节、08:00 08:50 09:50 三个典型上课时间；
+    // 返回 bool：true 表示内容很可能是一张课程表，后续调用方可据此选择不同的后处理流程
     private static boolean isScheduleFormat(String content) {
         if (content == null || content.trim().isEmpty()) return false;
         String[] scheduleKeywords = {"时间/节次", "周一", "周二", "周三", "周四", "周五",

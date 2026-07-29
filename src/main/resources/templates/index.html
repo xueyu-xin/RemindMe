@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>校园生活提醒助手</title>
     <style>
-        /* ===== 猫啃什锦黑（标题/加粗用，可爱圆润） ===== */
         @font-face {
             font-family: 'MaoKenShiJinHei';
             src: url('/fonts/MaoKenShiJinHei-2.ttf') format('truetype');
@@ -13,7 +12,6 @@
             font-display: swap;
         }
 
-        /* ===== 猫啃猪圆体（正文用，圆润柔和） ===== */
         @font-face {
             font-family: 'MaoKenZhuYuanTi';
             src: url('/fonts/MaoKenZhuYuanTi-MaokenZhuyuanTi-2.ttf') format('truetype');
@@ -21,7 +19,7 @@
             font-display: swap;
         }
 
-        /* ===== 奶油蜜桃色彩令牌 ===== */
+        /* ===== 色彩令牌 ===== */
         :root {
             --cream-bg: #FFF5F5;
             --cream-card: #FFFFFF;
@@ -57,7 +55,7 @@
             -webkit-font-smoothing: antialiased;
         }
 
-        /* ===== 标题字体（什锦黑，加粗可爱） ===== */
+        /* ===== 标题字体 ===== */
         .app-header, h2, h3, .modal-title, .card-title, .settings-title,
         .nav-label, .user-name, .confirmation-card .card-title,
         .calendar-header h3, button, .mode-btn.active {
@@ -159,7 +157,7 @@
             overflow: hidden;
         }
 
-        /* ===== 聊天页面卡片 - 固定高度，有上下边距 ===== */
+        /* ===== 聊天页面卡片 ===== */
         #page-chat .card {
             flex: 0 1 auto;
             height: calc(100vh - 64px - 68px - 40px);
@@ -169,7 +167,7 @@
             margin-bottom: 8px;
         }
 
-        /* ===== 日历页面卡片 - 自适应内容，但高度足够展示全部 ===== */
+        /* ===== 日历页面卡片  ===== */
         #page-calendar .card {
             flex: 1;
             min-height: 0;
@@ -738,7 +736,7 @@
             100% { opacity: 1; transform: scale(1); }
         }
 
-        /* ===== Toast 提示（与登录页样式统一） ===== */
+        /* ===== Toast 提示 ===== */
         #toast {
             display: none;
             padding: 12px 24px;
@@ -1709,7 +1707,7 @@
             box-sizing: border-box;
         }
 
-        /* 周视图：日历与日程表对齐（占位 + 7列，和 schedule-row 结构一致） */
+        /* 周视图：日历与日程表对齐 */
         .calendar-grid.week-header-mode {
             display: flex;
             align-items: flex-start;
@@ -1965,7 +1963,7 @@
     <script>
         let currentUserId = parseInt(localStorage.getItem('userId')) || 1;
         var chatHistoryLoaded = false;
-        // 待保存消息队列：用于避免短时间内重复存储同一条
+        // 待保存消息队列
         var pendingSaveKeys = new Set();
         var currentYear, currentMonth;
         var selectedDate = null;
@@ -1984,7 +1982,7 @@
         var selectedCityValue = null;   // 选中的城市值（用于保存，如 "广东省-广州市-天河区"）
         var citySearchTimer = null;     // 搜索防抖计时器
 
-        // Toast 提示（与登录页样式统一）
+        // Toast 提示
         var toastTimer = null;
         function showToast(message, isSuccess) {
             var toast = document.getElementById('toast');
@@ -2545,7 +2543,7 @@
                 }
             }
 
-            // === 检查并修正：确保当前节的结束时间在下一节的开始时间之前 ===
+            // === 检查节次时间合法性 ===
             for (var i = idx + 1; i < slots.length; i++) {
                 var target = slots[i];
                 var prev = slots[i - 1];
@@ -2985,7 +2983,7 @@
             addMessage('bot', msg.message || '✅ 已自动确认提醒');
             renderCalendar();
             
-            // 立即清空卡片，不延迟，避免用户点击过期会话
+            // 立即清空卡片
             var container = document.getElementById('confirmationContainer');
             if (container) container.innerHTML = '';
         }
@@ -4158,7 +4156,8 @@
             '__TIME_GREETING__',
             '想了解如何使用小助手，可以输入"使用手册"哦',
             '设置个提醒吧，我来帮你记住！',
-            '日程日历中点击顶部日期标题可打开日期跳转器'
+            '日程日历中点击顶部日期标题可打开日期跳转器',
+            '本项目天气相关数据均来自和风天气'
         ];
         var promptIndex = 0;
         function rotatePrompt() {
@@ -4268,7 +4267,7 @@
                 const result = await response.json();
 
                 if (result.needConfirmation) {
-                    // 卡片由 WebSocket 推送，前端不再自己构建
+                    // 卡片由 WebSocket 推送
                     // 如果卡片还没显示，才显示等待提示
                     var container = document.getElementById('confirmationContainer');
                     if (!container || container.innerHTML.trim() === '') {
@@ -4475,9 +4474,9 @@
 
                 if (result.success) {
                     if (result.needTimeConfig) {
-                        // 课表场景：后端已通过 WebSocket 推送 schedule_table_confirm 卡片
+                        // 课表场景：卡片由 WebSocket 推送
                         addMessage('bot', '✅ ' + (result.message || '课表识别完成'));
-                        // 5 秒兜底：若 WebSocket 卡片未到达，使用 HTTP 响应数据直接渲染
+                        // 5 秒兜底：用 HTTP 响应渲染
                         setTimeout(function() {
                             var container = document.getElementById('confirmationContainer');
                             if (container && container.innerHTML === '') {
@@ -4617,7 +4616,7 @@
                         content: text.trim()
                     })
                 }).catch(function(err) {
-                    // 静默失败，不影响用户使用
+                    // 静默失败
                 });
             }
         }
@@ -4754,7 +4753,7 @@
                 currentMonth = now.getMonth() + 1;
             }
 
-            // 动态切换表头：月视图日开头，周视图周一开始 + 占位列
+            // 动态切换表头
             var header = document.getElementById('weekdayHeader');
             if (header) {
                 if (viewMode === 'week') {
@@ -5353,7 +5352,7 @@
             // 获取本周 7 天的日期（从周一到周日）
             var weekDays = getWeekDays();
 
-            // 按时间+日期分组（数组，支持同时刻多事项）
+            // 按时间+日期分组
             var timeGroups = {};
             reminders.forEach(function(r) {
                 var time = r.remindTime.slice(11, 16);
@@ -5616,7 +5615,7 @@
             };
             reader.readAsDataURL(file);
 
-            // 重置 input，允许再次选择同一文件
+            // 重置 input
             input.value = '';
         }
 
@@ -6029,7 +6028,7 @@
                     return;
                 }
             } else if (currentEditType === 'city') {
-                // 必须从列表中选择城市，不能自己随便输入保存
+                // 必须从列表选择城市
                 if (!selectedCityValue) {
                     showToast('请从列表中选择城市', false);
                     return;
@@ -6061,8 +6060,6 @@
                 if (response.ok) {
                     return response.json().then(function(data) {
                         // 经期三个字段：用后端返回的最新值更新显示
-                        // （后端 calculatePeriodStatus 可能自动推进了 lastPeriodStart，
-                        //   所以前端不能用用户输入的旧值，必须用后端返回的最新值）
                         var u = data.user || {};
                         var periodValFields = ['cycleDays', 'lastPeriodStart', 'periodDuration'];
                         if (periodValFields.indexOf(currentEditField) !== -1) {
@@ -6075,7 +6072,6 @@
                             document.getElementById('valueLastPeriodStart').textContent = u.lastPeriodStart || '--';
                         } else {
                             updateProfileDisplay(currentEditField, value);
-                            // 即使用户改的不是 lastPeriodStart，后端也可能自动推进了它
                             if (u.lastPeriodStart != null) {
                                 document.getElementById('valueLastPeriodStart').textContent = u.lastPeriodStart;
                             }

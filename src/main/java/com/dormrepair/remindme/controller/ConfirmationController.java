@@ -13,15 +13,21 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+// 确认会话接口控制器。统一前缀 /api/confirmations，维护 LLM 解析后待用户二次确认的卡片生命周期：单条/批量确认/取消、冲突覆盖、周期提醒三类策略、智能编辑、待执行阶段的确认/稍后/取消等
 @Slf4j
 @RestController
 @RequestMapping("/api/confirmations")
 @RequiredArgsConstructor
 public class ConfirmationController {
 
+    // 确认会话服务：会话状态机、冲突判定、周期提醒策略、超时回收等逻辑都在该服务
     private final ConfirmationService confirmationService;
+    // 大模型服务：智能修改接口中用于解析用户「改成XXX」式的自然语言编辑意图
     private final LLMService llmService;
 
+    // 单条确认会话的「确认创建」接口。可选 body.conflictIds 指定需要同时覆盖的冲突提醒 ID 列表；未传时若存在冲突则返回冲突卡片
+    // sessionId - 确认会话唯一标识（创建时生成）
+    // userId    - 当前用户
     @PostMapping("/{sessionId}/confirm")
     public ResponseEntity<Map<String, Object>> confirm(
             @PathVariable String sessionId,
@@ -46,6 +52,7 @@ public class ConfirmationController {
         }
     }
 
+    // 单条确认会话「取消」：丢弃当前会话，不会写入 Reminder 表
     @PostMapping("/{sessionId}/cancel")
     public ResponseEntity<Map<String, Object>> cancel(
             @PathVariable String sessionId,
@@ -61,6 +68,7 @@ public class ConfirmationController {
         }
     }
 
+    // 冲突场景下「全部覆盖」：删除所有与本次时间冲突的既有提醒，再创建当前提醒
     @PostMapping("/{sessionId}/overwrite")
     public ResponseEntity<Map<String, Object>> overwrite(
             @PathVariable String sessionId,
@@ -76,6 +84,7 @@ public class ConfirmationController {
         }
     }
 
+    // 周期提醒「仅本次生效」：本次按用户修改后的值写入，后续周期实例仍沿用模板原始时间
     @PostMapping("/{sessionId}/recurring/direct")
     public ResponseEntity<Map<String, Object>> recurringDirect(
             @PathVariable String sessionId,
@@ -91,6 +100,7 @@ public class ConfirmationController {
         }
     }
 
+    // 周期提醒「跳过本次」：本次不生成提醒，后续周期实例保持模板
     @PostMapping("/{sessionId}/recurring/skip")
     public ResponseEntity<Map<String, Object>> recurringSkip(
             @PathVariable String sessionId,
@@ -106,6 +116,7 @@ public class ConfirmationController {
         }
     }
 
+    // 周期提醒「全部覆盖模板」：本次修改反写回 RecurringReminder 模板，之后所有周期实例均按新时间生成
     @PostMapping("/{sessionId}/recurring/overwrite-all")
     public ResponseEntity<Map<String, Object>> recurringOverwriteAll(
             @PathVariable String sessionId,
@@ -121,6 +132,8 @@ public class ConfirmationController {
         }
     }
 
+    // 按冲突 ID 单条覆盖：选择覆盖冲突列表中的某一条而非全部
+    // conflictId - 要覆盖掉的既有提醒 ID
     @PostMapping("/{sessionId}/overwrite/{conflictId}")
     public ResponseEntity<Map<String, Object>> overwriteSingle(
             @PathVariable String sessionId,
@@ -137,6 +150,8 @@ public class ConfirmationController {
         }
     }
 
+    // 按冲突 ID 批量覆盖：用户在多冲突复选框中勾选若干条后统一提交覆盖
+    // body.conflictIds - Number[] 类型的待覆盖提醒 ID 数组
     @PostMapping("/{sessionId}/batch-overwrite")
     public ResponseEntity<Map<String, Object>> batchOverwrite(
             @PathVariable String sessionId,
@@ -158,6 +173,7 @@ public class ConfirmationController {
         }
     }
 
+    // 编辑并重解析会话（旧版全量字段提交）。传入新的用户输入和已解析数据，服务端重新组装确认卡片并推送刷新
     @PostMapping("/{sessionId}/edit")
     public ResponseEntity<Map<String, Object>> edit(
             @PathVariable String sessionId,
@@ -188,6 +204,7 @@ public class ConfirmationController {
         }
     }
 
+    // 到点执行阶段的「确认执行」：把 Reminder 状态置为 EXECUTING → DONE
     @PostMapping("/{sessionId}/execute/confirm")
     public ResponseEntity<Map<String, Object>> executeConfirm(
             @PathVariable String sessionId,
@@ -203,6 +220,7 @@ public class ConfirmationController {
         }
     }
 
+    // 到点执行阶段的「稍后提醒」：按默认策略（一般顺延 10 分钟或用户配置）重新生成一次提醒实例
     @PostMapping("/{sessionId}/execute/later")
     public ResponseEntity<Map<String, Object>> executeLater(
             @PathVariable String sessionId,
@@ -218,6 +236,7 @@ public class ConfirmationController {
         }
     }
 
+    // 到点执行阶段的「取消本次」：丢弃当次执行，状态置为 CANCELLED
     @PostMapping("/{sessionId}/execute/cancel")
     public ResponseEntity<Map<String, Object>> executeCancel(
             @PathVariable String sessionId,
@@ -233,6 +252,7 @@ public class ConfirmationController {
         }
     }
 
+    // 获取指定会话当前数据快照：用于卡片刷新、回显等场景拉取最新确认卡片状态
     @GetMapping("/{sessionId}/data")
     public ResponseEntity<Map<String, Object>> getData(
             @PathVariable String sessionId,
@@ -241,6 +261,7 @@ public class ConfirmationController {
         return ResponseEntity.ok(data);
     }
 
+    // 表单式重新解析接口：用户在卡片中直接修改字段（标题/时间/地点/优先级/周期等）后提交，服务端按字段值重建 parsedData 并刷新卡片
     @PostMapping("/{sessionId}/reparse")
     public ResponseEntity<Map<String, Object>> reparse(
             @PathVariable String sessionId,
@@ -260,6 +281,7 @@ public class ConfirmationController {
                 return ResponseEntity.badRequest().body(error);
             }
 
+            // 重新组装 parsedData 结构，补齐缺省字段以便后续业务统一处理
             Map<String, Object> parsedData = new HashMap<>();
             parsedData.put("title", title);
             parsedData.put("remindTime", remindTime);
@@ -269,7 +291,7 @@ public class ConfirmationController {
             parsedData.put("intentType", "REMINDER");
             parsedData.put("confidence", 0.95);
 
-            // 周期提醒字段
+            // 周期提醒相关字段（可选，仅 isRecurring=true 时写入）
             if (body.get("isRecurring") != null) {
                 parsedData.put("isRecurring", body.get("isRecurring"));
                 parsedData.put("startDate", body.get("startDate"));
@@ -285,7 +307,7 @@ public class ConfirmationController {
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);
             result.put("message", "已重新解析");
-            // 将卡片信息传递给前端
+            // actions/timeout/expiresAt 用于构成卡片按钮与倒计时
             result.put("actions", card.getActions());
             result.put("timeout", card.getTimeout());
             result.put("expiresAt", card.getExpiresAt());
@@ -298,12 +320,10 @@ public class ConfirmationController {
         }
     }
 
-    /**
-     * 智能修改接口
-     * <p>
-     * 解析用户修改意图，自动更新对应字段并刷新确认会话
-     * </p>
-     */
+    // 智能修改接口（自然语言式编辑）：用户输入「改成下午三点」这类一句话指令，由 LLM 识别修改字段+新值后自动刷新卡片
+    // sessionId - 当前确认会话
+    // userId    - 用户
+    // body 字段：userInput(用户一句话修改指令,必填)、currentData(当前卡片已解析数据,必填)
     @PostMapping("/{sessionId}/smart-edit")
     public ResponseEntity<Map<String, Object>> smartEdit(
             @PathVariable String sessionId,
@@ -327,12 +347,12 @@ public class ConfirmationController {
                 return ResponseEntity.badRequest().body(error);
             }
 
-            // 调用 LLM 解析修改意图
+            // 调 LLM 识别编辑意图：返回要改的字段（time/location/title/priority）+ 新值 + 解析原因
             LLMService.EditIntent editIntent = llmService.parseEditIntent(userInput, currentData);
             log.info("修改意图解析结果: field={}, newValue={}, reason={}",
                     editIntent.getField(), editIntent.getNewValue(), editIntent.getReason());
 
-            // 无法识别修改意图
+            // 无法识别修改意图时，返回用户可理解的指引，提示可修改的几类字段
             if ("unknown".equals(editIntent.getField())) {
                 Map<String, Object> result = new HashMap<>();
                 result.put("success", false);
@@ -340,12 +360,12 @@ public class ConfirmationController {
                 return ResponseEntity.ok(result);
             }
 
-            // 根据解析结果更新对应字段
+            // 根据 LLM 识别的 field 名，映射到 parsedData 中对应 key，并写入新值
             String fieldName = editIntent.getField();
             String newValue = editIntent.getNewValue();
             String fieldDisplayName = getFieldDisplayName(fieldName);
 
-            // 复制 currentData 并更新对应字段
+            // 复制一份 currentData 再修改，避免影响上游引用
             Map<String, Object> updatedData = new HashMap<>(currentData);
             switch (fieldName) {
                 case "time":
@@ -367,13 +387,13 @@ public class ConfirmationController {
                     return ResponseEntity.ok(error);
             }
 
-            // 确保必要字段存在
+            // 补齐业务需要但可能缺失的默认字段：优先级/提前分钟/意图类型/置信度
             updatedData.putIfAbsent("priority", "NORMAL");
             updatedData.putIfAbsent("advanceMinutes", 10);
             updatedData.putIfAbsent("intentType", "REMINDER");
             updatedData.put("confidence", 0.95);
 
-            // 调用 reparse 更新会话（后端会自动推送更新后的卡片）
+            // 调 reparse 重建卡片，内部会主动通过 WebSocket 推送新卡片
             confirmationService.reparse(sessionId, userId, userInput, updatedData);
 
             Map<String, Object> result = new HashMap<>();
@@ -397,9 +417,7 @@ public class ConfirmationController {
         }
     }
 
-    /**
-     * 获取字段中文显示名
-     */
+    // 字段英文名 → 中文显示名映射，用于智能修改成功提示中的用户可读文案
     private String getFieldDisplayName(String field) {
         return switch (field) {
             case "time" -> "时间";
@@ -410,6 +428,8 @@ public class ConfirmationController {
         };
     }
 
+    // 通用单会话动作分发接口：支持 confirm / cancel 两类 action 统一入口，简化调用方路径判断
+    // body 字段：sessionId、action(confirm/cancel)、userId
     @PostMapping("/action")
     public ResponseEntity<Map<String, Object>> action(@RequestBody Map<String, Object> body) {
         String sessionId = (String) body.get("sessionId");
@@ -447,6 +467,8 @@ public class ConfirmationController {
         }
     }
 
+    // 批量动作分发接口：对用户全部待确认会话执行 confirmAll / cancelAll，用于顶部「一键确认/取消」按钮
+    // body 字段：userId、action(confirmAll/cancelAll)
     @PostMapping("/action-all")
     public ResponseEntity<Map<String, Object>> actionAll(@RequestBody Map<String, Object> body) {
         Long userId = body.containsKey("userId") ? Long.parseLong(String.valueOf(body.get("userId"))) : null;
@@ -483,9 +505,7 @@ public class ConfirmationController {
         }
     }
 
-    /**
-     * 处理冲突选择
-     */
+    // 冲突场景动作处理接口：当解析到与既有提醒时间冲突时，通过此接口提交用户选择（覆盖/改时间/取消等）
     @PostMapping("/conflict")
     public ResponseEntity<Map<String, Object>> handleConflict(@RequestBody Map<String, Object> body) {
         try {

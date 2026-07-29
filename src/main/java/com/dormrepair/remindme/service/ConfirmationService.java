@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+// 两阶段确认会话服务：阶段一创建信息确认卡片，阶段二执行确认/稍后/取消，含超时自动确认与周期提醒分支
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -50,14 +51,17 @@ public class ConfirmationService {
     private final AgentService agentService;
     private final UserService userService;
 
+    // 周期提醒服务，用 @Lazy 避免循环依赖
     @org.springframework.beans.factory.annotation.Autowired
     @org.springframework.context.annotation.Lazy
     private RecurringReminderService recurringReminderService;
 
+    // 统一时间格式与超时配置：确认会话默认 300 秒过期
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private static final int TIMEOUT_SECONDS = 300;
 
+    // 阶段一：创建信息确认会话，解析提醒字段后构建并推送确认卡片
     @Transactional
     public ConfirmationCardResponse createSession(Long userId, String originalInput, Map<String, Object> parsedData) {
         String sessionId = UUID.randomUUID().toString();
@@ -119,6 +123,7 @@ public class ConfirmationService {
         return confirm(sessionId, userId, List.of());
     }
 
+    // 确认会话：校验状态与过期时间，周期提醒走周期分支，普通提醒删除指定冲突后创建提醒并发布事件
     @Transactional
     public Map<String, Object> confirm(String sessionId, Long userId, List<Long> conflictIdsToOverwrite) {
         ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
@@ -182,6 +187,7 @@ public class ConfirmationService {
         return result;
     }
 
+    // 周期提醒确认分支：调用周期生成实例，更新会话状态并发布确认事件
     private Map<String, Object> confirmRecurring(ConfirmationSession session, Long userId, Map<String, Object> parsedData) {
         String title = (String) parsedData.get("title");
         // 使用纯时间 HH:mm:ss，如果没有则从完整时间中提取
@@ -233,9 +239,7 @@ public class ConfirmationService {
         return result;
     }
 
-    /**
-     * 周期提醒-直接创建全部（不覆盖冲突，冲突日多条并存）
-     */
+    // 周期提醒-直接创建全部：不覆盖冲突，冲突日多条并存
     @Transactional
     public Map<String, Object> confirmRecurringDirect(String sessionId, Long userId) {
         ConfirmationSession session = findAndValidateSession(sessionId, userId);
@@ -252,9 +256,7 @@ public class ConfirmationService {
         return result;
     }
 
-    /**
-     * 周期提醒-创建无冲突部分（跳过冲突日）
-     */
+    // 周期提醒-创建无冲突部分：跳过冲突日，仅生成不冲突的实例
     @Transactional
     public Map<String, Object> confirmRecurringSkip(String sessionId, Long userId) {
         ConfirmationSession session = findAndValidateSession(sessionId, userId);
@@ -271,9 +273,7 @@ public class ConfirmationService {
         return result;
     }
 
-    /**
-     * 周期提醒-全部覆盖（删除冲突提醒，创建全部）
-     */
+    // 周期提醒-全部覆盖：删除冲突提醒后再创建全部实例
     @Transactional
     public Map<String, Object> confirmRecurringOverwriteAll(String sessionId, Long userId) {
         ConfirmationSession session = findAndValidateSession(sessionId, userId);
@@ -290,6 +290,7 @@ public class ConfirmationService {
         return result;
     }
 
+    // 查找并校验会话：确认存在、未终态、未过期，过期会标记 EXPIRED
     private ConfirmationSession findAndValidateSession(String sessionId, Long userId) {
         ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
@@ -311,6 +312,7 @@ public class ConfirmationService {
         return session;
     }
 
+    // 按 mode 调用周期提醒的不同生成策略：direct 全量 / skip 跳过冲突 / overwrite 覆盖冲突
     private Map<String, Object> callRecurringGenerate(Map<String, Object> parsedData, Long userId, String mode) {
         String title = (String) parsedData.get("title");
         String remindTime = (String) parsedData.get("recurringRemindTime");
@@ -337,6 +339,7 @@ public class ConfirmationService {
         };
     }
 
+    // 取消确认会话：校验状态与过期后置为 CANCELLED，并发布提醒取消事件
     @Transactional
     public Map<String, Object> cancel(String sessionId, Long userId) {
         // 1. 先查找会话（不检查过期时间）
@@ -383,17 +386,7 @@ public class ConfirmationService {
         return result;
     }
 
-    /**
-     * 覆盖创建：删除冲突提醒，然后创建新提醒
-     * <p>
-     * 用户在确认卡片上点击"覆盖创建"按钮时调用。
-     * 删除冲突的旧提醒，然后确认当前会话的新提醒。
-     * </p>
-     *
-     * @param sessionId 确认会话ID
-     * @param userId    用户ID
-     * @return 处理结果
-     */
+    // 覆盖创建（全量）：删除会话中记录的所有冲突提醒，再创建新提醒并发布事件
     @Transactional
     public Map<String, Object> handleOverwrite(String sessionId, Long userId) {
         log.info("=== handleOverwrite (全量) 被调用 === sessionId={}, userId={}", sessionId, userId);
@@ -458,6 +451,7 @@ public class ConfirmationService {
         }
     }
 
+    // 覆盖创建（指定 ID）：仅删除指定的冲突提醒，再创建新提醒并发布事件
     @Transactional
     public Map<String, Object> handleOverwrite(String sessionId, Long userId, List<Long> conflictIdsToOverwrite) {
         log.info("=== handleOverwrite (指定ID) 被调用 === sessionId={}, userId={}, conflictIds={}", sessionId, userId, conflictIdsToOverwrite);
@@ -521,6 +515,7 @@ public class ConfirmationService {
         }
     }
 
+    // 从 parsedData 中汇总所有冲突提醒 ID：含单个 conflictId 与 conflictList 列表，去重返回
     private List<Long> getAllConflictIds(Map<String, Object> parsedData) {
         List<Long> ids = new java.util.ArrayList<>();
 
@@ -555,6 +550,7 @@ public class ConfirmationService {
         return ids.stream().distinct().toList();
     }
 
+    // 按 ID 批量取消冲突提醒（校验归属），返回被取消提醒的标题列表
     private List<String> deleteConflicts(Long userId, List<Long> conflictIds) {
         List<String> deletedTitles = new java.util.ArrayList<>();
         if (conflictIds == null || conflictIds.isEmpty()) {
@@ -576,24 +572,10 @@ public class ConfirmationService {
         return deletedTitles;
     }
 
-    /**
-     * 处理冲突选择
-     * <p>
-     * 用户在冲突卡片上选择处理方式后调用此方法
-     * </p>
-     *
-     * @param userId 用户ID
-     * @param action 操作类型：overwrite/cancel/modify
-     * @param title 新提醒标题
-     * @param remindTime 新提醒时间
-     * @param location 地点（可选）
-     * @param priority 优先级（可选）
-     * @param conflictReminderId 冲突的提醒ID（overwrite时使用）
-     * @param newTime 修改后的新时间（modify时使用）
-     * @return 处理结果
-     */
+    // 处理冲突选择：按 action 分派覆盖/取消/修改三种处理方式
+    // action=overwrite 删除冲突提醒后建新会话；cancel 直接放弃；modify 用新时间重新检测冲突
     @Transactional
-    public Map<String, Object> handleConflict(Long userId, String action, String title, 
+    public Map<String, Object> handleConflict(Long userId, String action, String title,
             String remindTime, String location, String priority, Long conflictReminderId, String newTime) {
         
         log.info("处理冲突选择: userId={}, action={}, title={}, remindTime={}", userId, action, title, remindTime);
@@ -633,9 +615,7 @@ public class ConfirmationService {
         return result;
     }
 
-    /**
-     * 处理覆盖操作：删除冲突提醒，创建新提醒
-     */
+    // 冲突处理-覆盖：删除指定冲突提醒，基于新信息创建确认会话
     private Map<String, Object> handleOverwrite(Long userId, String title, String remindTime,
             String location, String priority, Long conflictReminderId) {
         
@@ -678,9 +658,7 @@ public class ConfirmationService {
         return result;
     }
 
-    /**
-     * 处理修改时间操作：使用新时间重新检测
-     */
+    // 冲突处理-修改时间：用新时间重新检测冲突，无冲突则创建确认会话
     private Map<String, Object> handleModify(Long userId, String title, String newTime,
             String location, String priority) {
         
@@ -736,6 +714,7 @@ public class ConfirmationService {
         return result;
     }
 
+    // 重新解析会话：用新输入覆盖原解析数据，重新做冲突检测并刷新过期时间后再次推送卡片
     @Transactional
     public ConfirmationCardResponse reparse(String sessionId, Long userId, String newInput, Map<String, Object> newParsedData) {
         ConfirmationSession session = findValidSession(sessionId, userId);
@@ -800,6 +779,7 @@ public class ConfirmationService {
         return card;
     }
 
+    // 定时清理过期会话：每 15 秒扫描一次，阶段一超时自动确认（含周期提醒分支），其他阶段直接标记过期
     @Scheduled(fixedRate = 15000)
     @Transactional
     public void cleanupExpiredSessions() {
@@ -869,9 +849,7 @@ public class ConfirmationService {
         }
     }
 
-    /**
-     * 处理周期提醒的超时确认
-     */
+    // 周期提醒超时自动确认：生成周期实例后推送自动创建消息，并交由 Agent 生成回复
     private void handleExpiredRecurringSession(ConfirmationSession session, Map<String, Object> parsedData) {
         String title = (String) parsedData.get("title");
         String remindTime = (String) parsedData.get("recurringRemindTime");
@@ -924,13 +902,7 @@ public class ConfirmationService {
                 session.getSessionId(), session.getUserId(), createResult.get("recurringId"));
     }
 
-    /**
-     * 灵活解析时间字符串，支持多种格式
-     *
-     * @param timeStr 时间字符串
-     * @return 解析后的 LocalDateTime
-     * @throws DateTimeParseException 如果所有格式都无法解析
-     */
+    // 灵活解析时间字符串，依次尝试多种常见格式，全部失败则抛 DateTimeParseException
     private LocalDateTime parseTimeFlexible(String timeStr) {
         if (timeStr == null || timeStr.isBlank()) {
             return null;
@@ -959,6 +931,7 @@ public class ConfirmationService {
         );
     }
 
+    // 查找有效会话：状态须为 PENDING 且未过期
     private ConfirmationSession findValidSession(String sessionId, Long userId) {
         return confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                 .filter(s -> s.getStatus() == SessionStatus.PENDING)
@@ -966,6 +939,7 @@ public class ConfirmationService {
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在或已过期"));
     }
 
+    // 根据解析数据创建并保存提醒，默认提前量取用户配置
     private Reminder createReminder(Long userId, Map<String, Object> parsedData, com.dormrepair.remindme.enums.ConfirmStatus confirmStatus) {
         Reminder reminder = new Reminder();
         reminder.setUserId(userId);
@@ -988,6 +962,7 @@ public class ConfirmationService {
         return reminderRepository.save(reminder);
     }
 
+    // 构建阶段一确认卡片：组装数据与按钮，按周期/冲突/普通场景选择不同文案和操作集
     private ConfirmationCardResponse buildConfirmationCard(ConfirmationSession session, Map<String, Object> parsedData) {
         boolean hasConflict = Boolean.TRUE.equals(parsedData.get("hasConflict"));
         boolean isRecurring = Boolean.TRUE.equals(parsedData.get("isRecurring"));
@@ -1144,11 +1119,13 @@ public class ConfirmationService {
                 .findFirst();
     }
 
+    // 阶段二提醒执行卡片推送入口（无天气建议）
     @Transactional
     public void pushExecuteCard(Reminder reminder) {
         pushExecuteCard(reminder, null);
     }
 
+    // 阶段二提醒执行卡片：创建执行会话并推送，可携带天气建议
     @Transactional
     public void pushExecuteCard(Reminder reminder, String weatherSuggestion) {
         String sessionId = UUID.randomUUID().toString();
@@ -1188,6 +1165,7 @@ public class ConfirmationService {
                 sessionId, reminder.getId(), reminder.getUserId(), weatherSuggestion);
     }
 
+    // 阶段二-稍后提醒：递增尝试次数，达到上限自动确认执行，否则按间隔分钟再次提醒
     @Transactional
     public Map<String, Object> handleExecuteLater(String sessionId, Long userId) {
         ConfirmationSession session = findExecuteSession(sessionId, userId);
@@ -1222,6 +1200,7 @@ public class ConfirmationService {
         return result;
     }
 
+    // 阶段二-确认执行：标记提醒为已确认并已发送，结束会话
     @Transactional
     public Map<String, Object> handleExecuteConfirm(String sessionId, Long userId) {
         ConfirmationSession session = findExecuteSession(sessionId, userId);
@@ -1244,6 +1223,7 @@ public class ConfirmationService {
         return result;
     }
 
+    // 阶段二-取消：取消提醒并结束执行会话
     @Transactional
     public Map<String, Object> handleExecuteCancel(String sessionId, Long userId) {
         ConfirmationSession session = findExecuteSession(sessionId, userId);
@@ -1266,6 +1246,7 @@ public class ConfirmationService {
         return result;
     }
 
+    // 查找阶段二执行会话：状态 PENDING 且处于 REMINDER_EXECUTE 阶段
     private ConfirmationSession findExecuteSession(String sessionId, Long userId) {
         return confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                 .filter(s -> s.getStatus() == SessionStatus.PENDING)
@@ -1273,6 +1254,7 @@ public class ConfirmationService {
                 .orElseThrow(() -> new IllegalArgumentException("执行会话不存在或已过期"));
     }
 
+    // 构建阶段二执行卡片：携带提醒信息、天气建议与确认/稍后/取消按钮
     private ConfirmationCardResponse buildExecuteCard(ConfirmationSession session, Map<String, Object> parsedData) {
         ConfirmationData data = ConfirmationData.builder()
                 .sessionId(session.getSessionId())
@@ -1306,6 +1288,7 @@ public class ConfirmationService {
                 .build();
     }
 
+    // 获取会话数据：返回标题、时间、地点及周期提醒、冲突等扩展字段
     public Map<String, Object> getSessionData(String sessionId) {
         return confirmationRepository.findBySessionId(sessionId)
                 .map(session -> {
@@ -1333,10 +1316,12 @@ public class ConfirmationService {
                 .orElse(new HashMap<>());
     }
 
+    // 构建确认成功消息（无覆盖标题）
     private String buildConfirmSuccessMessage(Reminder reminder) {
         return buildConfirmSuccessMessage(reminder, null);
     }
 
+    // 构建确认成功消息，覆盖场景会额外说明被覆盖的提醒标题
     private String buildConfirmSuccessMessage(Reminder reminder, String overwrittenTitle) {
         String title = reminder.getTitle();
         String remindTime = reminder.getRemindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
@@ -1348,6 +1333,7 @@ public class ConfirmationService {
                "⏰ 我将在 " + remindTime + " 提醒您" + title;
     }
 
+    // 构建超时自动确认消息，提示用户因未及时确认已自动创建提醒
     private String buildAutoConfirmMessage(Reminder reminder) {
         String title = reminder.getTitle();
         String remindTime = reminder.getRemindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
@@ -1355,6 +1341,7 @@ public class ConfirmationService {
                "⏰ 我将在 " + remindTime + " 提醒您" + title;
     }
 
+    // 查询用户所有阶段一待确认会话（未过期、按创建时间排序）
     public List<ConfirmationSession> getPendingSessions(Long userId) {
         return confirmationRepository.findByUserIdAndStatus(userId, SessionStatus.PENDING)
                 .stream()
@@ -1364,6 +1351,7 @@ public class ConfirmationService {
                 .toList();
     }
 
+    // 取最近一条阶段一待确认会话，无则返回 null
     public ConfirmationSession getLatestPendingSession(Long userId) {
         List<ConfirmationSession> sessions = getPendingSessions(userId);
         if (sessions.isEmpty()) {
@@ -1372,6 +1360,7 @@ public class ConfirmationService {
         return sessions.get(sessions.size() - 1);
     }
 
+    // 按标题关键词确认行程：先查阶段一待确认会话，找不到再查阶段二待执行提醒
     @Transactional
     public Reminder confirmByTitle(Long userId, String keyword) {
         // 阶段一：查询待确认创建的会话
@@ -1435,6 +1424,7 @@ public class ConfirmationService {
         return targetReminder;
     }
 
+    // 按标题关键词取消阶段一待确认会话，成功返回 true
     @Transactional
     public boolean cancelByTitle(Long userId, String keyword) {
         List<ConfirmationSession> sessions = getPendingSessions(userId);
@@ -1463,6 +1453,7 @@ public class ConfirmationService {
         return true;
     }
 
+    // 一键确认所有阶段一待确认会话，批量创建提醒并推送汇总消息
     @Transactional
     public List<Reminder> confirmAll(Long userId) {
         List<ConfirmationSession> sessions = getPendingSessions(userId);
@@ -1483,6 +1474,7 @@ public class ConfirmationService {
         return reminders;
     }
 
+    // 一键取消所有阶段一待确认会话，返回取消数量
     @Transactional
     public int cancelAll(Long userId) {
         List<ConfirmationSession> sessions = getPendingSessions(userId);
@@ -1503,6 +1495,7 @@ public class ConfirmationService {
         return sessions.size();
     }
 
+    // 按 sessionId 确认单个阶段一会话并创建提醒
     @Transactional
     public Reminder confirmSingle(Long userId, String sessionId) {
         ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
@@ -1513,6 +1506,7 @@ public class ConfirmationService {
         return createReminderFromSession(session);
     }
 
+    // 按 sessionId 取消单个阶段一会话并推送取消消息
     @Transactional
     public boolean cancelSingle(Long userId, String sessionId) {
         return confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
@@ -1536,6 +1530,7 @@ public class ConfirmationService {
                 .orElse(false);
     }
 
+    // 从会话创建提醒并推送卡片确认消息（手动确认场景）
     private Reminder createReminderFromSession(ConfirmationSession session) {
         Reminder savedReminder = createReminderFromSessionWithoutPush(session);
         
@@ -1546,6 +1541,7 @@ public class ConfirmationService {
         return savedReminder;
     }
     
+    // 从会话创建提醒但不推送（超时自动确认场景），更新会话为已确认并进入执行阶段
     private Reminder createReminderFromSessionWithoutPush(ConfirmationSession session) {
         Reminder reminder = new Reminder();
         reminder.setUserId(session.getUserId());
@@ -1583,6 +1579,7 @@ public class ConfirmationService {
         return savedReminder;
     }
 
+    // 推送卡片确认消息，通知关闭对应卡片
     private void pushCardConfirmed(Long userId, String sessionId, String title, LocalDateTime remindTime) {
         log.info("pushCardConfirmed 被调用: userId={}, sessionId={}", userId, sessionId);
         if (userId == null || sessionId == null) {
@@ -1595,6 +1592,7 @@ public class ConfirmationService {
         pushUserMessage(userId, "card_confirmed", data);
     }
 
+    // 推送单条待确认卡片，按是否今天调整时间显示格式
     public void pushSingleConfirmCard(Long userId, ConfirmationSession session) {
         Map<String, Object> cardData = new HashMap<>();
         cardData.put("type", "single_confirm_card");
@@ -1619,6 +1617,7 @@ public class ConfirmationService {
         pushMessage(userId, cardData);
     }
 
+    // 推送多条待确认卡片，列出各会话标题与时间
     public void pushMultiConfirmCard(Long userId, List<ConfirmationSession> sessions) {
         Map<String, Object> cardData = new HashMap<>();
         cardData.put("type", "multi_confirm_card");
@@ -1646,6 +1645,7 @@ public class ConfirmationService {
         pushMessage(userId, cardData);
     }
 
+    // 推送待确认行程汇总，按编号列出全部待确认会话
     public void pushPendingSummary(Long userId) {
         List<ConfirmationSession> sessions = getPendingSessions(userId);
         if (sessions.isEmpty()) {

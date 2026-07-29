@@ -29,9 +29,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-/**
- * 提醒业务逻辑服务
- */
+// 提醒核心业务服务
+// 提供提醒的 CRUD，并通过 7 个 AgentTool 暴露给 Agent 调用；含周期关键词路由逻辑
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -44,8 +43,10 @@ public class ReminderService {
     private final ConflictDetectionService conflictDetectionService;
     private final RecurringReminderService recurringReminderService;
 
+    // 统一的日期时间格式，对应 Agent 入参中 remindTime/endTime 的字符串格式
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    // HTTP 层创建提醒入口：校验用户后转交给 Agent 版本处理
     @Transactional
     public Map<String, Object> createReminder(ReminderCreateRequest request) {
         User user = userRepository.findById(request.getUserId())
@@ -66,6 +67,7 @@ public class ReminderService {
         );
     }
 
+    // HTTP 层更新提醒：仅覆盖入参非 null 的字段
     @Transactional
     public ReminderResponse updateReminder(Long id, ReminderUpdateRequest request, Long userId) {
         Reminder reminder = getReminderByIdAndUserId(id, userId);
@@ -99,6 +101,7 @@ public class ReminderService {
         return toResponse(saved);
     }
 
+    // 取消提醒并发布事件
     @Transactional
     public void cancelReminder(Long id, Long userId) {
         Reminder reminder = getReminderByIdAndUserId(id, userId);
@@ -107,6 +110,7 @@ public class ReminderService {
         eventPublisher.publishReminderCancelled(userId, id, reminder.getTitle());
     }
 
+    // 查询某用户的全部 PENDING 提醒
     public List<ReminderResponse> getRemindersByUser(Long userId) {
         return reminderRepository.findByUserIdAndStatus(userId, ReminderStatus.PENDING)
                 .stream()
@@ -114,6 +118,7 @@ public class ReminderService {
                 .collect(Collectors.toList());
     }
 
+    // 确认提醒：状态置为 CONFIRMED 并发布事件
     @Transactional
     public ReminderResponse confirmReminder(Long id, Long userId) {
         Reminder reminder = getReminderByIdAndUserId(id, userId);
@@ -123,6 +128,7 @@ public class ReminderService {
         return toResponse(saved);
     }
 
+    // 查询待确认（PENDING 确认状态）的提醒
     public List<ReminderResponse> getPendingReminders(Long userId) {
         return reminderRepository.findByUserIdAndConfirmStatus(userId, ConfirmStatus.PENDING)
                 .stream()
@@ -130,19 +136,19 @@ public class ReminderService {
                 .collect(Collectors.toList());
     }
 
-    /**
-     * 检测冲突（委托给 ConflictDetectionService）
-     */
+    // 检测冲突（委托给 ConflictDetectionService）
     public ConflictResponse checkConflict(Long userId, LocalDateTime remindTime) {
         return conflictDetectionService.checkConflict(userId, remindTime, null);
     }
 
+    // 按主键查提醒，附带所属用户校验
     private Reminder getReminderByIdAndUserId(Long id, Long userId) {
         return reminderRepository.findById(id)
                 .filter(r -> r.getUserId().equals(userId))
                 .orElseThrow(() -> new IllegalArgumentException("提醒不存在或无权操作"));
     }
 
+    // 实体转响应 DTO，逐字段映射
     private ReminderResponse toResponse(Reminder reminder) {
         ReminderResponse response = new ReminderResponse();
         response.setId(reminder.getId());
@@ -165,19 +171,10 @@ public class ReminderService {
         return response;
     }
 
-    /**
-     * Agent工具：创建提醒
-     * <p>
-     * 供Agent调用的创建提醒方法，会触发阶段一确认流程
-     * </p>
-     *
-     * @param userId 用户ID
-     * @param title 提醒事项标题
-     * @param remindTime 提醒时间（格式：yyyy-MM-dd HH:mm:ss）
-     * @param location 地点（可选）
-     * @param priority 优先级（LOW/NORMAL/HIGH，默认NORMAL）
-     * @return 创建结果
-     */
+    // Agent 工具：创建提醒
+    // 触发阶段一确认流程；标题命中周期关键词时路由到周期提醒
+    // userId 用户ID；title 标题；remindTime 提醒时间（yyyy-MM-dd HH:mm:ss）
+    // endTime 结束时间（可选）；location 地点（可选）；priority 优先级（LOW/NORMAL/HIGH，默认 NORMAL）
     @AgentTool(name = "create_reminder", description = "创建提醒，用户要求设置提醒时调用")
     @Transactional
     public Map<String, Object> createReminderForAgent(Long userId, String title, String remindTime,
@@ -225,7 +222,7 @@ public class ReminderService {
                 finalAdvance = defaultAdvance;
             }
             
-            // 构建解析数据，用于确认会话
+            // 构建确认会话的解析数据
             Map<String, Object> parsedData = new HashMap<>();
             parsedData.put("title", title);
             parsedData.put("remindTime", remindTime);
@@ -252,7 +249,7 @@ public class ReminderService {
                 parsedData.put("suggestedTime", conflictResponse.getSuggestedTime() != null 
                         ? conflictResponse.getSuggestedTime().format(FORMATTER) : null);
                 
-                // 取第一个冲突的提醒ID，用于覆盖操作
+                // 取第一个冲突提醒的 ID，便于后续覆盖
                 if (conflictResponse.getConflicts() != null && !conflictResponse.getConflicts().isEmpty()) {
                     parsedData.put("conflictId", conflictResponse.getConflicts().get(0).getId());
                 }
@@ -280,7 +277,7 @@ public class ReminderService {
             result.put("sessionId", card.getData().getSessionId());
             result.put("confirmationRequired", true);
             result.put("hasConflict", conflictResponse.isHasConflict());
-            // 将确认卡片的 actions、timeout、expiresAt 传递给前端
+            // 透传确认卡片的 actions、timeout、expiresAt
             result.put("actions", card.getActions());
             result.put("timeout", card.getTimeout());
             result.put("expiresAt", card.getExpiresAt());
@@ -299,16 +296,9 @@ public class ReminderService {
         return result;
     }
 
-    /**
-     * Agent工具：查询提醒
-     * <p>
-     * 查询指定日期的提醒列表
-     * </p>
-     *
-     * @param userId 用户ID
-     * @param date 查询日期（格式：yyyy-MM-dd，默认今天）
-     * @return 提醒列表
-     */
+    // Agent 工具：查询提醒
+    // 查询指定日期的提醒列表
+    // userId 用户ID；date 查询日期（yyyy-MM-dd，为空时取今天）；返回提醒列表
     @AgentTool(name = "query_reminders", description = "查询提醒，用户询问日程安排时调用")
     public Map<String, Object> queryRemindersForAgent(Long userId, String date) {
         log.info("Agent调用查询提醒: userId={}, date={}", userId, date);
@@ -360,19 +350,10 @@ public class ReminderService {
         return result;
     }
 
-    /**
-     * Agent工具：更新提醒
-     * <p>
-     * 修改指定提醒的信息
-     * </p>
-     *
-     * @param userId 用户ID
-     * @param reminderId 提醒ID
-     * @param title 标题（可选）
-     * @param remindTime 提醒时间（可选，格式：yyyy-MM-dd HH:mm:ss）
-     * @param location 地点（可选）
-     * @return 更新结果
-     */
+    // Agent 工具：更新提醒
+    // 修改指定提醒的信息，仅覆盖入参非空字段
+    // userId 用户ID；reminderId 提醒ID；title 标题（可选）
+    // remindTime 提醒时间（可选，yyyy-MM-dd HH:mm:ss）；endTime 结束时间（可选）；location 地点（可选）
     @AgentTool(name = "update_reminder", description = "修改提醒，用户要求更改提醒时调用")
     @Transactional
     public Map<String, Object> updateReminderForAgent(Long userId, Long reminderId, String title,
@@ -424,16 +405,9 @@ public class ReminderService {
         return result;
     }
 
-    /**
-     * Agent工具：取消提醒
-     * <p>
-     * 删除指定的提醒
-     * </p>
-     *
-     * @param userId 用户ID
-     * @param reminderId 提醒ID
-     * @return 取消结果
-     */
+    // Agent 工具：取消提醒
+    // 将指定提醒状态置为 CANCELLED
+    // userId 用户ID；reminderId 提醒ID；返回取消结果
     @AgentTool(name = "cancel_reminder", description = "取消提醒，用户要求删除提醒时调用")
     @Transactional
     public Map<String, Object> cancelReminderForAgent(Long userId, Long reminderId) {
@@ -464,16 +438,9 @@ public class ReminderService {
         return result;
     }
 
-    /**
-     * Agent工具：获取提醒详情
-     * <p>
-     * 查询单个提醒的完整信息
-     * </p>
-     *
-     * @param userId     用户ID
-     * @param reminderId 提醒ID
-     * @return 提醒详情
-     */
+    // Agent 工具：获取提醒详情
+    // 查询单个提醒的完整信息
+    // userId 用户ID；reminderId 提醒ID；返回提醒详情
     @AgentTool(name = "get_reminder_detail", description = "获取单个提醒的完整详情，用户询问'第一个提醒是什么时间'、'具体信息'时调用")
     public Map<String, Object> getReminderDetail(Long userId, Long reminderId) {
         log.info("Agent调用获取提醒详情: userId={}, reminderId={}", userId, reminderId);
@@ -515,6 +482,8 @@ public class ReminderService {
         return result;
     }
 
+    // Agent 工具：创建周期提醒
+    // 先做参数与格式校验，再委托给 RecurringReminderService 走确认卡片流程
     @AgentTool(name = "create_recurring_reminder", description = "创建周期提醒，用户输入包含日期范围时调用")
     @Transactional
     public Map<String, Object> createRecurringReminderForAgent(Long userId, String title,
@@ -581,6 +550,8 @@ public class ReminderService {
         return result;
     }
 
+    // Agent 工具：按日期取消提醒
+    // 命中某天的全部 PENDING 提醒，可选用 keyword 进一步过滤标题
     @AgentTool(name = "cancel_reminders_by_date", description = "取消指定日期的提醒，用户要求取消某天的提醒时调用")
     @Transactional
     public Map<String, Object> cancelRemindersByDate(Long userId, String date, String keyword) {
@@ -639,6 +610,8 @@ public class ReminderService {
         return result;
     }
 
+    // 周期关键词识别：扫描标题里的"每天/每周/每月"等词，推断重复类型与默认跨度
+    // 命中则返回拼好的起止日期与重复类型，未命中返回 null（按单次提醒处理）
     private RecurringParams detectDateRange(String title, String remindTime) {
         if (title == null || remindTime == null) {
             return null;
@@ -680,6 +653,7 @@ public class ReminderService {
         return new RecurringParams(timePart, startDate, endDate, repeatType);
     }
 
+    // 周期识别结果的内部载体：纯时间 + 起止日期 + 重复类型
     private static class RecurringParams {
         String remindTime;
         String startDate;

@@ -19,23 +19,34 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+// 聊天与 AI 解析接口控制器。统一前缀 /api/chat，承担用户自然语言输入→LLM 解析→确认会话创建的主流程、聊天历史查询、消息异步保存等能力；支持 agent.enabled 开关在「Agent 模式」和「传统确认卡片模式」之间切换
 @Slf4j
 @RestController
 @RequestMapping("/api/chat")
 @RequiredArgsConstructor
 public class ChatController {
 
+    // 确认会话服务：维护待确认/待执行的确认卡片生命周期
     private final ConfirmationService confirmationService;
+    // 大模型服务：自然语言→提醒信息解析、意图识别、编辑意图解析等核心 LLM 调用
     private final LLMService llmService;
+    // 对话统计服务：记录对话消息、查询历史聊天记录
     private final DialogStatsService dialogStatsService;
+    // Agent 核心调度器：agent.enabled=true 时启用，替代传统解析流程走 ReAct 循环
     private final AgentService agentService;
+    // 用户服务：取用户默认提前提醒时间等偏好设置
     private final com.dormrepair.remindme.service.UserService userService;
 
+    // Agent 模式总开关（配置文件 agent.enabled，默认关闭即走传统解析流程）
     @Value("${agent.enabled:false}")
     private boolean agentEnabled;
 
+    // 聊天消息主入口：每一条自然语言输入 POST 到此
+    // 处理流程：参数校验→GPS坐标提取→按 agent.enabled 走不同分支→Agent ReAct 模式失败时回退传统解析→确认卡片/文本响应
+    // request 常用字段：userId(必)、text(必,用户输入)、latitude(可选)、longitude(可选)
     @PostMapping("/send")
     public ResponseEntity<Map<String, Object>> sendMessage(@RequestBody Map<String, Object> request) {
+        // 从请求体安全提取 userId / text，缺一直接返回 400
         Long userId = request.containsKey("userId") ? Long.parseLong(String.valueOf(request.get("userId"))) : null;
         String text = (String) request.get("text");
 
@@ -48,11 +59,11 @@ public class ChatController {
 
         text = text.trim();
 
-        // 提取可选的GPS坐标
+        // 可选 GPS 坐标：若传递经纬度会进入上下文，供天气、位置工具使用
         Double latitude = request.containsKey("latitude") ? toDouble(request.get("latitude")) : null;
         Double longitude = request.containsKey("longitude") ? toDouble(request.get("longitude")) : null;
 
-        // Agent模式：如果启用Agent，调用AgentService处理
+        // Agent 模式分支：启用时走完整的 Agent 工具调用循环，失败时 catch 回退下面的传统解析流程
         if (agentEnabled) {
             try {
                 Map<String, Object> context = null;
@@ -85,7 +96,7 @@ public class ChatController {
                             response.put("message", agentResponse.getContent());
                             response.put("sessionId", agentResponse.getSessionId());
                             response.put("data", agentResponse.getConfirmationData());
-                            // 周期提醒标识，前端可识别
+                            // 周期提醒标识，供调用方识别
                             Map<String, Object> cdata = agentResponse.getConfirmationData();
                             if (cdata != null && cdata.get("data") instanceof Map) {
                                 @SuppressWarnings("unchecked")
@@ -272,13 +283,12 @@ public class ChatController {
         return ResponseEntity.ok(response);
     }
 
+    // 判断是否为「确认」语义：支持多种口语化表达
     private boolean isConfirm(String text) {
         return text.matches("^(确认|是的|好|ok|OK|嗯|行|可以|确定|是|好的)$");
     }
 
-    /**
-     * 获取用户默认提前量，如果用户不存在则返回10
-     */
+    // 获取用户自定义的默认提前提醒分钟数；用户不存在或未配置时返回 10 分钟作为系统兜底
     private int getDefaultAdvance(Long userId) {
         if (userId == null) return 10;
         return userService.getUserById(userId)
@@ -286,27 +296,33 @@ public class ChatController {
                 .orElse(10);
     }
 
+    // 判断是否为「取消」语义
     private boolean isCancel(String text) {
         return text.matches("^(取消|算了|不|不要|否|不用了|算了吧)$");
     }
 
+    // 判断是否为「编辑/修改」语义：以编辑动词开头匹配
     private boolean isEdit(String text) {
         String lower = text.toLowerCase();
         return lower.matches("^(改成|修改为|换一下|改一下|调整|变更|改为|改成|调整为).*$");
     }
 
+    // 从「改成XXXX」句式中截取真正的编辑内容（剥去前缀动词）
     private String extractEditContent(String text) {
         return text.replaceAll("^(改成|修改为|换一下|改一下|调整|变更)", "").trim();
     }
 
+    // 判断是否为「到达确认」语义：知道了/收到等，表示接受即将执行的提醒
     private boolean isExecuteConfirm(String text) {
         return text.matches("^(知道了|收到|好的|嗯|ok|OK)$");
     }
 
+    // 判断是否为「稍后再提醒」语义
     private boolean isLater(String text) {
         return text.matches("^(稍后|等下|过会|再等|稍等|过一会儿)$");
     }
 
+    // 安全地将任意对象转为 Double：兼容 Number 类型、数字字符串；失败或空均返回 null
     private Double toDouble(Object value) {
         if (value == null) return null;
         if (value instanceof Number) return ((Number) value).doubleValue();
@@ -317,10 +333,9 @@ public class ChatController {
         return null;
     }
 
-    /**
-     * 查询用户聊天历史消息
-     * GET /api/chat/history?userId=1&limit=50
-     */
+    // 聊天历史查询接口：按时间倒序返回指定用户最近 N 条对话消息
+    // userId - 查询目标用户（必填）
+    // limit  - 返回条数上限，默认 50，最大 100，超出按 100 截断，<=0 时重置为 50
     @GetMapping("/history")
     public ResponseEntity<Map<String, Object>> getHistory(
             @RequestParam(required = false) Long userId,
@@ -332,6 +347,7 @@ public class ChatController {
                 resp.put("message", "userId 不能为空");
                 return ResponseEntity.badRequest().body(resp);
             }
+            // 限制最大条数防止一次返回过多导致卡顿/内存压力
             int actualLimit = limit != null ? Math.min(limit, 100) : 50;
             if (actualLimit <= 0) actualLimit = 50;
 
@@ -348,10 +364,8 @@ public class ChatController {
         }
     }
 
-    /**
-     * 保存单条聊天消息（供前端异步调用）
-     * POST /api/chat/save-message
-     */
+    // 单条聊天消息异步落库接口：客户端展示后回传，用于把消息记录与解析统计解耦
+    // request 必填字段：userId、role(user/bot)、content；可选字段 sessionId（同一会话内消息关联）
     @PostMapping("/save-message")
     public ResponseEntity<Map<String, Object>> saveMessage(@RequestBody Map<String, Object> request) {
         Map<String, Object> resp = new HashMap<>();

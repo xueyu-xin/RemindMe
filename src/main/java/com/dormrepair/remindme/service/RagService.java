@@ -33,24 +33,31 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
+// RAG 记忆服务：基于 Chroma 向量库管理两类知识——
+// 用户私有记忆（每用户独立 collection）和公共知识库（系统使用手册），
+// 对 Agent 暴露 6 个工具：检索/新增/更新/删除/列出私有记忆、检索公共知识。
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class RagService {
 
+    // 公共知识库的向量库（系统使用手册），所有用户共享
     private final ChromaVectorStore vectorStore;
     private final ChromaApi chromaApi;
     private final EmbeddingModel embeddingModel;
 
+    // Chroma 多租户与数据库配置，构建用户私有库时使用
     @Value("${spring.ai.vectorstore.chroma.tenant-name:default_tenant}")
     private String tenantName;
 
     @Value("${spring.ai.vectorstore.chroma.database-name:default_database}")
     private String databaseName;
 
+    // 每个用户对应一个独立的 ChromaVectorStore，懒加载并缓存
     private final Map<Long, ChromaVectorStore> userVectorStoreCache = new ConcurrentHashMap<>();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    // 按用户 ID 获取（必要时创建）私有向量库，collection 名固定为 user_{id}_knowledge
     private ChromaVectorStore getUserVectorStore(Long userId) {
         return userVectorStoreCache.computeIfAbsent(userId, id -> {
             String collectionName = "user_" + id + "_knowledge";
@@ -74,6 +81,8 @@ public class RagService {
         });
     }
 
+    // 把 Spring AI 的 Document 统一转成对外暴露的 KnowledgeResult，
+    // 顺便解析 metadata 里的 category、userId、createTime 等字段。
     private KnowledgeResult toKnowledgeResult(Document doc, String source) {
         Map<String, Object> metadata = doc.getMetadata();
         String categoryStr = metadata != null && metadata.get("category") != null
@@ -107,6 +116,7 @@ public class RagService {
 
     // ==================== 私有记忆管理 ====================
 
+    // 新增一条私有记忆，写入用户独立 collection，返回生成的文档 ID；失败返回 null
     public String addPrivateMemory(Long userId, String content, MemoryCategory category) {
         log.info("添加私有记忆: userId={}, category={}", userId, category);
         try {
@@ -129,6 +139,7 @@ public class RagService {
         }
     }
 
+    // 删除指定私有记忆，参数非法或库中不存在时返回 false
     public boolean deletePrivateMemory(String memoryId, Long userId) {
         if (memoryId == null || memoryId.isEmpty() || userId == null) {
             log.warn("删除记忆参数非法: memoryId={}, userId={}", memoryId, userId);
@@ -148,6 +159,8 @@ public class RagService {
         }
     }
 
+    // 更新私有记忆：先查出旧分类 → 删旧文档 → 按原分类新增新文档。
+    // 删除成功但新增失败时会丢失原记忆，调用方需注意返回值。
     public boolean updatePrivateMemory(String memoryId, Long userId, String newContent) {
         if (memoryId == null || memoryId.isEmpty()
                 || userId == null
@@ -188,6 +201,7 @@ public class RagService {
         }
     }
 
+    // 反查某条记忆的 MemoryCategory：先拉全量记忆再按 ID 过滤，找不到返回 null
     private MemoryCategory findMemoryCategory(String memoryId, Long userId) {
         List<KnowledgeResult> allMemories = getAllPrivateMemories(userId);
         if (allMemories == null || allMemories.isEmpty()) {
@@ -210,6 +224,8 @@ public class RagService {
                 .orElse(null);
     }
 
+    // 列出用户全部私有记忆：用一个高频字"的"做近似搜索拉取 top 1000，
+    // 再按创建时间倒序返回；查不到或异常时返回空列表。
     public List<KnowledgeResult> getAllPrivateMemories(Long userId) {
         log.info("获取所有私有记忆: userId={}", userId);
         try {
@@ -243,6 +259,8 @@ public class RagService {
 
     // ==================== 知识检索 ====================
 
+    // 在用户私有记忆中做向量相似度检索，topK 未指定时按记忆总量动态计算，
+    // 结果按相似度分数倒序返回。
     public List<KnowledgeResult> retrievePrivateKnowledge(Long userId, String query, Integer topK) {
         int actualTopK = calculateTopK(userId, topK);
         log.info("检索私人记忆: userId={}, query={}, topK={}", userId, query, actualTopK);
@@ -273,6 +291,7 @@ public class RagService {
         }
     }
 
+    // 在公共知识库（系统使用手册）中做向量检索，默认 topK=5，结果按分数倒序返回
     public List<KnowledgeResult> retrievePublicKnowledge(String query, Integer topK) {
         if (query == null || query.isEmpty()) {
             log.warn("检索公共知识参数非法: query 为空");
@@ -308,6 +327,7 @@ public class RagService {
 
     // ==================== Agent 工具方法 ====================
 
+    // Agent 工具：检索用户私有记忆
     @AgentTool(
             name = "retrieve_private_knowledge",
             description = "从用户私有知识库中检索记忆，用于回答关于用户个人信息、偏好、计划等个性化问题。"
@@ -317,6 +337,7 @@ public class RagService {
         return retrievePrivateKnowledge(userId, query, topK);
     }
 
+    // Agent 工具：新增用户私有记忆
     @AgentTool(
             name = "add_private_memory",
             description = """
@@ -336,6 +357,7 @@ public class RagService {
         return addPrivateMemory(userId, content, category);
     }
 
+    // Agent 工具：更新用户私有记忆
     @AgentTool(
             name = "update_private_memory",
             description = "更新用户私有知识库中的某条记忆内容。"
@@ -345,6 +367,7 @@ public class RagService {
         return updatePrivateMemory(memoryId, userId, newContent);
     }
 
+    // Agent 工具：删除用户私有记忆
     @AgentTool(
             name = "delete_private_memory",
             description = "删除用户私有知识库中的某条记忆。"
@@ -354,6 +377,7 @@ public class RagService {
         return deletePrivateMemory(memoryId, userId);
     }
 
+    // Agent 工具：列出用户全部私有记忆
     @AgentTool(
             name = "get_all_private_memories",
             description = "获取用户私有知识库中的所有记忆。"
@@ -363,6 +387,7 @@ public class RagService {
         return getAllPrivateMemories(userId);
     }
 
+    // Agent 工具：检索公共知识库（系统使用手册）
     @AgentTool(
             name = "retrieve_public_knowledge",
             description = "从公共知识库中检索系统使用手册（提醒管理、天气查询、个人记忆、经期管理、用户设置、位置与时间等功能说明）。注意：公共知识库仅承载使用手册，不再记录生活小常识/科普内容。"
@@ -374,6 +399,7 @@ public class RagService {
 
     // ==================== 动态topK ====================
 
+    // 计算 topK：调用方显式指定则优先用；否则按用户记忆总量分档（<20→5、≤100→10、其余→15）
     private int calculateTopK(Long userId, Integer topK) {
         if (topK != null) {
             log.debug("使用调用方指定 topK: userId={}, topK={}", userId, topK);
@@ -394,6 +420,7 @@ public class RagService {
         return dynamicTopK;
     }
 
+    // 统计用户私有记忆条数，仅作为动态 topK 的输入，异常时按 0 处理
     private int getPrivateMemoryCount(Long userId) {
         try {
             List<KnowledgeResult> all = getAllPrivateMemories(userId);
@@ -406,6 +433,8 @@ public class RagService {
 
     // ==================== 公共知识库初始化 ====================
 
+    // 启动时初始化公共知识库：若已有数据则跳过，否则从 public_knowledge.json 导入预置使用手册。
+    // 整个过程失败不影响应用启动。
     @PostConstruct
     public void initPublicKnowledge() {
         log.info("开始初始化公共知识库...");
@@ -443,6 +472,7 @@ public class RagService {
         }
     }
 
+    // 从 classpath 读取 public_knowledge.json，解析成预置知识列表；文件缺失返回空列表
     private List<PresetKnowledge> loadPresetKnowledge() {
         try (InputStream is = new ClassPathResource("public_knowledge.json").getInputStream()) {
             List<PresetKnowledge> list = objectMapper.readValue(
@@ -455,6 +485,7 @@ public class RagService {
         }
     }
 
+    // 预置知识条目，对应 public_knowledge.json 里的一条使用手册
     @Data
     @NoArgsConstructor
     public static class PresetKnowledge {

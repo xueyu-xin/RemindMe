@@ -25,14 +25,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * 定时任务服务
- */
+// 定时任务服务
+// 每分钟扫描到期提醒并推送、每小时检查超时未确认的提醒、每日生成周期提醒实例
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class SchedulerService {
 
+    // 各业务依赖：提醒仓储、确认卡片、WebSocket 推送、天气、LLM、用户偏好、周期提醒
     private final ReminderRepository reminderRepository;
     private final ConfirmationService confirmationService;
     private final WebSocketPushService webSocketPushService;
@@ -45,6 +45,7 @@ public class SchedulerService {
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
 
+    // 高德地理编码 API Key，未配置时降级走默认城市
     @Value("${amap.api.key:}")
     private String amapKey;
 
@@ -56,8 +57,7 @@ public class SchedulerService {
         // 扫描逻辑说明：
         // - 单点提醒（endTime 为 null）：在 remindTime 时推送通知
         // - 时间段提醒（endTime 不为 null）：也在 remindTime（开始时间）时推送通知
-        //   用户收到通知后，可以看到这是一个时间段提醒，并知道活动的结束时间
-        // - 两种提醒的推送时机相同，都是基于 remindTime，因此现有逻辑无需特殊处理
+        // - 两种提醒推送时机一致，都基于 remindTime 触发
 
         List<Reminder> pendingReminders = reminderRepository
                 .findByStatusAndConfirmStatusAndExecutionStatusAndRemindTimeBefore(
@@ -93,11 +93,11 @@ public class SchedulerService {
             String city = entry.getKey();
             List<Reminder> cityReminders = entry.getValue();
 
-            // 查询天气（同一城市只查一次）
+            // 同一城市只查一次天气
             WeatherSuggestionCache cache = queryWeatherForCity(city);
             weatherCache.put(city, cache);
 
-            // 为每个提醒生成建议（标题和地点不同，分别生成）
+            // 每个提醒的标题和地点不同，分别生成建议
             for (Reminder reminder : cityReminders) {
                 try {
                     String weatherSuggestion = null;
@@ -126,7 +126,7 @@ public class SchedulerService {
 
                 } catch (Exception e) {
                     log.error("推送阶段二提醒失败: id={}", reminder.getId(), e);
-                    // 降级处理：不带天气建议推送
+                    // 降级：不带天气建议再推一次
                     try {
                         confirmationService.pushExecuteCard(reminder);
                     } catch (Exception ex) {
@@ -137,9 +137,7 @@ public class SchedulerService {
         }
     }
 
-    /**
-     * 地点类型枚举
-     */
+    // 地点类型枚举
     private enum LocationType {
         CITY,      // 城市
         DISTRICT,  // 区/县
@@ -147,12 +145,8 @@ public class SchedulerService {
         OTHER      // 其他（无法识别）
     }
 
-    /**
-     * 按城市分组提醒（使用高德API判断地点类型）
-     * <p>
-     * 优先级：提醒的location（城市级别）> 用户默认城市 > 默认值"广州"
-     * </p>
-     */
+    // 按城市分组提醒
+    // 优先级：提醒的 location（城市级别）> 用户默认城市 > 兜底值"广州"
     private Map<String, List<Reminder>> groupRemindersByCity(List<Reminder> reminders) {
         Map<String, List<Reminder>> groups = new HashMap<>();
 
@@ -163,7 +157,7 @@ public class SchedulerService {
             // 1. 获取用户默认城市作为兜底
             String userDefaultCity = getUserDefaultCity(reminder.getUserId());
 
-            // 2. 如果location不为空，判断地点类型
+            // 2. 如果 location 不为空，判断地点类型
             if (location != null && !location.isBlank()) {
                 // 先处理"省-市-区"格式
                 String normalizedLocation = location;
@@ -174,7 +168,7 @@ public class SchedulerService {
                     }
                 }
 
-                // 调用高德API判断地点类型
+                // 调用高德 API 判断地点类型
                 LocationType type = identifyLocationType(normalizedLocation);
 
                 if (type == LocationType.CITY || type == LocationType.DISTRICT) {
@@ -182,7 +176,7 @@ public class SchedulerService {
                     city = normalizedLocation;
                     log.info("地点{}识别为{}，使用该地点查询天气", location, type.name());
                 } else {
-                    // 是POI或其他，降级使用用户默认城市
+                    // 是 POI 或其他，降级使用用户默认城市
                     city = userDefaultCity;
                     log.info("地点{}识别为{}，降级使用用户默认城市{}", location, type.name(), city);
                 }
@@ -203,9 +197,7 @@ public class SchedulerService {
         return groups;
     }
 
-    /**
-     * 获取用户默认城市
-     */
+    // 获取用户默认城市
     private String getUserDefaultCity(Long userId) {
         if (userId == null) {
             return "广州";
@@ -229,19 +221,14 @@ public class SchedulerService {
         return "广州";
     }
 
-    /**
-     * 调用高德地理编码API判断地点类型
-     * <p>
-     * 使用接口：https://restapi.amap.com/v3/geocode/geo
-     * 解析返回结果中的 level 字段
-     * </p>
-     */
+    // 调用高德地理编码 API 判断地点类型
+    // 接口：https://restapi.amap.com/v3/geocode/geo，解析返回结果中的 level 字段
     private LocationType identifyLocationType(String location) {
         if (location == null || location.isBlank()) {
             return LocationType.OTHER;
         }
 
-        // 如果未配置高德Key，直接返回OTHER（降级使用默认城市）
+        // 未配置高德 Key 时直接返回 OTHER，降级使用默认城市
         if (amapKey == null || amapKey.isBlank()) {
             log.debug("未配置高德API Key，跳过地点类型识别");
             return LocationType.OTHER;
@@ -297,9 +284,7 @@ public class SchedulerService {
         return LocationType.OTHER;
     }
 
-    /**
-     * 查询城市天气并缓存（带容错处理）
-     */
+    // 查询城市天气并缓存（带容错处理）
     private WeatherSuggestionCache queryWeatherForCity(String city) {
         WeatherSuggestionCache cache = new WeatherSuggestionCache();
 
@@ -324,7 +309,7 @@ public class SchedulerService {
                 cache.success = false;
             }
         } catch (RestClientException e) {
-            // 容错2：HTTP错误（如400、401、500等），记录日志并跳过
+            // 容错2：HTTP 错误（如 400、401、500），记录日志并跳过
             log.warn("天气查询HTTP错误: city={}, error={}", city, e.getMessage());
             cache.success = false;
         } catch (Exception e) {
@@ -335,15 +320,14 @@ public class SchedulerService {
         return cache;
     }
 
-    /**
-     * 天气查询缓存
-     */
+    // 天气查询缓存
     private static class WeatherSuggestionCache {
         boolean success = false;
         String weatherText;
         String temperature;
     }
 
+    // 每小时执行：检查连续 3 次未响应的提醒，自动标记为默认执行
     @Scheduled(cron = "0 0 * * * ?")
     @Transactional
     public void checkConfirmTimeout() {
@@ -371,6 +355,7 @@ public class SchedulerService {
         }
     }
 
+    // 通过 WebSocket 推送自动确认通知，告知用户该提醒已自动确认
     private void pushExecuteAutoConfirm(Reminder reminder) {
         try {
             Map<String, Object> data = new HashMap<>();
@@ -387,6 +372,7 @@ public class SchedulerService {
         }
     }
 
+    // 每日凌晨 1 点执行：遍历所有 ACTIVE 周期模板，为当天生成提醒实例
     @Scheduled(cron = "0 0 1 * * ?")
     @Transactional
     public void generateDailyRecurringInstances() {

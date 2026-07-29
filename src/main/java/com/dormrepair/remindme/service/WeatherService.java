@@ -15,17 +15,8 @@ import java.net.URI;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
-/**
- * 天气服务
- * <p>
- * 调用新版和风天气API，支持实时天气、天气预报、空气质量、天气预警。
- * 使用原生 HttpURLConnection + GZIP 解压，避免 RestTemplate 的 gzip 问题。
- * </p>
- * <p>
- * 城市名 → 经纬度的转换逻辑已移至 {@link LocationService#resolveLocationToCoord}，
- * 本服务只负责天气数据查询，接收标准化后的城市名或经纬度。
- * </p>
- */
+// 天气服务：调用和风天气 API，对 Agent 提供"实时天气/天气预报/空气质量/天气预警"四个工具，
+// 内部用原生 HttpURLConnection + 手动 gzip 解压，城市名到经纬度的转换交给 LocationService。
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -38,11 +29,7 @@ public class WeatherService {
 
     // ==================== 核心接口 ====================
 
-    /**
-     * 获取实时天气
-     *
-     * @param location 标准化后的城市名或经纬度（如 "广州" 或 "113.2644,23.1291"）
-     */
+    // 查询实时天气，location 接受城市名或"经度,纬度"字符串
     public WeatherNowResponse getWeatherNow(String location) {
         log.info("查询实时天气: location={}", location);
 
@@ -65,12 +52,7 @@ public class WeatherService {
         throw new RuntimeException("实时天气查询失败: code=" + (response != null ? response.getCode() : "null"));
     }
 
-    /**
-     * 获取天气预报
-     *
-     * @param location 标准化后的城市名或经纬度
-     * @param days     预报天数（3/7/10/15/30，默认7）
-     */
+    // 查询天气预报，days 支持 3/7/10/15/30，默认 7 天
     public WeatherForecastResponse getWeatherForecast(String location, Integer days) {
         log.info("查询天气预报: location={}, days={}", location, days);
 
@@ -103,9 +85,7 @@ public class WeatherService {
         throw new RuntimeException("天气预报查询失败: code=" + (response != null ? response.getCode() : "null"));
     }
 
-    /**
-     * 获取空气质量
-     */
+    // 查询空气质量，入参必须是经纬度
     public AirQualityResponse getAirQuality(Double latitude, Double longitude) {
         log.info("查询空气质量: lat={}, lon={}", latitude, longitude);
 
@@ -123,9 +103,7 @@ public class WeatherService {
         throw new RuntimeException("空气质量查询失败");
     }
 
-    /**
-     * 获取天气预警
-     */
+    // 查询天气预警，入参必须是经纬度
     public WeatherAlertResponse getWeatherAlert(Double latitude, Double longitude) {
         log.info("查询天气预警: lat={}, lon={}", latitude, longitude);
 
@@ -146,19 +124,8 @@ public class WeatherService {
 
     // ==================== 位置解析 ====================
 
-    /**
-     * 解析位置参数，优先级：经纬度 > location > 用户偏好城市
-     * <p>
-     * 注意：本方法返回的是"标准化后的城市名或经纬度"，由 {@link #getWeatherNow} 等方法
-     * 内部再通过 {@link LocationService#resolveLocationToCoord} 转换为经纬度。
-     * </p>
-     *
-     * @param userId    用户ID（用于获取默认城市）
-     * @param latitude  纬度（可选）
-     * @param longitude 经度（可选）
-     * @param location  城市名（可选）
-     * @return 可用于查询的位置字符串（城市名或经纬度）
-     */
+    // 解析位置参数，优先级：经纬度 > location 城市名 > 用户偏好城市。
+    // 返回的是"标准化后的城市名或经纬度"，真正的经纬度转换交给 getWeatherNow 等方法内部完成。
     private String resolveLocation(Long userId, Double latitude, Double longitude, String location) {
         // 优先级1：经纬度（和风天气API要求 location 格式为"经度,纬度"）
         if (latitude != null && longitude != null) {
@@ -222,11 +189,9 @@ public class WeatherService {
         return getWeatherAlert(coords[0], coords[1]);
     }
 
-    /**
-     * 从（latitude, longitude, location, userId 默认城市）按优先级算出最终经纬度。
-     * 保证天气/空气质量/预警 4 个 ForAgent 工具不会再因为 lat/lon 为 null 而报错。
-     * 返回值 double[2] = [latitude, longitude]
-     */
+    // 从（latitude, longitude, location, 用户默认城市）按优先级算出最终经纬度，
+    // 保证空气质量、预警这类必须传经纬度的工具不会因为坐标缺失而报错。
+    // 返回 double[2] = [latitude, longitude]。
     private double[] resolveLatLon(Long userId, Double latitude, Double longitude, String location) {
         // 优先级 1：LLM 传了 lat/lon → 直接用
         if (latitude != null && longitude != null) {
@@ -279,9 +244,7 @@ public class WeatherService {
 
     // ==================== HTTP 工具方法 ====================
 
-    /**
-     * 发送 HTTP GET 请求，自动处理 gzip 解压
-     */
+    // 发送 HTTP GET 请求，自动处理 gzip 解压
     private String httpGet(String urlStr) {
         try {
             URI uri = URI.create(urlStr);
@@ -338,9 +301,7 @@ public class WeatherService {
         }
     }
 
-    /**
-     * 读取错误流
-     */
+    // 读取错误响应流，同样处理 gzip 解压
     private String readErrorStream(HttpURLConnection conn) {
         try {
             if (conn.getErrorStream() != null) {
@@ -368,9 +329,7 @@ public class WeatherService {
         return "Unknown error";
     }
 
-    /**
-     * 解析 JSON 响应
-     */
+    // 反序列化 JSON 响应
     private <T> T parseJson(String json, Class<T> clazz) {
         try {
             return objectMapper.readValue(json, clazz);
@@ -380,16 +339,12 @@ public class WeatherService {
         }
     }
 
-    /**
-     * 构建 API URL
-     */
+    // 拼接和风天气 API 完整 URL
     private String buildUrl(String path) {
         return weatherConfig.getHost() + path;
     }
 
-    /**
-     * URL 编码（处理逗号等特殊字符）
-     */
+    // URL 编码，处理逗号等特殊字符
     private String encode(String value) {
         try {
             return java.net.URLEncoder.encode(value, "UTF-8");

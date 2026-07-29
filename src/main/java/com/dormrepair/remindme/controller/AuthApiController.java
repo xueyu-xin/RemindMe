@@ -17,19 +17,22 @@ import org.springframework.web.bind.annotation.*;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * 认证接口控制器
- */
+// 认证相关 REST 接口控制器。统一前缀 /api/auth，提供注册、登录、发送验证码三项基础能力，返回可直接使用的 JSON 响应
 @Slf4j
 @RestController
 @RequestMapping("/api/auth")
 @RequiredArgsConstructor
 public class AuthApiController {
 
+    // 用户业务服务：注册与登录的核心校验、数据库操作由其完成
     private final UserService userService;
+    // 验证码服务：负责生成、存储、校验短信验证码的生命周期
     private final VerificationCodeService verificationCodeService;
+    // JWT 工具：登录成功后生成带用户身份的 Token，后续请求通过 Header 携带此 Token
     private final JwtUtils jwtUtils;
 
+    // 用户注册接口。校验手机号与验证码有效性，创建用户记录后返回生成的 userId
+    // request - 包含手机号、验证码、密码、昵称等注册信息（由 RegisterRequest 字段约束校验）
     @PostMapping("/register")
     public ResponseEntity<Map<String, Object>> register(@Valid @RequestBody RegisterRequest request) {
         User user = userService.register(request);
@@ -42,15 +45,20 @@ public class AuthApiController {
         return ResponseEntity.ok(response);
     }
 
+    // 用户登录接口。校验手机号+密码（或验证码）匹配后生成 JWT Token 写入返回体
+    // request - 包含手机号、密码/验证码等登录凭证
     @PostMapping("/login")
     public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest request) {
         LoginResponse response = userService.login(request);
+        // 登录成功后，以 userId+phone 为载荷生成 JWT，保存后在后续请求中通过 Authorization 头回传
         String token = jwtUtils.generateToken(response.getUserId(), request.getPhone());
         response.setToken(token);
 
         return ResponseEntity.ok(response);
     }
 
+    // 发送验证码接口。按手机号生成 6 位随机数字验证码，写入缓存并设置有效期（TTL），返回验证码供注册/登录使用
+    // request - 包含目标手机号
     @PostMapping("/send-code")
     public ResponseEntity<Map<String, Object>> sendCode(@Valid @RequestBody SendCodeRequest request) {
         String phone = request.getPhone();

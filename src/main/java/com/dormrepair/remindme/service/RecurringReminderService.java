@@ -26,6 +26,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+// 周期提醒服务
+// 管理周期提醒模板的创建/暂停/恢复/取消/更新，以及不同策略下的周期实例生成
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -37,9 +39,13 @@ public class RecurringReminderService {
     private final ConflictDetectionService conflictDetectionService;
     private final ConfirmationService confirmationService;
 
+    // 纯时间格式：解析 remindTime（HH:mm:ss）
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
+    // 完整日期时间格式：序列化冲突项的 remindTime
     private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
+    // 创建周期提醒入口
+    // 不直接落库，而是构建 parsedData 走确认卡片流程，由确认回调真正创建模板与实例
     @Transactional
     public Map<String, Object> createRecurringReminder(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String location, String priority) {
@@ -141,21 +147,15 @@ public class RecurringReminderService {
         return result;
     }
 
-    /**
-     * 从确认流程生成周期实例（供 confirm() 和 cleanupExpiredSessions() 调用）
-     * <p>
-     * 与 confirmAndCreateRecurring 功能相同，作为语义更清晰的入口
-     * </p>
-     */
+    // 从确认流程生成周期实例
     @Transactional
     public Map<String, Object> generateInstancesFromConfirm(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String location, String priority) {
         return confirmAndCreateRecurring(userId, title, remindTime, startDate, endDate, repeatType, location, priority);
     }
 
-    /**
-     * 直接创建全部周期实例（不检查冲突，冲突日多条提醒并存）
-     */
+    // 直接创建全部周期实例
+    // 不检查冲突，冲突日多条提醒并存
     @Transactional
     public Map<String, Object> generateAll(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String location, String priority) {
@@ -203,9 +203,7 @@ public class RecurringReminderService {
         return result;
     }
 
-    /**
-     * 跳过冲突日，只创建无冲突的日期
-     */
+    // 跳过冲突日，只创建无冲突的日期
     @Transactional
     public Map<String, Object> generateWithSkip(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String location, String priority) {
@@ -267,9 +265,7 @@ public class RecurringReminderService {
         return result;
     }
 
-    /**
-     * 全部覆盖：删除冲突日原有提醒，创建全部日期
-     */
+    // 全部覆盖：把冲突日原有提醒置为 CANCELLED，再创建全部日期
     @Transactional
     public Map<String, Object> generateWithOverwrite(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String location, String priority) {
@@ -341,6 +337,7 @@ public class RecurringReminderService {
 
     // ===== 私有辅助方法 =====
 
+    // 创建并保存周期模板，状态置为 ACTIVE，来源标记为 AGENT
     private RecurringReminder createRecurringTemplate(Long userId, String title, LocalTime parsedTime,
             LocalDate parsedStartDate, LocalDate parsedEndDate, RepeatType parsedRepeatType,
             String location, String priority) {
@@ -359,6 +356,7 @@ public class RecurringReminderService {
         return recurringReminderRepository.save(template);
     }
 
+    // 根据模板与具体时间，直接落库一条 PENDING 提醒
     private Reminder createReminderDirect(RecurringReminder template, LocalDateTime remindDateTime) {
         Reminder reminder = new Reminder();
         reminder.setUserId(template.getUserId());
@@ -373,6 +371,7 @@ public class RecurringReminderService {
         return reminderRepository.save(reminder);
     }
 
+    // 保存周期实例记录，关联周期 ID、日期与对应提醒 ID
     private RecurringInstance saveInstance(Long recurringId, LocalDate date, Long reminderId, String status) {
         RecurringInstance instance = new RecurringInstance();
         instance.setRecurringId(recurringId);
@@ -382,9 +381,7 @@ public class RecurringReminderService {
         return recurringInstanceRepository.save(instance);
     }
 
-    /**
-     * 确认回调后实际创建周期模板和实例
-     */
+    // 确认回调后实际创建周期模板和实例
     @Transactional
     public Map<String, Object> confirmAndCreateRecurring(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String location, String priority) {
@@ -436,6 +433,7 @@ public class RecurringReminderService {
         return result;
     }
 
+    // 遍历日期范围生成实例，返回总数/成功/冲突/失败四项计数
     private Map<String, Integer> generateInstancesForDateRange(RecurringReminder template,
             LocalDate startDate, LocalDate endDate) {
 
@@ -482,6 +480,8 @@ public class RecurringReminderService {
         return counts;
     }
 
+    // 判断某日是否应生成实例：先校验是否落在周期范围内，再按重复类型过滤
+    // MONTHLY 仅在每月与起始日相同的那一天生成；DAILY/WEEKLY 当前每天都生成
     private boolean shouldGenerateForDate(RecurringReminder template, LocalDate date) {
         LocalDate start = template.getStartDate();
         LocalDate end = template.getEndDate();
@@ -500,6 +500,9 @@ public class RecurringReminderService {
         return true;
     }
 
+    // 为指定日期生成实例
+    // 无冲突：直接落库提醒与实例；有冲突：不落实例，转交确认卡片流程处理
+    // 两种情况都会更新模板的 lastGeneratedDate
     public Map<String, Object> generateInstanceForDate(RecurringReminder template, LocalDate date) {
         Map<String, Object> result = new HashMap<>();
 
@@ -584,15 +587,18 @@ public class RecurringReminderService {
         return result;
     }
 
+    // 查询某用户的全部 ACTIVE 周期模板
     public List<RecurringReminder> getRecurringRemindersByUser(Long userId) {
         return recurringReminderRepository.findByUserIdAndStatus(userId, "ACTIVE");
     }
 
+    // 按主键查单个周期模板，附带所属用户校验
     public Optional<RecurringReminder> getRecurringReminderById(Long id, Long userId) {
         return recurringReminderRepository.findById(id)
                 .filter(r -> r.getUserId().equals(userId));
     }
 
+    // 取消周期提醒：模板置为 CANCELLED，并级联取消所有已生成实例
     @Transactional
     public void cancelRecurringReminder(Long id, Long userId) {
         RecurringReminder reminder = recurringReminderRepository.findById(id)
@@ -608,6 +614,7 @@ public class RecurringReminderService {
         }
     }
 
+    // 暂停周期提醒：仅改状态为 PAUSED，不触动已有实例
     @Transactional
     public void pauseRecurringReminder(Long id, Long userId) {
         RecurringReminder reminder = recurringReminderRepository.findById(id)
@@ -617,6 +624,7 @@ public class RecurringReminderService {
         recurringReminderRepository.save(reminder);
     }
 
+    // 恢复已暂停的周期提醒，状态回到 ACTIVE
     @Transactional
     public void resumeRecurringReminder(Long id, Long userId) {
         RecurringReminder reminder = recurringReminderRepository.findById(id)
@@ -626,6 +634,7 @@ public class RecurringReminderService {
         recurringReminderRepository.save(reminder);
     }
 
+    // 为所有 ACTIVE 模板补生成本日实例，返回实际生成条数
     @Transactional
     public int generatePendingInstancesForToday() {
         LocalDate today = LocalDate.now();
@@ -649,6 +658,7 @@ public class RecurringReminderService {
         return generated;
     }
 
+    // 更新周期模板字段：仅入参非 null 的字段才覆盖，避免误清空
     @Transactional
     public RecurringReminder updateRecurringReminder(Long id, Long userId, String title,
             String remindTime, LocalDate startDate, LocalDate endDate, RepeatType repeatType,
