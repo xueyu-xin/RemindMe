@@ -110,23 +110,80 @@ public class LLMService {
 
     /**
      * 解析LLM响应，判断是否包含工具调用
-     * 
+     *
      * @param llmResponse LLM响应内容
      * @return ToolCall对象，如果不是工具调用则返回null
      */
     public ToolCall parseToolCall(String llmResponse) {
+        List<ToolCall> calls = parseToolCalls(llmResponse);
+        return calls.isEmpty() ? null : calls.get(0);
+    }
+
+    /**
+     * 解析LLM响应中的所有工具调用（支持一次返回多个 {"tool_call":{...}}）。
+     * <p>
+     * 修复点：原 parseToolCall 仅用 Jackson readTree 读取第一个 JSON value，
+     * 当 LLM 一次返回多行工具调用时，后面的会被丢弃。
+     * 本方法用平衡括号扫描，逐个提取顶层 JSON 对象并解析为 ToolCall。
+     * </p>
+     *
+     * @param llmResponse LLM响应内容
+     * @return 工具调用列表（可能为空，但永不为null）
+     */
+    public List<ToolCall> parseToolCalls(String llmResponse) {
+        List<ToolCall> results = new ArrayList<>();
         if (llmResponse == null || llmResponse.isBlank()) {
             log.debug("LLM响应为空");
-            return null;
+            return results;
         }
 
         // 调试日志：打印原始响应（截断）
         String truncatedResponse = llmResponse.length() > 200 ? llmResponse.substring(0, 200) + "..." : llmResponse;
         log.debug("开始解析LLM响应: {}", truncatedResponse);
 
+        // 先尝试整段作为单个 JSON 解析（最常见路径，性能最优）
+        ToolCall single = tryParseSingleJson(llmResponse);
+        if (single != null) {
+            results.add(single);
+            return results;
+        }
+
+        // 整段解析失败 → 多 JSON 拼接 / 文本夹杂 JSON 的情况
+        // 用平衡括号扫描，逐个提取顶层 JSON 对象
+        List<String> jsonObjects = extractAllTopLevelJsonObjects(llmResponse);
+        if (jsonObjects.isEmpty()) {
+            // 纯文本回复
+            if (!llmResponse.trim().startsWith("{")) {
+                log.debug("LLM返回纯文本回复，非工具调用");
+            } else {
+                log.debug("未解析到工具调用，响应内容: {}", truncatedResponse);
+            }
+            return results;
+        }
+
+        for (String json : jsonObjects) {
+            ToolCall call = tryParseSingleJson(json);
+            if (call != null) {
+                results.add(call);
+            }
+        }
+        if (!results.isEmpty()) {
+            log.info("本次共解析到 {} 个工具调用", results.size());
+        }
+        return results;
+    }
+
+    /**
+     * 尝试把一段文本当作单个 JSON 解析为 ToolCall（含 fixJson 修复 + extractJsonFragment 兜底）
+     */
+    private ToolCall tryParseSingleJson(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+
         // 方式一：标准JSON解析
         try {
-            JsonNode root = objectMapper.readTree(llmResponse);
+            JsonNode root = objectMapper.readTree(text);
             ToolCall result = parseStandardJson(root);
             if (result != null) {
                 return result;
@@ -136,8 +193,8 @@ public class LLMService {
         }
 
         // 方式二：尝试修复JSON后再解析
-        String fixedJson = fixJson(llmResponse);
-        if (!fixedJson.equals(llmResponse)) {
+        String fixedJson = fixJson(text);
+        if (!fixedJson.equals(text)) {
             log.debug("尝试修复后的JSON: {}", fixedJson.length() > 200 ? fixedJson.substring(0, 200) + "..." : fixedJson);
             try {
                 JsonNode root = objectMapper.readTree(fixedJson);
@@ -152,7 +209,7 @@ public class LLMService {
         }
 
         // 方式三：从文本中提取JSON片段（正则表达式）
-        String jsonFragment = extractJsonFragment(llmResponse);
+        String jsonFragment = extractJsonFragment(text);
         if (jsonFragment != null) {
             log.debug("提取到JSON片段: {}", jsonFragment.length() > 200 ? jsonFragment.substring(0, 200) + "..." : jsonFragment);
             try {
@@ -167,14 +224,76 @@ public class LLMService {
             }
         }
 
-        // 如果是纯文本字符串，不是JSON格式的工具调用
-        if (!llmResponse.trim().startsWith("{")) {
-            log.debug("LLM返回纯文本回复，非工具调用");
-            return null;
+        return null;
+    }
+
+    /**
+     * 用平衡括号扫描，从文本中提取所有顶层 JSON 对象（{ ... } 配对）。
+     * 用于 LLM 一次返回多个 {"tool_call":{...}} 拼在一起的情况。
+     * 注意：会跳过字符串内部的 { }，避免被 JSON 字符串值里的括号干扰。
+     */
+    private List<String> extractAllTopLevelJsonObjects(String text) {
+        List<String> objects = new ArrayList<>();
+        if (text == null || text.isEmpty()) {
+            return objects;
         }
 
-        log.debug("未解析到工具调用，响应内容: {}", truncatedResponse);
-        return null;
+        int i = 0;
+        int len = text.length();
+        while (i < len) {
+            // 找下一个 '{'
+            int start = text.indexOf('{', i);
+            if (start == -1) {
+                break;
+            }
+
+            // 从 start 开始用平衡括号找到匹配的 '}'
+            int balance = 0;
+            boolean inString = false;
+            boolean escaped = false;
+            int end = -1;
+            for (int j = start; j < len; j++) {
+                char c = text.charAt(j);
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (c == '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (c == '"') {
+                    inString = !inString;
+                    continue;
+                }
+                if (inString) {
+                    continue;
+                }
+                if (c == '{') {
+                    balance++;
+                } else if (c == '}') {
+                    balance--;
+                    if (balance == 0) {
+                        end = j;
+                        break;
+                    }
+                }
+            }
+
+            if (end == -1) {
+                // 不平衡，无法提取，跳过这个 {
+                i = start + 1;
+                continue;
+            }
+
+            String candidate = text.substring(start, end + 1);
+            // 只保留看起来像工具调用的片段（含 tool_call / function_call / tool 字段），避免误吞无关 JSON
+            if (candidate.contains("\"tool_call\"") || candidate.contains("\"function_call\"") || candidate.contains("\"tool\"")) {
+                objects.add(candidate);
+            }
+            i = end + 1;
+        }
+        return objects;
     }
 
     /**
@@ -500,10 +619,52 @@ public class LLMService {
         }
         
         return """
+            ╔══════════════════════════════════════════════════════════════════╗
+            ║ 【最高优先级铁律 - 违反任何一条即视为严重错误！】                     ║
+            ╠══════════════════════════════════════════════════════════════════╣
+            ║ ① 先调用工具完成所有任务，再回复用户。                              ║
+            ║   「对所有任务都有效，不仅限于RAG！查询/设置/提醒/删除/修改/记录」  ║
+            ║                                                                    ║
+            ║ ② 禁止任何"过程性语言"出现在回复里。                               ║
+            ║   好的我帮你 / 好的这就帮你 / 现在帮你 / 先帮你查一下 /            ║
+            ║   我先查一下 / 让我看看 / 这就帮你查 / 马上帮你处理 ……              ║
+            ║   这些内部执行过程，绝对不能展示给用户看！                          ║
+            ║                                                                    ║
+            ║ ③ 多任务时先分析依赖，再决定合理执行顺序。                          ║
+            ║   · 必须先"查到"才能"修改/取消"的，按依赖前置（先查后改）          ║
+            ║   · 彼此独立的任务，按用户语句的意图相关性合理编排                 ║
+            ║   · 禁止硬套"用户语句出现顺序"而破坏依赖（导致查不到ID改失败）     ║
+            ║                                                                    ║
+            ║ ④ 未完成的任务，不准说"已完成"。                                   ║
+            ║   只有真正收到工具返回 success=true 的结果后，才能说完成了。        ║
+            ║                                                                    ║
+            ║ ⑤ 不允许"口头承诺式回复"。                                         ║
+            ║   比如"把拿快递的提醒改到下午5点" → 不能只说"好的我帮你改"，       ║
+            ║   必须先 query_reminders 查到ID，再 update_reminder 真正修改。    ║
+            ║                                                                    ║
+            ║ ⑥ 禁止任何"中文演戏格式"。                                         ║
+            ║   不准写"工具调用: xxx, 参数: {…}"、不准写"工具执行结果: {…}"。    ║
+            ║   需要调用工具时，只能输出 【纯JSON】：                             ║
+            ║   {"tool_call":{"name":"工具名","arguments":{…}}}                 ║
+            ║   纯JSON前后严禁夹杂任何自然语言、换行、解释。                     ║
+            ║                                                                    ║
+            ║ ⑦ 用户一句话多个任务时，最终回复必须分三类说明：                    ║
+            ║   ✅ 成功的：明确说"已完成XXX、已完成YYY"（具体做了什么）          ║
+            ║   ❌ 失败的：明确说"XXX没能完成，因为……"（失败原因）               ║
+            ║   ❓ 缺参需要询问的：先不调任何工具，直接问用户缺的参数，           ║
+            ║      并说明"请问你要查询/设置的是哪一个XXX？"，等用户下次回复再调。║
+            ║   三类都要列出来，不能只说一部分。                                  ║
+            ║                                                                    ║
+            ║ ⑧ 禁止重复调用"已执行过的相同工具 + 相同参数"。                     ║
+            ║   工具一旦返回 success=true，该任务即视为完成，不得再次用同样参数  ║
+            ║   调同一工具（例如反复 add_private_memory 同一句"用户是大三学生"）。║
+            ║   多任务时，完成一个就立刻处理下一个，不要在已完成的任务上打转。    ║
+            ╚══════════════════════════════════════════════════════════════════╝
+
             你是一个智能提醒助手。你可以调用工具来完成用户的请求。
-            
+
             当前时间：%s
-            
+
             可用工具列表：
             %s
             
@@ -524,12 +685,12 @@ public class LLMService {
             14. 如果用户要求修改偏好设置（如更改城市、提前量、昵称），请调用set_user_preferences工具。
             15. 如果用户询问某个提醒的具体详情（如"第一个提醒是什么时间"、"具体信息"），请调用get_reminder_detail工具。
             16. 如果用户询问位置（如"我在哪"、"当前位置"），请调用get_location工具。
-            17. 如果用户询问个人信息（如"我是什么专业"、"我大几了"），请调用retrieve_private_knowledge工具。
-            18. 如果用户提供个人信息（如"我是大三学生"），请调用add_private_memory工具。
-            19. 如果用户修改个人信息，请调用update_private_memory工具。
-            20. 如果用户要求删除个人信息，请调用delete_private_memory工具。
-            21. 如果用户想看所有记忆，请调用get_all_private_memories工具。
-            22. 如果用户询问生活小技巧（如"夏天怎么省电"），请调用retrieve_public_knowledge工具。
+            17. 如果用户询问关于自己的任何问题（如专业、考试、习惯、喜好、安排等），请调用retrieve_private_knowledge工具。
+            18. 如果用户提供关于自己的事实信息，请调用add_private_memory工具。
+            19. 如果用户纠正之前说过的信息（如"我说错了，我是研一"、"我改名字了"），请调用update_private_memory工具。
+            20. 如果用户要求删除某条记忆（如"删掉那条"、"忘记我刚才说的"），请调用delete_private_memory工具。
+            21. 如果用户想查看自己存了哪些信息（如"查看所有我的记忆"、"我存了哪些信息"），请调用get_all_private_memories工具。
+            22. 如果用户问"使用手册"，请调用retrieve_public_knowledge工具。
             23. 如果用户设置包含日期范围的提醒（如"7月30号到8月5号每天提醒我..."），请调用create_recurring_reminder工具。
 
             ================================================
@@ -561,44 +722,67 @@ public class LLMService {
             ================================================
             RAG 工具使用说明：
             ================================================
-            1. retrieve_private_knowledge - 查询用户已存储的记忆
-               使用场景：用户问关于自己的问题，如"我是什么专业"、"我大几了"、"我喜欢吃什么"
-               参数：query（查询关键词），topK（返回数量，传null自动计算）
+            【核心规则】对话历史是临时的，RAG 是长期记忆。
+            凡是涉及用户自身信息（包括过去说过的任何关于自己的事实）：
+              · 必须调用 RAG 工具去查/存
+              · 禁止直接用对话历史里的信息回答
+              · 禁止跳过 RAG 工具
 
-            2. add_private_memory - 存储用户记忆
-               使用场景：用户主动提供自己的信息，如"我是大三学生"、"我喜欢吃苹果"
+            1. add_private_memory - 存储用户信息
+               触发条件：用户提供关于自己的事实信息
                参数：
                - content：要存储的内容，如"用户是大三计算机专业学生"
-               - category：记忆分类，从以下选择：
-                 * PERSONAL_INFO - 用户个人信息（年级、专业、住址、性别等）
-                 * ACTIVITY - 用户要做的事情（旅游、会议、实习等）
-                 * EVENT - 重要日期（生日、纪念日等）
-                 * COURSE - 固定课程安排（"每周三有数学课"）
-                 * PLAN - 长期目标（"考研究生"、"减肥10斤"）
-                 * EXAM_SCHEDULE - 考试安排（"6月20日期末考试"）
-                 * DAILY_ROUTINE - 日常作息（"每天早上7点起床"）
-                 * HEALTH_CONDITION - 健康状况（"对海鲜过敏"）
-                 * DIET_PREFERENCE - 饮食偏好（"不吃辣"）
-                 * HABIT - 个人习惯（"喜欢睡前看书"）
-                 * INTEREST - 兴趣爱好（"喜欢打篮球"）
-                 * LANGUAGE_STYLE - 语言风格偏好（"喜欢简洁回答"）
-                 * OTHER - 以上都不属于的
+               - category 选择：
+                 - PERSONAL_INFO：个人信息（年级、专业、住址、性别）
+                 - ACTIVITY：活动事务（旅游、会议、实习）
+                 - EVENT：重要日期（生日、纪念日）
+                 - PLAN：长期目标（考研究生、减肥）
+                 - EXAM_SCHEDULE：考试安排（6月四级考试）
+                 - DAILY_ROUTINE：日常作息（每天早上跑步）
+                 - HEALTH_CONDITION：健康状况（对花生过敏）
+                 - DIET_PREFERENCE：饮食偏好（不吃辣）
+                 - HABIT：个人习惯（喜欢睡前看书）
+                 - INTEREST：兴趣爱好（喜欢打篮球）
+                 - LANGUAGE_STYLE：语言风格偏好（喜欢简洁回答）
+                 - OTHER：以上都不属于
 
-            3. update_private_memory - 更新已存储的记忆
-               使用场景：用户纠正之前说过的信息，如"我说错了，我是信息与计算科学专业"
+            2. retrieve_private_knowledge - 查询用户信息
+               触发条件：用户询问关于自己的任何问题
+               示例：专业、考试、习惯、喜好、安排等
+               参数：query（查询关键词），topK（返回数量，传null自动计算）
+
+            ================================================
+            【行程/安排/日程 查询规则 —— 必须严格区分时间范围！】
+            ================================================
+            第一条：如果用户询问「某段时间」的行程（例如：这周的安排、下周的计划、5月份的日程、最近的行程）
+            → 只调用 retrieve_private_knowledge 工具即可。
+            → 总结私有记忆中的所有计划和安排来回答。
+
+            第二条：如果用户询问「某一天」的行程/安排/日程（例如：今天有什么安排？明天的计划？10月1号的日程？）
+            → 必须同时调用 retrieve_private_knowledge 和 query_reminders 工具，缺一不可！
+            → 先用 retrieve_private_knowledge 查记忆中的计划。
+            → 再用 query_reminders(userId, date) 查具体日期的提醒事项。
+            → 最后综合两个结果来回答用户，确保信息完整不遗漏。
+            ================================================
+
+            3. update_private_memory - 更新用户信息
+               触发条件：用户纠正之前说过的信息
+               示例："我说错了，我是研一"、"我改名字了"
                参数：memoryId（要更新的记忆ID），newContent（新内容）
 
-            4. delete_private_memory - 删除记忆
-               使用场景：用户要求删除某条记忆
+            4. delete_private_memory - 删除用户信息
+               触发条件：用户要求删除某条记忆
+               示例："删掉那条"、"忘记我刚才说的"
                参数：memoryId（要删除的记忆ID）
 
             5. get_all_private_memories - 查看所有记忆
-               使用场景：用户说"查看所有我的记忆"、"我存了哪些信息"
+               触发条件：用户想查看自己存了哪些信息
+               示例："查看所有我的记忆"、"我存了哪些信息"
                参数：无
 
-            6. retrieve_public_knowledge - 查询公共知识库
-               使用场景：用户问生活小技巧、通用知识，如"夏天怎么省电"、"考试前要注意什么"
-               参数：query（查询关键词），topK（返回数量，默认5）
+            6. retrieve_public_knowledge - 查询公共知识
+               触发条件：用户问"使用手册"
+               参数：query（查询关键词），topK（返回数量）
 
             ================================================
             get_location 工具调用规则（非常重要！请严格遵守）
@@ -616,6 +800,48 @@ public class LLMService {
                {"tool_call": {"name": "get_location", "arguments": {}}}
 
             记住：有坐标必须传坐标，不能传空！坐标值直接从对话历史中提取。
+
+            ================================================
+            【天气 + 默认地址 / 当前地址 铁律 —— 严禁脑补坐标！】
+            ================================================
+            第一条：先分清楚「地址是哪一种」，只有三种：
+
+              1) 默认地址 = 用户在【我的】页面设置的城市（存在数据库 User.city 里）。
+                 查询方法：先 get_user_preferences 拿到 city 字段，再调 geocode_city(city) 拿到 latitude/longitude。
+
+              2) 当前位置/实时定位 = 此时此刻用户在哪儿（有GPS就用GPS，没GPS就用当前定位接口的结果）。
+                 查询方法：只有当用户明确说"当前位置"、"我现在在哪"、"我这儿"、"附近"这一类词时，
+                 才调 get_location 工具拿 address + latitude + longitude。
+                 【用户没提当前位置，绝对不要调 get_location！】
+
+              3) 用户指定的具体城市 = 用户原话里提到了城市名（"上海"、"广州"、"北京朝阳区"、"揭阳"…）。
+                 查询方法：直接调 geocode_city(城市名) 拿到 latitude/longitude，不要先查别的。
+
+            第二条：查天气/空气质量/天气预警 —— 必须严格按这三类选坐标来源，绝对不能自己写死坐标（比如不能自己说上海=31.23,121.47、北京=39.9,116.4），必须通过 geocode_city 真查询！
+
+              场景 A：用户没提任何地址（只问"今天天气？""空气质量怎么样？""未来天气？"）
+                 → 步骤：先 get_user_preferences → 取默认 city → geocode_city(city) → 拿到 latitude/longitude → 再调天气/空气质量工具。
+
+              场景 B：用户提到了具体城市名（"上海的空气质量？""北京明天会下雨吗？""去广州出差天气？"）
+                 → 步骤：geocode_city(用户说的城市名) → 拿到 latitude/longitude → 再调天气/空气质量工具。
+                 （不要多此一举先调 get_user_preferences 或 get_location）
+
+              场景 C：用户提到了"当前位置"（"我现在这儿的空气质量？""我在哪儿？""附近的天气？"）
+                 → 步骤：get_location → 拿到返回里的 latitude/longitude → 再调天气/空气质量工具。
+                 （必须真调 get_location，不能拿默认城市冒充当前位置！）
+
+            第三条：4 个天气工具（query_weather_now / query_weather_forecast / query_air_quality / query_weather_alert）
+              - 参数里最好带上具体的 location 城市名（后端有兜底自动转坐标），但 latitude、longitude 还是优先真实查询得到。
+              - 禁止 latitude/longitude 传 null、禁止传 "110.0,23.0" 这样拼好的字符串，必须分开传数字。
+
+            第四条：最终回复里写清楚你用了哪一种地址来源：
+              - 如果用的是默认城市 → 回复里写"根据你的默认城市 XX …"
+              - 如果用的是具体指定城市 → 回复里直接写"XX 的空气质量… / XX 的天气…"
+              - 如果用的是当前位置 → 回复里写"你当前在 XX，这里的天气/空气质量…"
+              不要让用户猜你是用哪里查的。
+
+            第五条：成功案例（照着做）：
+              用户说"上海的空气质量呢" → 先 geocode_city("上海") 拿到真实 lat/lon → query_air_quality(latitude=31.23, longitude=121.47) → AQI 14 优。
 
             ================================================
             时间复用规则（非常重要！请严格遵守）：
@@ -708,6 +934,11 @@ public class LLMService {
             
             【情况三：收到工具执行结果后】
             如果已经收到工具执行结果，需要根据结果用自然语言总结回复用户。
+            混合场景（多个任务/成功+失败+缺参询问混合）必须分三类说明：
+              ✅ 成功的：逐条列出"已完成XXX"（具体做了什么）
+              ❌ 失败的：逐条列出"XXX没能完成，因为……"（失败原因）
+              ❓ 缺参需要询问的：先不调任何工具，直接向用户发问，问清缺失参数（如"请问你要修改的是哪一个提醒？"），等用户下次回复再调
+              三类都要覆盖，不能只说成功不说失败/待问。
 
             工具调用失败处理规则（非常重要！请严格遵守）：
             1. 如果工具返回 success=false，说明操作失败，必须向用户说明失败原因

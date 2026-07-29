@@ -208,16 +208,73 @@ public class WeatherService {
         return getWeatherForecast(resolvedLocation, days);
     }
 
-    @AgentTool(name = "query_air_quality", description = "查询空气质量，用户询问空气质量时调用")
-    public AirQualityResponse queryAirQualityForAgent(Long userId, Double latitude, Double longitude) {
-        log.info("Agent调用查询空气质量: userId={}, lat={}, lon={}", userId, latitude, longitude);
-        return getAirQuality(latitude, longitude);
+    @AgentTool(name = "query_air_quality", description = "查询空气质量，用户询问空气质量时调用。优先使用经纬度（必须真实查询得到），其次使用location城市名，最后兜底使用用户默认城市。禁止自己猜坐标。")
+    public AirQualityResponse queryAirQualityForAgent(Long userId, String location, Double latitude, Double longitude) {
+        log.info("Agent调用查询空气质量: userId={}, location={}, lat={}, lon={}", userId, location, latitude, longitude);
+        double[] coords = resolveLatLon(userId, latitude, longitude, location);
+        return getAirQuality(coords[0], coords[1]);
     }
 
-    @AgentTool(name = "query_weather_alert", description = "查询天气预警，用户询问是否有天气预警时调用")
-    public WeatherAlertResponse queryWeatherAlertForAgent(Long userId, Double latitude, Double longitude) {
-        log.info("Agent调用查询天气预警: userId={}, lat={}, lon={}", userId, latitude, longitude);
-        return getWeatherAlert(latitude, longitude);
+    @AgentTool(name = "query_weather_alert", description = "查询天气预警，用户询问是否有天气预警时调用。优先使用经纬度，其次使用location城市名，最后兜底用户默认城市。禁止自己猜坐标。")
+    public WeatherAlertResponse queryWeatherAlertForAgent(Long userId, String location, Double latitude, Double longitude) {
+        log.info("Agent调用查询天气预警: userId={}, location={}, lat={}, lon={}", userId, location, latitude, longitude);
+        double[] coords = resolveLatLon(userId, latitude, longitude, location);
+        return getWeatherAlert(coords[0], coords[1]);
+    }
+
+    /**
+     * 从（latitude, longitude, location, userId 默认城市）按优先级算出最终经纬度。
+     * 保证天气/空气质量/预警 4 个 ForAgent 工具不会再因为 lat/lon 为 null 而报错。
+     * 返回值 double[2] = [latitude, longitude]
+     */
+    private double[] resolveLatLon(Long userId, Double latitude, Double longitude, String location) {
+        // 优先级 1：LLM 传了 lat/lon → 直接用
+        if (latitude != null && longitude != null) {
+            log.info("resolveLatLon: 使用传入的经纬度 lat={}, lon={}", latitude, longitude);
+            return new double[] { latitude, longitude };
+        }
+
+        // 优先级 2：传了 location 具体城市名 → 转成经纬度
+        if (location != null && !location.isBlank()) {
+            try {
+                String coord = locationService.resolveLocationToCoord(location);
+                if (coord != null && coord.contains(",")) {
+                    String[] parts = coord.split(",");
+                    double lon = Double.parseDouble(parts[0].trim());
+                    double lat = Double.parseDouble(parts[1].trim());
+                    log.info("resolveLatLon: location={} -> lat={}, lon={}", location, lat, lon);
+                    return new double[] { lat, lon };
+                }
+            } catch (Exception e) {
+                log.warn("resolveLatLon: location 转坐标失败 location={}, error={}", location, e.getMessage());
+            }
+        }
+
+        // 优先级 3：查用户偏好里的默认城市 → 转成经纬度
+        if (userId != null) {
+            try {
+                Map<String, Object> pref = userService.getUserPreferences(userId);
+                String userCity = (String) pref.get("city");
+                if (userCity != null && !userCity.isBlank()) {
+                    String coord = locationService.resolveLocationToCoord(userCity);
+                    if (coord != null && coord.contains(",")) {
+                        String[] parts = coord.split(",");
+                        double lon = Double.parseDouble(parts[0].trim());
+                        double lat = Double.parseDouble(parts[1].trim());
+                        log.info("resolveLatLon: 使用用户默认城市 userId={}, city={} -> lat={}, lon={}", userId, userCity, lat, lon);
+                        return new double[] { lat, lon };
+                    }
+                    // 兜底：默认城市转不出坐标，就直接用用户城市名返回的默认值（广州）
+                    log.warn("resolveLatLon: 用户默认城市转坐标失败，city={}", userCity);
+                }
+            } catch (Exception e) {
+                log.warn("resolveLatLon: 读取用户默认城市失败 userId={}, error={}", userId, e.getMessage());
+            }
+        }
+
+        // 最后兜底：和风天气广州（和现有默认值"广东省-广州市-天河区"保持一致）
+        log.warn("resolveLatLon: 所有路径都拿不到坐标，使用兜底默认坐标（广州）");
+        return new double[] { 23.1291, 113.2644 };
     }
 
     // ==================== HTTP 工具方法 ====================

@@ -6,10 +6,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.aop.framework.AopProxyUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
 
-import jakarta.annotation.PostConstruct;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
 import java.util.ArrayList;
@@ -27,7 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class ToolRegistry {
+public class ToolRegistry implements SmartInitializingSingleton {
 
     private final ApplicationContext applicationContext;
     private final ObjectMapper objectMapper;
@@ -53,9 +53,24 @@ public class ToolRegistry {
     }
 
     /**
-     * 初始化时扫描并注册所有带有 @AgentTool 注解的方法
+     * 在所有单例 bean 都创建完成后再扫描注册工具。
+     * <p>
+     * 之前用 @PostConstruct 会在 ToolRegistry 自身创建过程中就触发 getBean(agentService)，
+     * 而 agentService 又依赖 ToolRegistry → 形成 BeanCurrentlyInCreationException 循环依赖，
+     * 导致 agentService / confirmationService / reminderService 全部创建失败，
+     * 7 个核心提醒工具一个都注册不上。
+     * 改用 SmartInitializingSingleton：此时所有单例已就绪，getBean 直接返回已创建实例，不再触发循环。
+     * 且此回调在容器刷新完成、web 服务对外提供服务之前触发，不影响正常请求。
+     * </p>
      */
-    @PostConstruct
+    @Override
+    public void afterSingletonsInstantiated() {
+        init();
+    }
+
+    /**
+     * 扫描并注册所有带有 @AgentTool 注解的方法
+     */
     public void init() {
         String[] beanNames = applicationContext.getBeanDefinitionNames();
         for (String beanName : beanNames) {
@@ -72,10 +87,31 @@ public class ToolRegistry {
                     }
                 }
             } catch (Exception e) {
-                log.warn("扫描工具失败: beanName={}, error={}", beanName, e.getMessage());
+                // 这里必须打完整堆栈，否则「某个提醒工具没注册」根因永远看不到
+                log.warn("扫描工具失败: beanName={}, error={}", beanName, e.getMessage(), e);
             }
         }
-        log.info("工具注册完成，共注册 {} 个工具", toolRegistry.size());
+        log.info("工具注册完成，共注册 {} 个工具: {}", toolRegistry.size(), listToolNames());
+
+        // 【自检】8 个核心提醒工具缺一不可，少了就打 ERROR 提醒排查
+        java.util.List<String> mustHave = java.util.List.of(
+                "create_reminder",
+                "create_recurring_reminder",
+                "query_reminders",
+                "update_reminder",
+                "cancel_reminder",
+                "cancel_reminders_by_date",
+                "get_reminder_detail"
+        );
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        for (String n : mustHave) {
+            if (resolveToolName(n) == null) missing.add(n);
+        }
+        if (!missing.isEmpty()) {
+            log.error("❌ 核心提醒工具缺失: {}，请检查 ReminderService bean 扫描/代理/初始化顺序！", missing);
+        } else {
+            log.info("✅ 8 个核心提醒工具全部注册成功: {}", mustHave);
+        }
     }
 
     /**
@@ -162,14 +198,14 @@ public class ToolRegistry {
         ));
         paramDescriptions.put("updateReminderForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
-            "reminderId", "提醒ID（必填）",
+            "reminderId", "提醒ID（必填），调用前必须先用 query_reminders 查到匹配的提醒，取其 reminderId 传进来，不能硬编码 ID=1、2、3",
             "title", "标题（可选）",
             "remindTime", "提醒时间，格式为 yyyy-MM-dd HH:mm:ss（可选）",
             "location", "地点（可选）"
         ));
         paramDescriptions.put("cancelReminderForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
-            "reminderId", "提醒ID（必填）"
+            "reminderId", "提醒ID（必填），调用前必须先用 query_reminders 查到匹配的提醒，取其 reminderId 传进来，不能硬编码 ID=1、2、3"
         ));
         paramDescriptions.put("cancelRemindersByDate", Map.of(
             "userId", "用户ID（系统自动填充）",
@@ -178,26 +214,28 @@ public class ToolRegistry {
         ));
         paramDescriptions.put("queryWeatherNowForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
-            "location", "城市名（可选）",
-            "latitude", "纬度（可选，优先使用）",
-            "longitude", "经度（可选，优先使用）"
+            "location", "具体城市名（可选，用户明确说了某个城市时传，例如 \"上海\"、\"北京\"）",
+            "latitude", "纬度（必填），数字类型，例如 31.23。必须是通过 geocode_city 或 get_location 或 get_user_preferences→geocode_city 查询得到的真实坐标，禁止自己脑补。",
+            "longitude", "经度（必填），数字类型，例如 121.47。禁止传 null。"
         ));
         paramDescriptions.put("queryWeatherForecastForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
-            "location", "城市名（可选）",
+            "location", "具体城市名（可选）",
             "days", "预报天数（3/7/10/15/30，默认7天）",
-            "latitude", "纬度（可选，优先使用）",
-            "longitude", "经度（可选，优先使用）"
+            "latitude", "纬度（必填），数字类型，必须真实查询得到，禁止脑补",
+            "longitude", "经度（必填），数字类型，禁止脑补"
         ));
         paramDescriptions.put("queryAirQualityForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
-            "latitude", "纬度",
-            "longitude", "经度"
+            "location", "具体城市名（可选，用户明确说了某个城市时传，例如 \"上海\"、\"广州\"）。后端若未收到 lat/lon 会用此城市名自动转坐标，禁止空字符串。",
+            "latitude", "纬度（强烈建议填，数字类型，真实查询得到。禁止传 null，禁止自己脑补。若不填则后端自动用 location 或默认城市兜底计算）",
+            "longitude", "经度（强烈建议填，数字类型，真实查询得到。禁止传 null，禁止自己脑补。若不填则后端自动兜底计算）"
         ));
         paramDescriptions.put("queryWeatherAlertForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
-            "latitude", "纬度",
-            "longitude", "经度"
+            "location", "具体城市名（可选，用户明确说了某个城市时传）",
+            "latitude", "纬度（强烈建议填，数字类型，真实查询得到。若不填后端自动用 location 或默认城市兜底）",
+            "longitude", "经度（强烈建议填，数字类型，真实查询得到。若不填后端自动兜底）"
         ));
         paramDescriptions.put("calculateDate", Map.of(
             "expression", "日期表达式（必填），如：3天后、2天前、2周后、下周一、下周三"
@@ -219,6 +257,9 @@ public class ToolRegistry {
             "latitude", "纬度（可选，有GPS坐标时传入）",
             "longitude", "经度（可选，有GPS坐标时传入）"
         ));
+        paramDescriptions.put("geocodeCity", Map.of(
+            "city", "具体城市名（必填），用户明确提到了某一个城市名时传，例如 \"上海\"、\"广州\"、\"北京市\"、\"揭阳市\""
+        ));
         paramDescriptions.put("createRecurringReminderForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
             "title", "提醒事项的标题（必填）",
@@ -236,7 +277,7 @@ public class ToolRegistry {
         paramDescriptions.put("addPrivateMemoryForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
             "content", "要存储的记忆内容，如'用户是大三计算机专业学生'",
-            "category", "记忆分类，可选值：PERSONAL_INFO / ACTIVITY / EVENT / COURSE / PLAN / EXAM_SCHEDULE / DAILY_ROUTINE / HEALTH_CONDITION / DIET_PREFERENCE / HABIT / INTEREST / LANGUAGE_STYLE / OTHER"
+            "category", "记忆分类，可选值：PERSONAL_INFO / ACTIVITY / EVENT / PLAN / EXAM_SCHEDULE / DAILY_ROUTINE / HEALTH_CONDITION / DIET_PREFERENCE / HABIT / INTEREST / LANGUAGE_STYLE / OTHER。\n⚠️ category必须传字符串，比如 \"PERSONAL_INFO\"，禁止传 {PERSONAL_INFO:true、数组、对象等格式。\n✅ 正确示例：{\"category\":\"PERSONAL_INFO\"}\n❌ 错误示例：{\"category\":{\"PERSONAL_INFO\":true}}"
         ));
         paramDescriptions.put("updatePrivateMemoryForAgent", Map.of(
             "userId", "用户ID（系统自动填充）",
@@ -423,10 +464,32 @@ public class ToolRegistry {
     }
 
     /**
-     * 检查工具是否存在
+     * 检查工具是否存在（大小写不敏感，会自动解析工具名）
      */
     public boolean hasTool(String toolName) {
-        return toolRegistry.containsKey(toolName);
+        return resolveToolName(toolName) != null;
+    }
+
+    /**
+     * 解析真正的注册工具名（大小写不敏感），找不到返回 null。
+     * 先做严格 key 匹配，再做 lower case 匹配，保证向后兼容。
+     */
+    public String resolveToolName(String toolName) {
+        if (toolName == null) return null;
+        if (toolRegistry.containsKey(toolName)) return toolName;
+        String lower = toolName.trim().toLowerCase();
+        if (toolRegistry.containsKey(lower)) return lower;
+        for (String key : toolRegistry.keySet()) {
+            if (key.toLowerCase().equals(lower)) return key;
+        }
+        return null;
+    }
+
+    /**
+     * 列出所有已注册的工具名（用于「工具不存在」错误里的提示+启动日志）
+     */
+    public java.util.List<String> listToolNames() {
+        return new java.util.ArrayList<>(toolRegistry.keySet());
     }
 
     /**

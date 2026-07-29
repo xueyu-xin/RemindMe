@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.service;
 
+import com.dormrepair.remindme.agent.AgentService;
 import com.dormrepair.remindme.agent.event.EventPublisher;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.Action;
@@ -46,6 +47,7 @@ public class ConfirmationService {
     private final WeatherService weatherService;
     private final LLMService llmService;
     private final ConflictDetectionService conflictDetectionService;
+    private final AgentService agentService;
 
     @org.springframework.beans.factory.annotation.Autowired
     @org.springframework.context.annotation.Lazy
@@ -817,6 +819,17 @@ public class ConfirmationService {
 
                         // 保留 timeout_auto_create 消息用于向后兼容
                         pushUserMessage(session.getUserId(), "timeout_auto_create", result);
+
+                        // 超时自动确认后也让 LLM 生成一句 bot 回复（和用户手动确认/取消走同一条链路），
+                        // 避免"卡片确认成功了但没有文字回复"的打断感
+                        try {
+                            agentService.handleConfirmationResult(
+                                    session.getUserId(), session.getSessionId(), true);
+                        } catch (Exception e) {
+                            log.warn("超时自动确认后生成LLM回复失败，跳过: sessionId={}, error={}",
+                                    session.getSessionId(), e.getMessage());
+                        }
+
                         log.info("阶段一超时自动确认: sessionId={}, userId={}, reminderId={}",
                                 session.getSessionId(), session.getUserId(), reminder.getId());
                     }
@@ -887,6 +900,15 @@ public class ConfirmationService {
         }
 
         pushUserMessage(session.getUserId(), "timeout_auto_create", result);
+
+        // 周期提醒超时自动确认后也走 handleConfirmationResult 统一生成 bot 回复
+        try {
+            agentService.handleConfirmationResult(session.getUserId(), session.getSessionId(), true);
+        } catch (Exception e) {
+            log.warn("周期提醒超时自动确认后生成LLM回复失败，跳过: sessionId={}, error={}",
+                    session.getSessionId(), e.getMessage());
+        }
+
         log.info("周期提醒超时自动确认: sessionId={}, userId={}, recurringId={}",
                 session.getSessionId(), session.getUserId(), createResult.get("recurringId"));
     }

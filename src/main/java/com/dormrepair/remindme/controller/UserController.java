@@ -1,8 +1,10 @@
 package com.dormrepair.remindme.controller;
 
+import com.dormrepair.remindme.dto.response.PeriodStatusResponse;
 import com.dormrepair.remindme.entity.User;
 import com.dormrepair.remindme.enums.Gender;
 import com.dormrepair.remindme.service.LocationService;
+import com.dormrepair.remindme.service.PeriodService;
 import com.dormrepair.remindme.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +33,7 @@ public class UserController {
 
     private final UserService userService;
     private final LocationService locationService;
+    private final PeriodService periodService;
 
     /** 允许的图片类型 */
     private static final Set<String> ALLOWED_CONTENT_TYPES = Set.of(
@@ -64,14 +67,20 @@ public class UserController {
     }
 
     @PutMapping("/{userId}")
-    public ResponseEntity<User> updateUser(@PathVariable Long userId, @RequestBody Map<String, Object> updates) {
+    public ResponseEntity<Map<String, Object>> updateUser(@PathVariable Long userId, @RequestBody Map<String, Object> updates) {
         return userService.getUserById(userId)
                 .map(user -> {
+                    boolean periodRelatedChanged = false;
+
                     if (updates.containsKey("nickname")) {
                         user.setNickname((String) updates.get("nickname"));
                     }
                     if (updates.containsKey("gender")) {
-                        user.setGender(Gender.valueOf((String) updates.get("gender")));
+                        Object raw = updates.get("gender");
+                        if (raw instanceof String s) {
+                            user.setGender(Gender.valueOf(s));
+                            periodRelatedChanged = true;
+                        }
                     }
                     if (updates.containsKey("city")) {
                         user.setCity((String) updates.get("city"));
@@ -81,12 +90,51 @@ public class UserController {
                     }
                     if (updates.containsKey("cycleDays")) {
                         user.setCycleDays(toInt(updates.get("cycleDays")));
+                        periodRelatedChanged = true;
+                    }
+                    if (updates.containsKey("periodDuration")) {
+                        // 兼容扩展：经期长度变更也触发重新计算
+                        Integer dur = toInt(updates.get("periodDuration"));
+                        if (dur != null) {
+                            user.setPeriodDuration(dur);
+                            periodRelatedChanged = true;
+                        }
+                    }
+                    if (updates.containsKey("lastPeriodStart")) {
+                        // 兼容扩展：上次经期开始日变更也触发重新计算
+                        Object raw = updates.get("lastPeriodStart");
+                        if (raw != null && !raw.toString().isBlank()) {
+                            try {
+                                user.setLastPeriodStart(LocalDate.parse(raw.toString(),
+                                        DateTimeFormatter.ISO_LOCAL_DATE));
+                                periodRelatedChanged = true;
+                            } catch (Exception ignored) {
+                                // 前端传的日期格式不对，保留原值
+                            }
+                        }
                     }
                     if (updates.containsKey("enablePeriodReminder")) {
                         user.setEnablePeriodReminder(toBoolean(updates.get("enablePeriodReminder")));
+                        periodRelatedChanged = true;
                     }
                     User saved = userService.save(user);
-                    return ResponseEntity.ok(saved);
+
+                    Map<String, Object> resp = new HashMap<>();
+                    resp.put("user", saved);
+
+                    // 经期相关字段改了，或者用户是女性且有经期设置 → 同步算一次最新经期状态一并返回，
+                    // 前端拿到新的 nextPeriodDate，保证"我的"页面手动改周期后，下次经期日期同步刷新"。
+                    boolean shouldCalc = periodRelatedChanged
+                            || (saved.getGender() == Gender.FEMALE && (saved.getCycleDays() != null && saved.getCycleDays() > 0));
+                    if (shouldCalc) {
+                        try {
+                            PeriodStatusResponse status = periodService.calculatePeriodStatus(saved);
+                            resp.put("periodStatus", status);
+                        } catch (Exception e) {
+                            log.warn("更新用户后计算经期状态失败，跳过: userId={}", userId, e);
+                        }
+                    }
+                    return ResponseEntity.ok(resp);
                 })
                 .orElse(ResponseEntity.notFound().build());
     }

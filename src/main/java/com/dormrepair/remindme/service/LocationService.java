@@ -97,13 +97,17 @@ public class LocationService {
 
     /**
      * 获取用户当前地理位置
-     * 有GPS坐标则调用高德API转地址并更新默认城市，否则返回数据库中的默认城市
+     * 有GPS坐标则调用高德API转地址并更新默认城市，否则返回数据库中的默认城市。
+     * <p>
+     * 返回值始终会包含 latitude / longitude（若有 GPS 就用 GPS；没有 GPS 但有默认城市，
+     * 则用默认城市名通过和风天气搜索转换成经纬度兜底；真的拿不到就为 null）。
+     * 这样「查天气」「查空气质量」类工具可以直接拿来用，不必再自己猜。
      */
-    @AgentTool(name = "get_location", description = "获取用户当前地理位置，如果有GPS坐标则调用高德API转地址，否则返回数据库中的默认城市")
+    @AgentTool(name = "get_location", description = "获取用户当前地理位置。有GPS时返回实时定位地址+经纬度；没GPS时返回我的页面设置的默认城市+默认城市的经纬度。只在用户问【我在哪】、【当前位置是哪】、以及任何提到「当前位置」的查询时调用。用户没提到当前位置就不要调这个工具。")
     public Map<String, Object> getLocation(Long userId, Double latitude, Double longitude) {
         Map<String, Object> result = new HashMap<>();
 
-        // 有GPS坐标：逆地理编码 + 更新默认城市
+        // 有GPS坐标：逆地理编码 + 更新默认城市 + 直接返回 GPS 经纬度
         if (latitude != null && longitude != null) {
             try {
                 String address = reverseGeocode(latitude, longitude);
@@ -111,7 +115,9 @@ public class LocationService {
                 result.put("success", true);
                 result.put("address", address);
                 result.put("source", "gps");
-                log.info("GPS定位成功: userId={}, address={}", userId, address);
+                result.put("latitude", latitude);
+                result.put("longitude", longitude);
+                log.info("GPS定位成功: userId={}, address={}, coord=({}, {})", userId, address, latitude, longitude);
             } catch (Exception e) {
                 log.error("GPS定位失败: userId={}", userId, e);
                 result.put("success", false);
@@ -120,13 +126,27 @@ public class LocationService {
             return result;
         }
 
-        // 无GPS坐标：从数据库读取默认城市
+        // 无GPS坐标：从数据库读取默认城市 → 再通过和风天气搜索把默认城市名转成经纬度
         try {
             User user = userService.getUserById(userId).orElse(null);
             if (user != null && user.getCity() != null && !user.getCity().isBlank()) {
                 result.put("success", true);
                 result.put("address", user.getCity());
-                result.put("source", "database");
+                result.put("source", "database (defaultCity)");
+                // 把默认城市名转换成经纬度（兜底，失败就 null）
+                try {
+                    String coord = resolveLocationToCoord(user.getCity());
+                    if (coord != null && coord.contains(",")) {
+                        String[] parts = coord.split(",");
+                        result.put("longitude", Double.parseDouble(parts[0].trim()));
+                        result.put("latitude", Double.parseDouble(parts[1].trim()));
+                        log.info("默认城市坐标转换: userId={}, city={} -> ({}, {})",
+                                userId, user.getCity(), result.get("latitude"), result.get("longitude"));
+                    }
+                } catch (Exception e) {
+                    log.warn("默认城市转换坐标失败，只返回地址不返回经纬度: userId={}, city={}, error={}",
+                            userId, user.getCity(), e.getMessage());
+                }
             } else {
                 result.put("success", false);
                 result.put("message", "未设置默认城市，请在设置中配置");
@@ -137,6 +157,49 @@ public class LocationService {
             result.put("message", "查询失败: " + e.getMessage());
         }
         return result;
+    }
+
+    /**
+     * 把具体的城市名（比如"上海"、"广州"、"北京市朝阳区"）解析成经纬度，供 Agent 调用。
+     * <p>
+     * 用法：用户明确说了某个具体城市名（"上海空气质量如何？"、"去北京出差天气？"）时，
+     * 先调 geocode_city 拿到 latitude/longitude，再把它们传给 query_weather_now 等天气工具。
+     * 严禁直接凭印象写死（比如"上海=31.23,121.47"），必须调用这个工具查询。
+     */
+    @AgentTool(name = "geocode_city", description = "把具体城市名解析成经纬度。用户明确提到了一个具体城市名（上海、广州、北京…）时，调用这个工具拿真实坐标，再用坐标查天气/空气质量。禁止自己脑补。")
+    public Map<String, Object> geocodeCity(String city) {
+        Map<String, Object> result = new HashMap<>();
+        if (city == null || city.isBlank()) {
+            result.put("success", false);
+            result.put("message", "城市名为空");
+            return result;
+        }
+        try {
+            String coord = resolveLocationToCoord(city);
+            if (coord == null || !coord.contains(",")) {
+                result.put("success", false);
+                result.put("message", "找不到该城市的坐标: " + city);
+                return result;
+            }
+            String[] parts = coord.split(",");
+            double lon = Double.parseDouble(parts[0].trim());
+            double lat = Double.parseDouble(parts[1].trim());
+
+            List<CitySearchResult> hits = searchCities(city);
+            String displayName = (hits != null && !hits.isEmpty()) ? hits.get(0).getDisplayName() : city;
+
+            result.put("success", true);
+            result.put("city", displayName);
+            result.put("latitude", lat);
+            result.put("longitude", lon);
+            log.info("geocode_city: {} -> ({}, {})", city, lat, lon);
+            return result;
+        } catch (Exception e) {
+            log.warn("geocode_city 转换失败: city={}, error={}", city, e.getMessage(), e);
+            result.put("success", false);
+            result.put("message", "城市坐标转换失败: " + e.getMessage());
+            return result;
+        }
     }
 
     // ==================== 和风天气城市搜索 ====================

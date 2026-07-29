@@ -2865,17 +2865,30 @@
             setTimeout(loadChatHistory, 300);
         });
 
+        function getTimeGreeting() {
+            var hour = new Date().getHours();
+            if (hour >= 5 && hour < 11) return '早上好！今天有什么需要提醒的吗？';
+            if (hour >= 11 && hour < 13) return '中午好！今天有什么需要提醒的吗？';
+            if (hour >= 13 && hour < 18) return '下午好！今天有什么需要提醒的吗？';
+            if (hour >= 18 && hour < 24) return '晚上好！今天有什么需要提醒的吗？';
+            return '凌晨好！今天有什么需要提醒的吗？';
+        }
+
         var prompts = [
             '你可以这样问我：明天下午3点提醒我还书',
-            '早上好！今天有什么需要提醒的吗？',
-            '今天有雨，出门记得带伞 ☔',
+            '__TIME_GREETING__',
+            '想了解如何使用小助手，可以输入"使用手册"哦',
             '设置个提醒吧，我来帮你记住！'
         ];
         var promptIndex = 0;
         function rotatePrompt() {
             var el = document.getElementById('promptText');
             if (el) {
-                el.textContent = prompts[promptIndex % prompts.length];
+                var prompt = prompts[promptIndex % prompts.length];
+                if (prompt === '__TIME_GREETING__') {
+                    prompt = getTimeGreeting();
+                }
+                el.textContent = prompt;
                 promptIndex++;
             }
         }
@@ -4565,9 +4578,17 @@
             })
             .then(function(response) {
                 if (response.ok) {
-                    updateProfileDisplay(currentEditField, value);
-                    hideModal();
-                    showToast('修改成功', true);
+                    return response.json().then(function(data) {
+                        updateProfileDisplay(currentEditField, value);
+                        hideModal();
+                        showToast('修改成功', true);
+
+                        // 经期相关字段改了 → 立刻同步「下次预计经期」和「经期状态」，无需手动刷新
+                        var periodFields = ['cycleDays', 'lastPeriodStart', 'periodDuration', 'enablePeriodReminder', 'gender'];
+                        if (periodFields.indexOf(currentEditField) !== -1) {
+                            refreshPeriodDisplay(data, userId);
+                        }
+                    });
                 } else {
                     showToast('修改失败，请重试', false);
                 }
@@ -4575,6 +4596,25 @@
             .catch(function() {
                 showToast('网络错误，请重试', false);
             });
+        }
+
+        /**
+         * 用 PUT /api/user 返回里的 periodStatus 立刻刷新「下次预计经期」和「经期状态」；
+         * 响应里没有 periodStatus 就回退到 loadPeriodStatus 重新查询一次。
+         * 这样在「我的」页面改了经期周期等字段后，下次预计经期无需刷新页面就能同步更新。
+         */
+        function refreshPeriodDisplay(respData, userId) {
+            var ps = respData && respData.periodStatus;
+            if (ps) {
+                if (ps.nextPeriodDate) {
+                    document.getElementById('valueNextPeriod').textContent = ps.nextPeriodDate;
+                }
+                if (ps.statusName) {
+                    document.getElementById('valuePeriodStatus').textContent = ps.statusName;
+                }
+            } else {
+                loadPeriodStatus(userId);
+            }
         }
 
         function updateProfileDisplay(field, value) {
