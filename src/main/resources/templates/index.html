@@ -1266,6 +1266,13 @@
             letter-spacing: 0.5px;
             padding-right: 4px;
         }
+        .time-range {
+            font-size: 11px;
+            color: var(--brown-mid);
+            opacity: 0.7;
+            margin-top: 2px;
+            font-family: 'MaoKenShiJinHei', monospace;
+        }
         .schedule-blocks {
             flex: 1;
             display: flex;
@@ -1761,7 +1768,7 @@
             if (card.type === 'confirmation_card') {
                 currentConfirmationSessionId = card.data.sessionId || null;
                 originalConfirmationCard = card;
-                var expiresAt = card.expiresAt;
+                var expiresAt = card.expiresAt ? new Date(card.expiresAt) : null;
                 var hasConflict = card.data.hasConflict === true;
                 var isBatch = card.data.isBatch === true;
                 var importId = card.data.importId || null;
@@ -1812,7 +1819,14 @@
                     }
                 } else {
                     html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + card.data.title + '</span></div>';
-                    html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + card.data.remindTime + '</span></div>';
+                    if (card.data.endTime) {
+                        // 时间段显示
+                        var startTime = card.data.remindTime ? card.data.remindTime.slice(11, 16) : '';
+                        var endTime = card.data.endTime.slice(11, 16);
+                        html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + startTime + ' → ' + endTime + '</span></div>';
+                    } else {
+                        html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + card.data.remindTime + '</span></div>';
+                    }
                     if (card.data.location) {
                         html += '<div class="info-item"><span class="info-label">地点</span><span class="info-value">' + card.data.location + '</span></div>';
                     }
@@ -2332,6 +2346,10 @@
         var currentTimerSessionId = null;
         var originalConfirmationCard = null;
         function startTimer(expiresAt, sessionId) {
+            if (!expiresAt || isNaN(expiresAt.getTime())) {
+                console.warn('startTimer: expiresAt 无效', expiresAt);
+                return;
+            }
             if (timerInterval) clearInterval(timerInterval);
             currentTimerSessionId = sessionId;
             
@@ -2409,6 +2427,7 @@
         }
 
         async function handleConfirmationAction(action, sessionId) {
+            console.log('📝 handleConfirmationAction 被调用:', action, sessionId, 'type:', typeof action);
             if (isProcessing) return;
             isProcessing = true;
             
@@ -2696,8 +2715,12 @@
             html += '<input type="text" class="form-input" id="editTitle" placeholder="请输入标题">';
             html += '</div>';
             html += '<div class="form-item">';
-            html += '<label class="form-label">时间</label>';
+            html += '<label class="form-label">开始时间</label>';
             html += '<input type="datetime-local" class="form-input" id="editTime">';
+            html += '</div>';
+            html += '<div class="form-item" id="editEndTimeRow">';
+            html += '<label class="form-label">结束时间（可选）</label>';
+            html += '<input type="datetime-local" class="form-input" id="editEndTime">';
             html += '</div>';
             html += '<div class="form-item suggested-time-row" id="suggestedTimeRow" style="display:none;">';
             html += '<label class="form-label">💡 建议时间</label>';
@@ -2732,6 +2755,10 @@
             if (data.remindTime) {
                 var dt = new Date(data.remindTime.replace(' ', 'T'));
                 document.getElementById('editTime').value = dt.toISOString().slice(0, 16);
+            }
+            if (data.endTime) {
+                var et = new Date(data.endTime.replace(' ', 'T'));
+                document.getElementById('editEndTime').value = et.toISOString().slice(0, 16);
             }
             if (data.location) document.getElementById('editLocation').value = data.location;
             if (data.priority) document.getElementById('editPriority').value = data.priority;
@@ -2886,6 +2913,7 @@
         async function submitEditForm(sessionId) {
             var title = document.getElementById('editTitle').value.trim();
             var timeStr = document.getElementById('editTime').value;
+            var endTimeStr = document.getElementById('editEndTime').value;
             var location = document.getElementById('editLocation').value.trim();
             var priority = document.getElementById('editPriority').value;
             
@@ -2904,17 +2932,24 @@
                 headers['Authorization'] = 'Bearer ' + token;
             }
             
+            var requestBody = {
+                title: title,
+                remindTime: timeStr.replace('T', ' ') + ':00',
+                location: location || null,
+                priority: priority,
+                advanceMinutes: 10
+            };
+            
+            // 如果填写了结束时间，添加 endTime
+            if (endTimeStr) {
+                requestBody.endTime = endTimeStr.replace('T', ' ') + ':00';
+            }
+            
             try {
                 const response = await fetch('/api/confirmations/' + sessionId + '/reparse?userId=' + currentUserId, {
                     method: 'POST',
                     headers: headers,
-                    body: JSON.stringify({
-                        title: title,
-                        remindTime: timeStr.replace('T', ' ') + ':00',
-                        location: location || null,
-                        priority: priority,
-                        advanceMinutes: 10
-                    })
+                    body: JSON.stringify(requestBody)
                 });
                 const result = await response.json();
                 
@@ -4140,7 +4175,11 @@
 
                 var timeLabel = document.createElement('div');
                 timeLabel.className = 'schedule-time-label';
-                timeLabel.textContent = r.remindTime ? r.remindTime.slice(11, 16) : '';
+                if (r.remindTime) {
+                    timeLabel.textContent = r.endTime ? r.remindTime.slice(11, 16) + ' - ' + r.endTime.slice(11, 16) : r.remindTime.slice(11, 16);
+                } else {
+                    timeLabel.textContent = '';
+                }
                 row.appendChild(timeLabel);
 
                 var blocks = document.createElement('div');
@@ -4214,7 +4253,16 @@
                 // 时间标签
                 var timeLabel = document.createElement('div');
                 timeLabel.className = 'schedule-time-label';
-                timeLabel.textContent = time;
+                // 检查该时间段是否有跨天的提醒，显示时间段范围
+                var hasEndTime = false;
+                for (var d in timeGroups[time]) {
+                    var items = timeGroups[time][d];
+                    if (items && items.some(function(r) { return r.endTime; })) {
+                        hasEndTime = true;
+                        break;
+                    }
+                }
+                timeLabel.textContent = hasEndTime ? time + '+' : time;
                 row.appendChild(timeLabel);
 
                 // 7 列对应 7 天
@@ -4248,10 +4296,19 @@
                                 weekBlockText += '📖 ';
                             }
                             weekBlockText += reminder.title;
+                            // 时间段显示
+                            if (reminder.endTime) {
+                                weekBlockText += '<div class="time-range">' + (reminder.remindTime ? reminder.remindTime.slice(11, 16) : '') + '-' + reminder.endTime.slice(11, 16) + '</div>';
+                            }
                             block.innerHTML = weekBlockText;
 
-                            block.title = reminder.title + (reminder.location ? ' @ ' + reminder.location : '')
-                                + (reminder.isRecurring && reminder.recurringRange ? ' · 周期提醒：' + reminder.recurringRange : '');
+                            var blockTitle = reminder.title;
+                            if (reminder.endTime && reminder.remindTime) {
+                                blockTitle += ' · ' + reminder.remindTime.slice(11, 16) + '-' + reminder.endTime.slice(11, 16);
+                            }
+                            if (reminder.location) blockTitle += ' @ ' + reminder.location;
+                            if (reminder.isRecurring && reminder.recurringRange) blockTitle += ' · 周期提醒：' + reminder.recurringRange;
+                            block.title = blockTitle;
                             cell.appendChild(block);
                         });
                         if (reminderList.length > 1) {

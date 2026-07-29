@@ -193,6 +193,7 @@ public class ScheduleImportService {
                         userId,
                         item.getTitle(),
                         remindTimeStr,
+                        null,
                         item.getLocation(),
                         "NORMAL"
                 );

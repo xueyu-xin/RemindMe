@@ -39,21 +39,49 @@ public class ConflictDetectionService {
      * @return 冲突响应，包含冲突列表和建议时间
      */
     public ConflictResponse checkConflict(Long userId, LocalDateTime remindTime, Long excludeReminderId) {
-        LocalDateTime start = remindTime.minusMinutes(CONFLICT_WINDOW_MINUTES);
-        LocalDateTime end = remindTime.plusMinutes(CONFLICT_WINDOW_MINUTES);
+        return checkConflict(userId, remindTime, null, excludeReminderId);
+    }
 
-        log.debug("检测冲突: userId={}, remindTime={}, 范围={} ~ {}, excludeId={}",
-                userId, remindTime, start, end, excludeReminderId);
+    /**
+     * 检测提醒时间冲突（支持时间段提醒）
+     *
+     * @param userId 用户ID
+     * @param remindTime 提醒时间
+     * @param endTime 结束时间（时间段提醒时使用，单点提醒为null）
+     * @param excludeReminderId 排除的提醒ID（修改时排除自身，可为null）
+     * @return 冲突响应，包含冲突列表和建议时间
+     */
+    public ConflictResponse checkConflict(Long userId, LocalDateTime remindTime, LocalDateTime endTime, Long excludeReminderId) {
+        List<Reminder> conflicts;
 
-        // 查询时间范围内的所有提醒
-        List<Reminder> reminders = reminderRepository.findByUserIdAndRemindTimeBetween(userId, start, end);
+        if (endTime != null) {
+            // 时间段重叠检测：调用 findOverlappingReminders
+            log.debug("检测时间段冲突: userId={}, remindTime={}, endTime={}, excludeId={}",
+                    userId, remindTime, endTime, excludeReminderId);
 
-        // 过滤：未取消的 + 已确认的 + 排除自身
-        List<Reminder> conflicts = reminders.stream()
-                .filter(r -> r.getStatus() != ReminderStatus.CANCELLED)
-                .filter(r -> r.getConfirmStatus() == ConfirmStatus.CONFIRMED)
-                .filter(r -> excludeReminderId == null || !r.getId().equals(excludeReminderId))
-                .collect(Collectors.toList());
+            conflicts = reminderRepository.findOverlappingReminders(userId, remindTime, endTime);
+
+            // 过滤：排除自身
+            conflicts = conflicts.stream()
+                    .filter(r -> excludeReminderId == null || !r.getId().equals(excludeReminderId))
+                    .collect(Collectors.toList());
+        } else {
+            // 单点提醒：使用原有单点 ±30min 逻辑
+            LocalDateTime start = remindTime.minusMinutes(CONFLICT_WINDOW_MINUTES);
+            LocalDateTime end = remindTime.plusMinutes(CONFLICT_WINDOW_MINUTES);
+
+            log.debug("检测单点冲突: userId={}, remindTime={}, 范围={} ~ {}, excludeId={}",
+                    userId, remindTime, start, end, excludeReminderId);
+
+            List<Reminder> reminders = reminderRepository.findByUserIdAndRemindTimeBetween(userId, start, end);
+
+            // 过滤：未取消的 + 已确认的 + 排除自身
+            conflicts = reminders.stream()
+                    .filter(r -> r.getStatus() != ReminderStatus.CANCELLED)
+                    .filter(r -> r.getConfirmStatus() == ConfirmStatus.CONFIRMED)
+                    .filter(r -> excludeReminderId == null || !r.getId().equals(excludeReminderId))
+                    .collect(Collectors.toList());
+        }
 
         if (conflicts.isEmpty()) {
             log.debug("未检测到冲突: userId={}, remindTime={}", userId, remindTime);
@@ -62,13 +90,13 @@ public class ConflictDetectionService {
 
         log.info("检测到 {} 个冲突: userId={}, remindTime={}", conflicts.size(), userId, remindTime);
 
-        // 转换为 ConflictItem
+        // 转换为 ConflictItem（包含 endTime）
         List<ConflictResponse.ConflictItem> items = conflicts.stream()
-                .map(r -> new ConflictResponse.ConflictItem(r.getId(), r.getTitle(), r.getRemindTime()))
+                .map(r -> new ConflictResponse.ConflictItem(r.getId(), r.getTitle(), r.getRemindTime(), r.getEndTime()))
                 .collect(Collectors.toList());
 
         // 计算建议时间（向后找第一个空闲的30分钟窗口）
-        LocalDateTime suggestedTime = calculateSuggestedTime(userId, remindTime, excludeReminderId);
+        LocalDateTime suggestedTime = calculateSuggestedTime(userId, remindTime, endTime, excludeReminderId);
 
         return new ConflictResponse(true, items, suggestedTime);
     }
@@ -82,7 +110,20 @@ public class ConflictDetectionService {
      * @return 是否有冲突
      */
     public boolean hasConflict(Long userId, LocalDateTime remindTime, Long excludeReminderId) {
-        ConflictResponse response = checkConflict(userId, remindTime, excludeReminderId);
+        return hasConflict(userId, remindTime, null, excludeReminderId);
+    }
+
+    /**
+     * 判断是否存在冲突（支持时间段提醒）
+     *
+     * @param userId 用户ID
+     * @param remindTime 提醒时间
+     * @param endTime 结束时间（可选）
+     * @param excludeReminderId 排除的提醒ID
+     * @return 是否有冲突
+     */
+    public boolean hasConflict(Long userId, LocalDateTime remindTime, LocalDateTime endTime, Long excludeReminderId) {
+        ConflictResponse response = checkConflict(userId, remindTime, endTime, excludeReminderId);
         return response.isHasConflict();
     }
 
@@ -135,26 +176,61 @@ public class ConflictDetectionService {
      * @return 建议时间
      */
     private LocalDateTime calculateSuggestedTime(Long userId, LocalDateTime fromTime, Long excludeReminderId) {
-        LocalDateTime candidate = fromTime.plusMinutes(CONFLICT_WINDOW_MINUTES);
+        return calculateSuggestedTime(userId, fromTime, null, excludeReminderId);
+    }
+
+    /**
+     * 计算建议的提醒时间（支持时间段提醒）
+     *
+     * @param userId 用户ID
+     * @param fromTime 起始时间
+     * @param endTime 结束时间（可选，用于计算时间段长度）
+     * @param excludeReminderId 排除的提醒ID
+     * @return 建议时间
+     */
+    private LocalDateTime calculateSuggestedTime(Long userId, LocalDateTime fromTime, LocalDateTime endTime, Long excludeReminderId) {
+        // 如果是时间段提醒，计算时间段长度作为间隔
+        int windowMinutes = CONFLICT_WINDOW_MINUTES;
+        if (endTime != null) {
+            long durationMinutes = java.time.Duration.between(fromTime, endTime).toMinutes();
+            windowMinutes = (int) Math.max(durationMinutes, CONFLICT_WINDOW_MINUTES);
+        }
+
+        LocalDateTime candidate = fromTime.plusMinutes(windowMinutes);
         LocalDateTime maxSearchTime = fromTime.plusHours(2);
 
         while (candidate.isBefore(maxSearchTime)) {
-            LocalDateTime start = candidate.minusMinutes(CONFLICT_WINDOW_MINUTES);
-            LocalDateTime end = candidate.plusMinutes(CONFLICT_WINDOW_MINUTES);
+            if (endTime != null) {
+                // 时间段提醒：使用 findOverlappingReminders 检测重叠
+                LocalDateTime candidateEnd = candidate.plusMinutes(windowMinutes);
+                boolean hasConflict = !reminderRepository.findOverlappingReminders(userId, candidate, candidateEnd)
+                        .stream()
+                        .filter(r -> excludeReminderId == null || !r.getId().equals(excludeReminderId))
+                        .findAny()
+                        .isEmpty();
 
-            List<Reminder> reminders = reminderRepository.findByUserIdAndRemindTimeBetween(userId, start, end);
-            boolean hasConflict = reminders.stream()
-                    .filter(r -> r.getStatus() != ReminderStatus.CANCELLED)
-                    .filter(r -> r.getConfirmStatus() == ConfirmStatus.CONFIRMED)
-                    .filter(r -> excludeReminderId == null || !r.getId().equals(excludeReminderId))
-                    .findAny()
-                    .isPresent();
+                if (!hasConflict) {
+                    return candidate;
+                }
+            } else {
+                // 单点提醒：使用原有逻辑
+                LocalDateTime start = candidate.minusMinutes(CONFLICT_WINDOW_MINUTES);
+                LocalDateTime end = candidate.plusMinutes(CONFLICT_WINDOW_MINUTES);
 
-            if (!hasConflict) {
-                return candidate;
+                List<Reminder> reminders = reminderRepository.findByUserIdAndRemindTimeBetween(userId, start, end);
+                boolean hasConflict = reminders.stream()
+                        .filter(r -> r.getStatus() != ReminderStatus.CANCELLED)
+                        .filter(r -> r.getConfirmStatus() == ConfirmStatus.CONFIRMED)
+                        .filter(r -> excludeReminderId == null || !r.getId().equals(excludeReminderId))
+                        .findAny()
+                        .isPresent();
+
+                if (!hasConflict) {
+                    return candidate;
+                }
             }
 
-            candidate = candidate.plusMinutes(CONFLICT_WINDOW_MINUTES);
+            candidate = candidate.plusMinutes(windowMinutes);
         }
 
         // 2小时内都找不到，返回2小时后的时间

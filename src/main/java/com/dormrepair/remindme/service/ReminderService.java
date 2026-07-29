@@ -52,6 +52,7 @@ public class ReminderService {
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
 
         String remindTimeStr = request.getRemindTime().format(FORMATTER);
+        String endTimeStr = request.getEndTime() != null ? request.getEndTime().format(FORMATTER) : null;
         String priority = request.getPriority() != null ? request.getPriority() : "NORMAL";
         String location = request.getLocation();
 
@@ -59,6 +60,7 @@ public class ReminderService {
                 request.getUserId(),
                 request.getTitle(),
                 remindTimeStr,
+                endTimeStr,
                 location,
                 priority
         );
@@ -73,6 +75,9 @@ public class ReminderService {
         }
         if (request.getRemindTime() != null) {
             reminder.setRemindTime(request.getRemindTime());
+        }
+        if (request.getEndTime() != null) {
+            reminder.setEndTime(request.getEndTime());
         }
         if (request.getTimezone() != null) {
             reminder.setTimezone(request.getTimezone());
@@ -144,6 +149,7 @@ public class ReminderService {
         response.setUserId(reminder.getUserId());
         response.setTitle(reminder.getTitle());
         response.setRemindTime(reminder.getRemindTime());
+        response.setEndTime(reminder.getEndTime());
         response.setTimezone(reminder.getTimezone());
         response.setAdvanceMinutes(reminder.getAdvanceMinutes());
         response.setCronExpression(reminder.getCronExpression());
@@ -174,10 +180,10 @@ public class ReminderService {
      */
     @AgentTool(name = "create_reminder", description = "创建提醒，用户要求设置提醒时调用")
     @Transactional
-    public Map<String, Object> createReminderForAgent(Long userId, String title, String remindTime, 
-            String location, String priority) {
+    public Map<String, Object> createReminderForAgent(Long userId, String title, String remindTime,
+            String endTime, String location, String priority) {
         
-        log.info("Agent调用创建提醒: userId={}, title={}, remindTime={}", userId, title, remindTime);
+        log.info("Agent调用创建提醒: userId={}, title={}, remindTime={}, endTime={}", userId, title, remindTime, endTime);
         
         Map<String, Object> result = new HashMap<>();
         
@@ -195,6 +201,7 @@ public class ReminderService {
 
             // 解析时间
             LocalDateTime parsedTime = LocalDateTime.parse(remindTime, FORMATTER);
+            LocalDateTime parsedEndTime = endTime != null ? LocalDateTime.parse(endTime, FORMATTER) : null;
             
             // 构建解析数据，用于确认会话
             Map<String, Object> parsedData = new HashMap<>();
@@ -206,8 +213,13 @@ public class ReminderService {
             parsedData.put("source", "USER_INPUT");
             parsedData.put("intentType", "REMINDER");
             
-            // 冲突检测（结果附加到确认会话中，由确认卡片显示冲突提示）
-            ConflictResponse conflictResponse = conflictDetectionService.checkConflict(userId, parsedTime, null);
+            // 添加 endTime 到 parsedData
+            if (parsedEndTime != null) {
+                parsedData.put("endTime", endTime);
+            }
+            
+            // 冲突检测（支持时间段重叠检测）
+            ConflictResponse conflictResponse = conflictDetectionService.checkConflict(userId, parsedTime, parsedEndTime, null);
             if (conflictResponse.isHasConflict()) {
                 String description = conflictDetectionService.getConflictDescription(
                         conflictResponse.getConflicts(), parsedTime);
@@ -341,10 +353,10 @@ public class ReminderService {
      */
     @AgentTool(name = "update_reminder", description = "修改提醒，用户要求更改提醒时调用")
     @Transactional
-    public Map<String, Object> updateReminderForAgent(Long userId, Long reminderId, String title, 
-            String remindTime, String location) {
+    public Map<String, Object> updateReminderForAgent(Long userId, Long reminderId, String title,
+            String remindTime, String endTime, String location) {
         
-        log.info("Agent调用更新提醒: userId={}, reminderId={}", userId, reminderId);
+        log.info("Agent调用更新提醒: userId={}, reminderId={}, endTime={}", userId, reminderId, endTime);
         
         Map<String, Object> result = new HashMap<>();
         
@@ -358,6 +370,10 @@ public class ReminderService {
                 LocalDateTime parsedTime = LocalDateTime.parse(remindTime, FORMATTER);
                 reminder.setRemindTime(parsedTime);
             }
+            if (endTime != null && !endTime.isBlank()) {
+                LocalDateTime parsedEndTime = LocalDateTime.parse(endTime, FORMATTER);
+                reminder.setEndTime(parsedEndTime);
+            }
             if (location != null) {
                 reminder.setLocation(location);
             }
@@ -369,6 +385,9 @@ public class ReminderService {
             result.put("id", saved.getId());
             result.put("title", saved.getTitle());
             result.put("remindTime", saved.getRemindTime().format(FORMATTER));
+            if (saved.getEndTime() != null) {
+                result.put("endTime", saved.getEndTime().format(FORMATTER));
+            }
             result.put("location", saved.getLocation());
             result.put("priority", saved.getPriority().name());
             

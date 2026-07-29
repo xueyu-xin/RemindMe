@@ -39,6 +39,9 @@ public class Reminder {
     @Column(name = "remind_time", nullable = false)
     private LocalDateTime remindTime;
 
+    @Column(name = "end_time")
+    private LocalDateTime endTime;
+
     @Column(nullable = false)
     private String timezone = "Asia/Shanghai";
 

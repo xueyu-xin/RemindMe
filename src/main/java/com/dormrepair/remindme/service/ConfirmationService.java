@@ -70,9 +70,14 @@ public class ConfirmationService {
         }
 
         LocalDateTime parsedTime = null;
+        LocalDateTime parsedEndTime = null;
         String remindTimeStr = (String) parsedData.get("remindTime");
         if (remindTimeStr != null) {
             parsedTime = parseTimeFlexible(remindTimeStr);
+        }
+        String endTimeStr = (String) parsedData.get("endTime");
+        if (endTimeStr != null) {
+            parsedEndTime = parseTimeFlexible(endTimeStr);
         }
 
         ConfirmationSession session = ConfirmationSession.builder()
@@ -82,6 +87,7 @@ public class ConfirmationService {
                 .parsedData(parsedDataJson)
                 .parsedTitle((String) parsedData.get("title"))
                 .parsedTime(parsedTime)
+                .parsedEndTime(parsedEndTime)
                 .parsedLocation((String) parsedData.get("location"))
                 .parsedPriority((String) parsedData.getOrDefault("priority", "NORMAL"))
                 .parsedAdvanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", 10))
@@ -960,6 +966,7 @@ public class ConfirmationService {
         reminder.setUserId(userId);
         reminder.setTitle((String) parsedData.get("title"));
         reminder.setRemindTime(parseTimeFlexible((String) parsedData.get("remindTime")));
+        reminder.setEndTime(parseTimeFlexible((String) parsedData.get("endTime")));
         reminder.setPriority(Priority.valueOf(
                 ((String) parsedData.getOrDefault("priority", "NORMAL")).toUpperCase()));
         reminder.setLocation((String) parsedData.get("location"));
@@ -981,6 +988,7 @@ public class ConfirmationService {
                 .sessionId(session.getSessionId())
                 .title((String) parsedData.get("title"))
                 .remindTime((String) parsedData.get("remindTime"))
+                .endTime((String) parsedData.get("endTime"))
                 .priority((String) parsedData.getOrDefault("priority", "NORMAL"))
                 .location((String) parsedData.get("location"))
                 .advanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", 10))
@@ -1530,6 +1538,7 @@ public class ConfirmationService {
         reminder.setUserId(session.getUserId());
         reminder.setTitle(session.getParsedTitle());
         reminder.setRemindTime(session.getParsedTime());
+        reminder.setEndTime(session.getParsedEndTime());
         
         String priorityStr = session.getParsedPriority();
         if (priorityStr == null || priorityStr.isBlank()) {

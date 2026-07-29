@@ -43,4 +43,16 @@ public interface ReminderRepository extends JpaRepository<Reminder, Long> {
 
     List<Reminder> findByStatusAndConfirmStatusAndExecutionStatusAndConfirmAttemptsGreaterThanEqual(
             ReminderStatus status, ConfirmStatus confirmStatus, ExecutionStatus executionStatus, Integer minAttempts);
+
+    @Query("SELECT r FROM Reminder r WHERE r.userId = :userId " +
+           "AND r.status != 'CANCELLED' " +
+           "AND r.confirmStatus = 'CONFIRMED' " +
+           "AND DATE(r.remindTime) = DATE(:startTime) " +
+           "AND r.remindTime < :endTime " +
+           "AND (r.endTime IS NULL OR r.endTime > :startTime)")
+    List<Reminder> findOverlappingReminders(
+            @Param("userId") Long userId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
 }

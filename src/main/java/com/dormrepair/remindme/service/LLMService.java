@@ -62,6 +62,7 @@ public class LLMService {
             return ParsedResult.builder()
                     .title(root.has("title") ? root.get("title").asText() : null)
                     .remindTime(root.has("remindTime") ? parseDateTime(root.get("remindTime").asText()) : null)
+                    .endTime(root.has("endTime") && !root.get("endTime").isNull() ? parseDateTime(root.get("endTime").asText()) : null)
                     .intentType(root.has("intentType") ? root.get("intentType").asText() : "UNKNOWN")
                     .location(root.has("location") ? root.get("location").asText() : null)
                     .priority(root.has("priority") ? root.get("priority").asText() : "NORMAL")
@@ -1317,6 +1318,7 @@ public class LLMService {
             2. JSON包含以下字段：
                - title: 提醒事项名称（字符串，必填）
                - remindTime: 提醒时间（格式：yyyy-MM-dd HH:mm:ss，必填）
+               - endTime: 结束时间（格式：yyyy-MM-dd HH:mm:ss，可选，用于时间段提醒）
                - intentType: 意图类型（REMINDER/QUERY/DELETE/UPDATE/CONFIRM/CANCEL/WEATHER/UNKNOWN）
                - location: 地点（字符串，可选）
                - priority: 优先级（LOW/NORMAL/HIGH，默认NORMAL）
@@ -1335,8 +1337,20 @@ public class LLMService {
             - "现在"、"马上" → 当前时间，advanceMinutes=0
             - 如果无法解析时间，返回当前时间+10分钟，advanceMinutes=10
             
-            示例输入："明天下午3点还书"
-            示例输出：{"title":"还书","remindTime":"%s","intentType":"REMINDER","location":null,"priority":"NORMAL"}
+            时间段识别规则（新增）：
+            - 当用户输入包含时间段描述时，需要识别 endTime 字段
+            - "明天下午3点到5点开会" → remindTime=明天15:00:00, endTime=明天17:00:00
+            - "后天上午9点到11点半上课" → remindTime=后天09:00:00, endTime=后天11:30:00
+            - "周五晚上8点到10点聚会" → remindTime=周五20:00:00, endTime=周五22:00:00
+            - 关键词识别："到"、"至"、"-"、"~"、"之间"、"时间段" 等表示时间段
+            - 如果用户只指定了开始时间，没有明确结束时间，则 endTime 设为 null
+            - 如果用户说"X点到Y点"格式，需要同时提取开始和结束时间
+            
+            示例输入1（单点提醒）："明天下午3点还书"
+            示例输出1：{"title":"还书","remindTime":"%s","endTime":null,"intentType":"REMINDER","location":null,"priority":"NORMAL"}
+            
+            示例输入2（时间段提醒）："明天下午3点到5点开会"
+            示例输出2：{"title":"开会","remindTime":"2026-07-30 15:00:00","endTime":"2026-07-30 17:00:00","intentType":"REMINDER","location":null,"priority":"NORMAL"}
             
             用户输入: %s
             """.formatted(currentDate, currentDate, userInput);
@@ -1485,6 +1499,7 @@ public class LLMService {
     public record ParsedResult(
             String title,
             LocalDateTime remindTime,
+            LocalDateTime endTime,
             String intentType,
             String location,
             String priority,
@@ -1497,6 +1512,7 @@ public class LLMService {
         public static class Builder {
             private String title;
             private LocalDateTime remindTime;
+            private LocalDateTime endTime;
             private String intentType;
             private String location;
             private String priority;
@@ -1509,6 +1525,11 @@ public class LLMService {
 
             public Builder remindTime(LocalDateTime remindTime) {
                 this.remindTime = remindTime;
+                return this;
+            }
+
+            public Builder endTime(LocalDateTime endTime) {
+                this.endTime = endTime;
                 return this;
             }
 
@@ -1533,7 +1554,7 @@ public class LLMService {
             }
 
             public ParsedResult build() {
-                return new ParsedResult(title, remindTime, intentType, location, priority, advanceMinutes);
+                return new ParsedResult(title, remindTime, endTime, intentType, location, priority, advanceMinutes);
             }
         }
     }

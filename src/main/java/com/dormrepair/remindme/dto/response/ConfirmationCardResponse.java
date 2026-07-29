@@ -33,6 +33,7 @@ public class ConfirmationCardResponse {
         private String sessionId;
         private String title;
         private String remindTime;
+        private String endTime;
         private String priority;
         private String location;
         private Integer advanceMinutes;

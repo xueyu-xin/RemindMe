@@ -754,6 +754,9 @@ public class AgentService {
             confirmationData.put("title", title);
             confirmationData.put("remindTime", remindTime);
             confirmationData.put("location", location);
+            if (resultMap.containsKey("endTime")) {
+                confirmationData.put("endTime", resultMap.get("endTime"));
+            }
             if (resultMap.containsKey("priority")) {
                 confirmationData.put("priority", resultMap.get("priority"));
             }

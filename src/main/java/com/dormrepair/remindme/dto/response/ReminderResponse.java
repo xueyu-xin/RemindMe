@@ -20,6 +20,8 @@ public class ReminderResponse {
     private String title;
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
     private LocalDateTime remindTime;
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
+    private LocalDateTime endTime;
     private String timezone;
     private Integer advanceMinutes;
     private String cronExpression;
