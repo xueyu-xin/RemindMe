@@ -29,6 +29,7 @@ public class ChatController {
     private final LLMService llmService;
     private final DialogStatsService dialogStatsService;
     private final AgentService agentService;
+    private final com.dormrepair.remindme.service.UserService userService;
 
     @Value("${agent.enabled:false}")
     private boolean agentEnabled;
@@ -180,7 +181,7 @@ public class ChatController {
 
             if (isEdit(text)) {
                 String editInput = extractEditContent(text);
-                LLMService.ParsedResult result = llmService.parseReminder(editInput);
+                LLMService.ParsedResult result = llmService.parseReminder(editInput, userId);
 
                 Map<String, Object> parsedData = new HashMap<>();
                 parsedData.put("title", result.title());
@@ -188,7 +189,7 @@ public class ChatController {
                 parsedData.put("intentType", result.intentType());
                 parsedData.put("location", result.location());
                 parsedData.put("priority", result.priority());
-                parsedData.put("advanceMinutes", result.advanceMinutes() != null ? result.advanceMinutes() : 10);
+                parsedData.put("advanceMinutes", result.advanceMinutes() != null ? result.advanceMinutes() : getDefaultAdvance(userId));
                 parsedData.put("confidence", 0.95);
 
                 if (pendingSession != null && "INFO_CONFIRM".equals(pendingSession.getStage())) {
@@ -229,7 +230,7 @@ public class ChatController {
             }
         }
 
-        LLMService.ParsedResult result = llmService.parseReminder(text);
+        LLMService.ParsedResult result = llmService.parseReminder(text, userId);
 
         if (userId != null) {
             IntentType intentType = IntentType.fromString(result.intentType());
@@ -239,7 +240,7 @@ public class ChatController {
         Map<String, Object> parsedData = new HashMap<>();
         parsedData.put("title", result.title());
         // 如果时间为null，使用默认时间（当前时间+默认提前量）
-        Integer advance = result.advanceMinutes() != null ? result.advanceMinutes() : 10;
+        Integer advance = result.advanceMinutes() != null ? result.advanceMinutes() : getDefaultAdvance(userId);
         LocalDateTime remindTime = result.remindTime() != null ? result.remindTime() : LocalDateTime.now().plusMinutes(advance);
         parsedData.put("remindTime", remindTime.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
         parsedData.put("intentType", result.intentType());
@@ -273,6 +274,16 @@ public class ChatController {
 
     private boolean isConfirm(String text) {
         return text.matches("^(确认|是的|好|ok|OK|嗯|行|可以|确定|是|好的)$");
+    }
+
+    /**
+     * 获取用户默认提前量，如果用户不存在则返回10
+     */
+    private int getDefaultAdvance(Long userId) {
+        if (userId == null) return 10;
+        return userService.getUserById(userId)
+                .map(u -> u.getDefaultAdvanceMinutes())
+                .orElse(10);
     }
 
     private boolean isCancel(String text) {

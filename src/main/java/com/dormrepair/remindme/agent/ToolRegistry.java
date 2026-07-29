@@ -296,6 +296,16 @@ public class ToolRegistry implements SmartInitializingSingleton {
             "query", "查询关键词，如'夏天省电'、'考试技巧'",
             "topK", "返回结果数量，默认为5"
         ));
+        // 女性健康工具参数描述（含限制说明，供LLM调用前判断）
+        paramDescriptions.put("updatePeriodSettingsForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "cycleDays", "月经周期天数，必须为大于0的整数，且必须大于当前的经期持续天数（可选）",
+            "periodDuration", "经期持续天数，必须为大于0的整数，且必须小于当前的月经周期（可选）"
+        ));
+        paramDescriptions.put("updatePeriodStartForAgent", Map.of(
+            "userId", "用户ID（系统自动填充）",
+            "startDate", "上次经期开始日期，格式 yyyy-MM-dd，不能晚于今天；不传则默认使用今天（可选）"
+        ));
 
         Map<String, String> descriptions = paramDescriptions.get(methodName);
         if (descriptions != null && descriptions.containsKey(paramName)) {

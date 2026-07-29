@@ -48,6 +48,7 @@ public class ConfirmationService {
     private final LLMService llmService;
     private final ConflictDetectionService conflictDetectionService;
     private final AgentService agentService;
+    private final UserService userService;
 
     @org.springframework.beans.factory.annotation.Autowired
     @org.springframework.context.annotation.Lazy
@@ -75,6 +76,10 @@ public class ConfirmationService {
             parsedTime = parseTimeFlexible(remindTimeStr);
         }
 
+        int defaultAdvance = userService.getUserById(userId)
+                .map(u -> u.getDefaultAdvanceMinutes())
+                .orElse(10);
+
         ConfirmationSession session = ConfirmationSession.builder()
                 .sessionId(sessionId)
                 .userId(userId)
@@ -84,7 +89,7 @@ public class ConfirmationService {
                 .parsedTime(parsedTime)
                 .parsedLocation((String) parsedData.get("location"))
                 .parsedPriority((String) parsedData.getOrDefault("priority", "NORMAL"))
-                .parsedAdvanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", 10))
+                .parsedAdvanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", defaultAdvance))
                 .stage("INFO_CONFIRM")
                 .status(SessionStatus.PENDING)
                 .expiresAt(expiresAt)
@@ -963,7 +968,10 @@ public class ConfirmationService {
         reminder.setPriority(Priority.valueOf(
                 ((String) parsedData.getOrDefault("priority", "NORMAL")).toUpperCase()));
         reminder.setLocation((String) parsedData.get("location"));
-        reminder.setAdvanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", 10));
+        int defaultAdvance = userService.getUserById(userId)
+                .map(u -> u.getDefaultAdvanceMinutes())
+                .orElse(10);
+        reminder.setAdvanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", defaultAdvance));
         reminder.setStatus(ReminderStatus.PENDING);
         reminder.setConfirmStatus(confirmStatus);
         reminder.setExecutionStatus(ExecutionStatus.PENDING);
@@ -976,6 +984,11 @@ public class ConfirmationService {
     private ConfirmationCardResponse buildConfirmationCard(ConfirmationSession session, Map<String, Object> parsedData) {
         boolean hasConflict = Boolean.TRUE.equals(parsedData.get("hasConflict"));
         boolean isRecurring = Boolean.TRUE.equals(parsedData.get("isRecurring"));
+        
+        Long userId = session.getUserId();
+        int defaultAdvance = userService.getUserById(userId)
+                .map(u -> u.getDefaultAdvanceMinutes())
+                .orElse(10);
 
         ConfirmationData data = ConfirmationData.builder()
                 .sessionId(session.getSessionId())
@@ -983,7 +996,7 @@ public class ConfirmationService {
                 .remindTime((String) parsedData.get("remindTime"))
                 .priority((String) parsedData.getOrDefault("priority", "NORMAL"))
                 .location((String) parsedData.get("location"))
-                .advanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", 10))
+                .advanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", defaultAdvance))
                 .confidence((Double) parsedData.getOrDefault("confidence", 0.95))
                 .hasConflict(hasConflict)
                 .conflictMessage((String) parsedData.get("conflictMessage"))

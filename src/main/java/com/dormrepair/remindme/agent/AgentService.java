@@ -85,6 +85,9 @@ public class AgentService {
                 log.info("请求包含GPS坐标: lat={}, lng={}", lat, lng);
             }
 
+            // 记录本次对话的起始位置（用于兜底总结时只取本次对话的消息，避免把历史轮次扯进来）
+            int currentTurnStartIndex = conversationMemory.getMessageCount(userId) - 1;
+
             // 获取对话历史
             List<Message> history = conversationMemory.getHistory(userId);
 
@@ -97,6 +100,7 @@ public class AgentService {
             int iteration = 0;
             int toolCallCount = 0;
             int actedFormatBlockCount = 0;   // 连续中文演戏格式拦截次数（最多2次，避免死循环）
+            int duplicateCallCount = 0;      // 连续重复调用相同工具+相同参数的次数（达到2次触发兜底总结）
 
             // 工具调用历史记录
             List<String> toolHistory = new java.util.ArrayList<>();
@@ -187,11 +191,29 @@ public class AgentService {
                     // ====================================================
                     // 重复调用检测：相同工具 + 相同参数（排除系统注入的 userId）
                     // 已成功执行过的，跳过执行，避免 LLM 陷入"反复存同一条记忆"死循环
+                    // 连续重复 2 次即视为 LLM 卡死，强制走兜底总结退出循环
                     // ====================================================
                     String signature = toolCallSignature(llmToolCall);
                     if (executedSignatures.contains(signature)) {
-                        log.warn("检测到LLM重复调用相同工具+相同参数，跳过执行: toolName={}, args={}",
-                                llmToolCall.getToolName(), llmToolCall.getArguments());
+                        duplicateCallCount++;
+                        log.warn("检测到LLM重复调用相同工具+相同参数（第{}次），跳过执行: toolName={}, args={}",
+                                duplicateCallCount, llmToolCall.getToolName(), llmToolCall.getArguments());
+
+                        if (duplicateCallCount >= 2) {
+                            // 连续 2 次重复 → LLM 卡死，强制走兜底总结
+                            log.warn("连续{}次重复调用，强制触发兜底总结退出循环", duplicateCallCount);
+                            // 只取本次对话的消息（从用户当前轮请求开始），不把历史轮次扯进来
+                            List<Message> currentTurnHistory = extractCurrentTurnHistory(history, currentTurnStartIndex);
+                            String summary = llmService.generateSummaryFromHistory(currentTurnHistory);
+                            if (summary == null || summary.isBlank()) {
+                                summary = "已为您处理完成，如需进一步帮助请告诉我～";
+                            }
+                            summary = cleanFinalResponse(summary);
+                            log.info("重复调用兜底总结完成: userId={}, 总步骤={}, 调用工具={}", userId, iteration, toolHistory);
+                            conversationMemory.addAssistantMessage(userId, summary);
+                            return buildAgentResponse(summary, lastToolResult, userId);
+                        }
+
                         String dupMsg = "【系统提示】工具 " + llmToolCall.getToolName() +
                                 " 已用相同参数执行过，不要重复调用。\n" +
                                 "请直接生成最终回复给用户（说明已完成的内容），或处理其他尚未完成的任务。";
@@ -200,6 +222,9 @@ public class AgentService {
                                 .content(dupMsg)
                                 .build());
                         continue;  // 跳过这个重复工具，继续下一个
+                    } else {
+                        // 遇到新的工具调用，重置重复计数
+                        duplicateCallCount = 0;
                     }
 
                     // 执行工具调用
@@ -289,12 +314,22 @@ public class AgentService {
                 history = conversationMemory.getHistory(userId);
             }
 
-            // 达到最大迭代次数，返回最后一次响应
-            log.warn("达到最大迭代次数 {}，返回最后响应（工具调用次数: {}）", MAX_ITERATIONS, toolCallCount);
+            // 达到最大迭代次数：调用兜底总结模块，让 LLM 基于"本次对话"的消息生成
+            // "已完成/未完成/需询问"三类总结，避免把最后一行 JSON 直接返回给用户
+            // 注意：只取本次对话的消息，不把历史轮次扯进来，防止 LLM 把之前的任务也总结进去
+            log.warn("达到最大迭代次数 {}，触发兜底总结（工具调用次数: {}）", MAX_ITERATIONS, toolCallCount);
             log.info("Agent执行完成: userId={}, 总步骤={}, 调用工具={}", userId, iteration, toolHistory);
-            String finalReply = cleanFinalResponse(llmResponse);
+            List<Message> currentTurnHistory = extractCurrentTurnHistory(history, currentTurnStartIndex);
+            String finalReply = llmService.generateSummaryFromHistory(currentTurnHistory);
             if (finalReply == null || finalReply.isBlank()) {
-                finalReply = "当前请求处理中步骤过多，请稍后重试或换一种方式描述。";
+                // 兜底总结也失败 → 退回到清理最后一行响应
+                finalReply = cleanFinalResponse(llmResponse);
+                if (finalReply == null || finalReply.isBlank()
+                        || finalReply.contains("{\"tool_call\"")) {
+                    finalReply = "当前请求处理中步骤过多，请稍后重试或换一种方式描述。";
+                }
+            } else {
+                finalReply = cleanFinalResponse(finalReply);
             }
             conversationMemory.addAssistantMessage(userId, finalReply);
             return buildAgentResponse(finalReply, lastToolResult, userId);
@@ -303,6 +338,27 @@ public class AgentService {
             log.error("Agent处理请求失败: userId={}, error={}", userId, e.getMessage(), e);
             return AgentResponse.error("处理请求时发生错误: " + e.getMessage());
         }
+    }
+
+    /**
+     * 从完整对话历史中切出"本次对话"的消息切片。
+     * <p>
+     * 用于兜底总结：只让 LLM 看到当前这一轮用户请求及其触发的工具调用/结果，
+     * 不把历史轮次的对话扯进来，避免 LLM 把之前的任务也总结进去或产生幻觉。
+     * </p>
+     *
+     * @param fullHistory 完整对话历史
+     * @param startIndex 本次对话在完整历史中的起始下标
+     * @return 本次对话的消息切片（起始下标越界时返回空列表）
+     */
+    private List<Message> extractCurrentTurnHistory(List<Message> fullHistory, int startIndex) {
+        if (fullHistory == null || fullHistory.isEmpty()) {
+            return new java.util.ArrayList<>();
+        }
+        if (startIndex < 0 || startIndex >= fullHistory.size()) {
+            return new java.util.ArrayList<>(fullHistory);
+        }
+        return new java.util.ArrayList<>(fullHistory.subList(startIndex, fullHistory.size()));
     }
 
     /**

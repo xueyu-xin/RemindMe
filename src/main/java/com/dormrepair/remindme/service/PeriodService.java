@@ -20,7 +20,9 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -43,6 +45,7 @@ public class PeriodService {
     private static final int OVULATION_OFFSET = 14;
     private static final int PREMENSTRUAL_DAYS = 3;
 
+    @Transactional
     public PeriodStatusResponse calculatePeriodStatus(User user) {
         if (user.getLastPeriodStart() == null) {
             return createUnknownStatus();
@@ -50,14 +53,29 @@ public class PeriodService {
 
         LocalDate lastPeriod = user.getLastPeriodStart();
         int cycleLength = user.getCycleDays() != null ? user.getCycleDays() : DEFAULT_CYCLE_LENGTH;
+        int periodDuration = user.getPeriodDuration() != null ? user.getPeriodDuration() : 5;
+        
+        LocalDate today = LocalDate.now();
+        
+        // 自动推进周期：如果今天已达到或超过下次预计经期日期，
+        // 则将上次经期开始日期推进到新周期，并持久化更新到数据库
+        boolean rolled = false;
+        while (today.isAfter(lastPeriod.plusDays(cycleLength - 1))) {
+            lastPeriod = lastPeriod.plusDays(cycleLength);
+            rolled = true;
+        }
+        if (rolled) {
+            user.setLastPeriodStart(lastPeriod);
+            userRepository.save(user);
+            log.info("自动推进经期周期: userId={}, newLastPeriodStart={}", user.getId(), lastPeriod);
+        }
         
         LocalDate nextPeriod = lastPeriod.plusDays(cycleLength);
         LocalDate ovulationDate = nextPeriod.minusDays(OVULATION_OFFSET);
         
-        LocalDate today = LocalDate.now();
         long daysUntilNext = ChronoUnit.DAYS.between(today, nextPeriod);
         
-        PeriodStatus status = determineStatus(lastPeriod, nextPeriod, ovulationDate, cycleLength);
+        PeriodStatus status = determineStatus(lastPeriod, nextPeriod, ovulationDate, cycleLength, periodDuration);
 
         PeriodStatusResponse response = new PeriodStatusResponse();
         response.setStatus(status.name());
@@ -182,22 +200,30 @@ public class PeriodService {
     }
 
     private PeriodStatus determineStatus(LocalDate lastPeriod, LocalDate nextPeriod, 
-                                         LocalDate ovulationDate, int cycleLength) {
+                                         LocalDate ovulationDate, int cycleLength, int periodDuration) {
         LocalDate today = LocalDate.now();
 
-        if (today.isBefore(lastPeriod.plusDays(cycleLength - PREMENSTRUAL_DAYS))) {
-            if (today.isBefore(lastPeriod.plusDays(SAFE_DAYS_AFTER_PERIOD))) {
-                return PeriodStatus.MENSTRUATING;
-            }
-            
-            if (today.isBefore(ovulationDate.minusDays(2)) || today.isAfter(ovulationDate.plusDays(2))) {
-                return PeriodStatus.SAFE;
-            }
-            
+        // 判断是否处于经期中（今天落在 lastPeriod 到 lastPeriod + periodDuration - 1 之间）
+        LocalDate periodEnd = lastPeriod.plusDays(periodDuration - 1);
+        if (!today.isBefore(lastPeriod) && !today.isAfter(periodEnd)) {
+            return PeriodStatus.MENSTRUATING;
+        }
+
+        // 判断是否处于经期前（今天距离 nextPeriod 小于等于 PREMENSTRUAL_DAYS 天）
+        LocalDate premenstrualStart = nextPeriod.minusDays(PREMENSTRUAL_DAYS);
+        if (!today.isBefore(premenstrualStart) && today.isBefore(nextPeriod)) {
+            return PeriodStatus.PREMENSTRUAL;
+        }
+
+        // 判断是否处于排卵期
+        LocalDate ovulationStart = ovulationDate.minusDays(2);
+        LocalDate ovulationEnd = ovulationDate.plusDays(2);
+        if (!today.isBefore(ovulationStart) && !today.isAfter(ovulationEnd)) {
             return PeriodStatus.OVULATORY;
         }
 
-        return PeriodStatus.PREMENSTRUAL;
+        // 默认返回安全期
+        return PeriodStatus.SAFE;
     }
 
     private String getIcon(PeriodStatus status) {
@@ -327,6 +353,12 @@ public class PeriodService {
                 result.put("message", "日期格式不正确，请使用 yyyy-MM-dd 格式");
                 return result;
             }
+            // 校验不能晚于今天（与前端、UserController 保持一致）
+            if (periodStart.isAfter(LocalDate.now())) {
+                result.put("success", false);
+                result.put("message", "上次经期开始日期不能晚于今天");
+                return result;
+            }
         }
 
         // 更新经期开始日期
@@ -345,15 +377,35 @@ public class PeriodService {
 
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
         
-        // 重新计算经期状态
+        // 重新计算经期状态（calculatePeriodStatus内部可能推进lastPeriodStart并持久化）
         PeriodStatusResponse status = calculatePeriodStatus(user);
 
+        // 用推进后的真实基准日期作为「当前记录的上次经期开始日期」回传给LLM
+        LocalDate effectiveLastPeriod = user.getLastPeriodStart();
+        int effectiveCycle = user.getCycleDays() != null ? user.getCycleDays() : DEFAULT_CYCLE_LENGTH;
+        int effectiveDuration = user.getPeriodDuration() != null ? user.getPeriodDuration() : 5;
+        LocalDate effectiveNext = effectiveLastPeriod.plusDays(effectiveCycle);
+
+        StringBuilder msg = new StringBuilder();
+        msg.append("已记录经期开始日期：").append(effectiveLastPeriod.format(formatter));
+        // 如果用户传入的 startDate 与推进后的基准日期不同，说明发生了自动周期推进，需要解释给用户
+        if (!periodStart.equals(effectiveLastPeriod)) {
+            msg.append("（您提供的").append(periodStart.format(formatter))
+               .append("已根据周期自动推进到当前周期的").append(effectiveLastPeriod.format(formatter)).append("）");
+        }
+        msg.append("；当前处于").append(status.getStatusName());
+        if (status.getNextPeriodDate() != null) {
+            msg.append("；下次经期预计：").append(status.getNextPeriodDate().format(formatter));
+        }
+
         result.put("success", true);
-        result.put("periodStartDate", periodStart.format(formatter));
-        result.put("message", "已记录经期开始日期：" + periodStart.format(formatter));
+        result.put("periodStartDate", effectiveLastPeriod.format(formatter));
+        result.put("cycleDays", effectiveCycle);
+        result.put("periodDuration", effectiveDuration);
+        result.put("message", msg.toString());
         result.put("status", status.getStatus());
         result.put("statusName", status.getStatusName());
-        result.put("nextPeriodDate", status.getNextPeriodDate() != null ? status.getNextPeriodDate().format(formatter) : null);
+        result.put("nextPeriodDate", status.getNextPeriodDate() != null ? status.getNextPeriodDate().format(formatter) : effectiveNext.format(formatter));
         result.put("daysUntilNextPeriod", status.getDaysUntilNextPeriod());
 
         return result;
@@ -376,11 +428,17 @@ public class PeriodService {
 
         boolean updated = false;
 
-        // 更新周期天数
+        // 更新周期天数（必须大于0，且大于当前经期持续天数）
         if (cycleDays != null) {
-            if (cycleDays < 20 || cycleDays > 45) {
+            if (cycleDays <= 0) {
                 result.put("success", false);
-                result.put("message", "周期天数应在 20-45 天之间");
+                result.put("message", "周期天数必须大于0");
+                return result;
+            }
+            int currentDuration = user.getPeriodDuration() != null ? user.getPeriodDuration() : 5;
+            if (cycleDays <= currentDuration) {
+                result.put("success", false);
+                result.put("message", "月经周期必须大于经期持续天数（" + currentDuration + "天）");
                 return result;
             }
             user.setCycleDays(cycleDays);
@@ -388,11 +446,18 @@ public class PeriodService {
             result.put("cycleDays", cycleDays);
         }
 
-        // 更新经期持续天数
+        // 更新经期持续天数（必须大于0且小于月经周期）
         if (periodDuration != null) {
-            if (periodDuration < 3 || periodDuration > 7) {
+            int effectiveCycle = cycleDays != null ? cycleDays
+                    : (user.getCycleDays() != null ? user.getCycleDays() : DEFAULT_CYCLE_LENGTH);
+            if (periodDuration <= 0) {
                 result.put("success", false);
-                result.put("message", "经期持续天数应在 3-7 天之间");
+                result.put("message", "经期持续天数必须大于0");
+                return result;
+            }
+            if (periodDuration >= effectiveCycle) {
+                result.put("success", false);
+                result.put("message", "经期持续天数必须小于月经周期（" + effectiveCycle + "天）");
                 return result;
             }
             user.setPeriodDuration(periodDuration);
@@ -410,16 +475,50 @@ public class PeriodService {
         log.info("Agent更新经期设置: userId={}, cycleDays={}, periodDuration={}", userId, cycleDays, periodDuration);
 
         DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-        
-        // 如果已有经期记录，重新计算经期状态
+
+        // 即使没有经期记录，也返回用户当前最新的 cycleDays 和 periodDuration 给LLM
+        int effectiveCycle = user.getCycleDays() != null ? user.getCycleDays() : DEFAULT_CYCLE_LENGTH;
+        int effectiveDuration = user.getPeriodDuration() != null ? user.getPeriodDuration() : 5;
+        result.put("cycleDays", effectiveCycle);
+        result.put("periodDuration", effectiveDuration);
+
+        // 如果已有经期记录，重新计算经期状态（内部可能推进lastPeriodStart）
+        PeriodStatusResponse status = null;
         if (user.getLastPeriodStart() != null) {
-            PeriodStatusResponse status = calculatePeriodStatus(user);
+            status = calculatePeriodStatus(user);
+            result.put("periodStartDate", user.getLastPeriodStart().format(formatter));
             result.put("nextPeriodDate", status.getNextPeriodDate() != null ? status.getNextPeriodDate().format(formatter) : null);
             result.put("daysUntilNextPeriod", status.getDaysUntilNextPeriod());
+            result.put("status", status.getStatus());
+            result.put("statusName", status.getStatusName());
+        }
+
+        // 组装详细说明，LLM直接可以参考这份message给用户回复
+        StringBuilder msg = new StringBuilder();
+        List<String> changes = new ArrayList<>();
+        if (cycleDays != null) {
+            changes.add("月经周期更新为" + cycleDays + "天");
+        }
+        if (periodDuration != null) {
+            changes.add("经期持续天数更新为" + periodDuration + "天");
+        }
+        if (!changes.isEmpty()) {
+            msg.append(String.join("，", changes)).append("。");
+        } else {
+            msg.append("经期设置已更新。");
+        }
+        if (user.getLastPeriodStart() != null) {
+            msg.append("上次经期开始日期：").append(user.getLastPeriodStart().format(formatter)).append("；");
+            if (status != null) {
+                msg.append("当前处于").append(status.getStatusName()).append("；");
+                if (status.getNextPeriodDate() != null) {
+                    msg.append("下次经期预计：").append(status.getNextPeriodDate().format(formatter));
+                }
+            }
         }
 
         result.put("success", true);
-        result.put("message", "经期设置已更新");
+        result.put("message", msg.toString());
 
         return result;
     }

@@ -196,13 +196,35 @@ public class ReminderService {
             // 解析时间
             LocalDateTime parsedTime = LocalDateTime.parse(remindTime, FORMATTER);
             
+            // 获取用户默认提前量
+            int defaultAdvance = userRepository.findById(userId)
+                    .map(User::getDefaultAdvanceMinutes)
+                    .orElse(10);
+            
+            LocalDateTime now = LocalDateTime.now();
+            long diffMinutes = java.time.Duration.between(now, parsedTime).toMinutes();
+            int finalAdvance;
+            
+            if(diffMinutes <= 1 && diffMinutes >= -1) {
+                // 用户说"等会"/"等一下" → 使用用户默认提前量
+                parsedTime = now.plusMinutes(defaultAdvance);
+                remindTime = parsedTime.format(FORMATTER);
+                finalAdvance = defaultAdvance;
+            } else if(diffMinutes > 1 && diffMinutes <= 1440) {
+                // 用户说"X分钟后" → 使用实际差值作为提前量
+                finalAdvance = (int) diffMinutes;
+            } else {
+                // 其他明确时间（如明天下午3点）→ 使用默认提前量
+                finalAdvance = defaultAdvance;
+            }
+            
             // 构建解析数据，用于确认会话
             Map<String, Object> parsedData = new HashMap<>();
             parsedData.put("title", title);
             parsedData.put("remindTime", remindTime);
             parsedData.put("location", location);
             parsedData.put("priority", priority != null ? priority : "NORMAL");
-            parsedData.put("advanceMinutes", 10);
+            parsedData.put("advanceMinutes", finalAdvance);
             parsedData.put("source", "USER_INPUT");
             parsedData.put("intentType", "REMINDER");
             

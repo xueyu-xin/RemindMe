@@ -38,14 +38,29 @@ public class LLMService {
 
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
+    private final UserService userService;
 
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     /**
-     * 解析用户输入（原有方法，保持兼容）
+     * 解析用户输入（原有方法，保持兼容，使用默认10分钟）
      */
     public ParsedResult parseReminder(String userInput) {
-        log.info("开始解析用户输入: {}", userInput);
+        return parseReminder(userInput, null);
+    }
+
+    /**
+     * 解析用户输入，并根据用户ID获取其默认提前量
+     */
+    public ParsedResult parseReminder(String userInput, Long userId) {
+        int defaultAdvance = 10;
+        if (userId != null) {
+            defaultAdvance = userService.getUserById(userId)
+                    .map(u -> u.getDefaultAdvanceMinutes())
+                    .orElse(10);
+        }
+
+        log.info("开始解析用户输入: {}, userId: {}", userInput, userId);
         String prompt = buildPrompt(userInput);
 
         try {
@@ -59,13 +74,15 @@ public class LLMService {
 
             JsonNode root = objectMapper.readTree(content);
 
+            int advanceMinutes = root.has("advanceMinutes") ? root.get("advanceMinutes").asInt() : defaultAdvance;
+
             return ParsedResult.builder()
                     .title(root.has("title") ? root.get("title").asText() : null)
                     .remindTime(root.has("remindTime") ? parseDateTime(root.get("remindTime").asText()) : null)
                     .intentType(root.has("intentType") ? root.get("intentType").asText() : "UNKNOWN")
                     .location(root.has("location") ? root.get("location").asText() : null)
                     .priority(root.has("priority") ? root.get("priority").asText() : "NORMAL")
-                    .advanceMinutes(root.has("advanceMinutes") ? root.get("advanceMinutes").asInt() : 10)
+                    .advanceMinutes(advanceMinutes)
                     .build();
 
         } catch (Exception e) {
@@ -74,7 +91,7 @@ public class LLMService {
             return ParsedResult.builder()
                     .title(userInput)
                     .intentType("UNKNOWN")
-                    .advanceMinutes(10)
+                    .advanceMinutes(defaultAdvance)
                     .build();
         }
     }
@@ -104,8 +121,96 @@ public class LLMService {
                     response.getMetadata() != null && response.getMetadata().getUsage() != null
                             ? response.getMetadata().getUsage().getTotalTokens() : "unknown");
         }
-        
+
         return content;
+    }
+
+    /**
+     * 兜底总结方法：不挂任何工具，基于"本次对话"的消息让 LLM 生成最终自然语言总结。
+     * <p>
+     * 适用场景：
+     * 1. Agent 达到最大迭代次数仍未结束循环（往往因为 LLM 陷入重复工具调用）；
+     * 2. 连续多次检测到 LLM 重复调用相同工具+相同参数，强制收尾。
+     * <p>
+     * 调用方应只传入"本次对话"的消息切片（从用户当前轮请求开始），
+     * 不能传全量历史——否则 LLM 会把历史轮次的任务也总结进去。
+     * <p>
+     * 要求 LLM 明确分三类回复用户：
+     *   ✅ 已完成的、❌ 未完成的、❓ 需要向用户询问的。
+     *
+     * @param history 本次对话的消息切片（含用户原始请求、工具调用与结果）
+     * @return 自然语言总结回复；若 LLM 失败返回 null
+     */
+    public String generateSummaryFromHistory(List<Message> history) {
+        log.info("开始生成兜底总结回复: currentTurnHistorySize={}", history == null ? 0 : history.size());
+
+        String summaryPrompt = """
+                你是智能提醒助手的收尾总结模块。当前对话已达到执行上限或检测到重复调用，需要你根据【本次对话】的消息生成最终自然语言回复。
+
+                ⚠️ 你看到的对话历史只包含【本次对话】的内容（用户当前这一轮请求及其触发的工具调用/结果），
+                不包含之前的对话轮次。你只能基于这部分内容总结，绝对禁止提及本次对话之外的任务。
+
+                请严格遵守以下规则：
+                1. 严禁再次输出任何 {"tool_call": ...} 格式的 JSON，只能输出自然语言回复。
+                2. 【反幻觉铁律】严禁编造、严禁脑补、严禁推测：
+                   a) 不能把"没调用过工具"说成"已完成"；
+                   b) 不能把"工具返回 success=false"说成"已成功"；
+                   c) 不能把"工具返回的结果"以外的内容当成事实陈述给用户；
+                   d) 工具返回 message 里写了什么，你才能说什么；message 没写的，绝对不能自己补充。
+                   ❌ 错误示例（幻觉）：本次只调用了 update_period_settings，没调用 update_period_start，
+                      但你回复"上次经期开始日期已记录为 6-29"——这是编造！
+                   ✅ 正确做法：只说 update_period_settings 实际返回的内容（如"经期周期已更新为31天"），
+                      对于未调用的部分，归到"❌ 未完成的"里说明"上次经期开始日期未设置"。
+                3. 必须按三类清晰回复：
+                   ✅ 已完成的：仅根据对话中工具返回 success=true 的内容，逐条说明完成了什么；
+                   ❌ 未完成的：用户要求但工具未成功执行、或根本没调用对应工具的部分，说明原因；
+                   ❓ 需要询问的：用户表述缺失关键参数的部分，明确向用户提问。
+                4. 三类都要覆盖，没有某类就省略；至少要有"已完成的"或"未完成的"其中之一。
+                5. 回复语气要自然、温暖，像朋友聊天，可适当使用 emoji。
+                6. 不要再提及"系统提示""达到上限""重复调用"等内部细节。
+                7. 严禁出现"已经记录过啦/之前已经完成/你已经说过啦"等冗余话术（除非工具结果明确返回"已存在相同日程"）。
+                """;
+
+        try {
+            List<org.springframework.ai.chat.messages.Message> messages = new ArrayList<>();
+            messages.add(new SystemMessage(summaryPrompt));
+
+            if (history != null) {
+                for (Message msg : history) {
+                    if ("user".equals(msg.getRole())) {
+                        messages.add(new UserMessage(msg.getContent()));
+                    } else if ("assistant".equals(msg.getRole())) {
+                        messages.add(new AssistantMessage(msg.getContent()));
+                    } else if ("system".equals(msg.getRole())) {
+                        messages.add(new SystemMessage(msg.getContent()));
+                    } else if ("tool".equals(msg.getRole())) {
+                        StringBuilder toolContent = new StringBuilder();
+                        if (msg.getToolCall() != null) {
+                            toolContent.append("工具调用: ").append(msg.getToolCall().getToolName())
+                                    .append(", 参数: ").append(msg.getToolCall().getArguments());
+                        }
+                        if (msg.getContent() != null && !msg.getContent().isBlank()) {
+                            if (toolContent.length() > 0) toolContent.append("\n");
+                            toolContent.append("工具执行结果: ").append(msg.getContent());
+                        }
+                        if (toolContent.length() > 0) {
+                            messages.add(new UserMessage(toolContent.toString()));
+                        }
+                    }
+                }
+            }
+
+            messages.add(new UserMessage("请根据以上对话历史，生成给用户的最终自然语言总结回复。"));
+
+            Prompt prompt = new Prompt(messages);
+            ChatResponse response = chatModel.call(prompt);
+            String content = response.getResult().getOutput().getText();
+            log.info("兜底总结回复生成完成: {}", content);
+            return content;
+        } catch (Exception e) {
+            log.error("生成兜底总结回复失败: {}", e.getMessage(), e);
+            return null;
+        }
     }
 
     /**
@@ -940,6 +1045,19 @@ public class LLMService {
               ❓ 缺参需要询问的：先不调任何工具，直接向用户发问，问清缺失参数（如"请问你要修改的是哪一个提醒？"），等用户下次回复再调
               三类都要覆盖，不能只说成功不说失败/待问。
 
+            ====== 措辞禁用清单（严格遵守，违反任何一条视为严重错误）======
+            1. 绝对禁止在回复中出现以下冗余/重复话术，它们在任何工具成功场景下都不允许出现：
+               ❌ "已经记录过啦"、"之前已经记录过"、"已经设过啦"
+               ❌ "你已经说过啦"、"我之前就记下了"
+               ❌ "之前已经完成了哦"、"之前就弄好了"、"之前已经做了"
+               ❌ "之前已经修改完成啦" 等所有带"已经/之前/早就"暗示重复、多此一举的表达方式
+            2. 唯一例外：创建提醒时，系统返回的结果中明确出现了"该时间已有相同标题的提醒"、"已存在相同日程"等重复提醒字样，
+               此时才可以说"该时间已有相同标题的提醒哦"，除这个场景外，其他所有场景绝对禁用上述表达。
+            3. 昵称/城市/提前量等偏好修改成功 → 正确措辞：
+               ✅ "昵称已改为小佳啦 😊"
+               ✅ "默认城市已更新为北京～"
+               （直接陈述结果，不要加"之前已经完成了哦"之类的尾巴）
+
             工具调用失败处理规则（非常重要！请严格遵守）：
             1. 如果工具返回 success=false，说明操作失败，必须向用户说明失败原因
             2. 禁止生成"已设定"、"已创建"、"已取消"等虚假成功回复
@@ -1033,6 +1151,29 @@ public class LLMService {
             4. 更新经期设置：
                - 用户说"周期改成30天"、"经期持续5天"、"我的周期是35天"
                → 调用 update_period_settings
+               - 用户说"上次经期是X号"、"把上次经期开始日期改成X月X日"
+               → 调用 update_period_start（startDate 参数）
+
+            三个参数的限制规则（修改时必须严格遵守）：
+            - 月经周期（cycleDays）：必须为大于0的整数，且必须大于当前的经期持续天数
+            - 经期持续天数（periodDuration）：必须为大于0的整数，且必须小于当前的月经周期
+            - 上次经期开始日期（startDate）：格式 yyyy-MM-dd，不能晚于今天
+
+            修改这三个参数时的处理原则（非常重要！）：
+            - 用户提供的新值符合上述限制 → 不要追问、不要提醒，直接调用对应工具完成修改
+            - 用户提供的新值不符合限制 → 不要调用工具，直接提醒用户具体哪里不符合
+              （例如："经期持续天数必须小于月经周期，您当前的月经周期是28天，无法设置为30天"）
+            - 用户同时修改月经周期和经期持续天数时，要保证 新周期 > 新持续天数
+            - 参数合规即改、不合规才提醒，禁止对合规值反复确认
+
+            经期工具调用规则（非常重要！）：
+            - 用户一句话中同时给出多个经期参数（例如同时说了"6月29日来的，周期31天，持续7天"）：
+              ① 先调用 update_period_settings 同时传入 cycleDays 和 periodDuration（两个数字一起传）；
+              ② 再调用 update_period_start 传入 startDate=用户说的日期；
+              两个工具都要 success=true 才完成，不要漏传任何一个。
+            - 工具执行成功后，必须把工具返回 message 中的关键信息清晰地复述给用户，包括：
+              上次经期开始日期、当前处于什么时期、下次经期预计日期；
+              如果 message 中写了"自动推进到 XXXX-XX-XX"，必须在回复中明确解释，不能只说"已记录"。
 
             注意事项：
             - 如果用户未设置性别为女性，工具会返回提示，请将提示转告用户
@@ -1046,17 +1187,31 @@ public class LLMService {
 
             调用工具并收到执行结果后，必须判断任务是否已完成：
 
-            如果工具返回 success: true，说明任务已完成
-              → 立即生成自然语言回复，告诉用户结果
-              → 不要再调用任何工具，直接结束
+            如果工具返回 success: true，说明该子任务已完成
+              → 绝对禁止再次用相同参数调用同一个工具！
+              → 检查用户原始请求里还有没有其他子任务需要处理：
+                 · 还有 → 继续调用下一个工具处理其他子任务
+                 · 没有了 → 立即生成自然语言回复，告诉用户结果，结束本轮对话
 
             如果工具返回 success: false，说明任务失败
               → 查看错误信息，判断是否需要重试
-              → 如果需要重试，可以再次调用工具
+              → 如果需要重试，可以再次调用工具（但要修正参数，禁止用完全相同的参数重试）
               → 如果不需要重试，告诉用户失败原因
 
             如果工具返回成功，但用户还有后续要求
               → 可以继续调用下一个工具
+
+            ====== 防重复调用铁律（违反即视为严重错误）======
+            1. 一个工具用相同参数调用成功后，绝对禁止再次用相同参数调用同一工具！
+               ❌ 错误示例：update_period_settings(cycleDays=31, periodDuration=7) 已 success=true，
+                  再次调用 update_period_settings(cycleDays=31, periodDuration=7)
+               ✅ 正确做法：第一次 success=true 后直接生成回复，或处理其他子任务
+            2. 收到 success=true 的工具结果后，下一步只能是：
+               a) 生成最终自然语言回复（任务全部完成时）
+               b) 调用另一个不同的工具处理下一个子任务（用户还有其他需求时）
+               绝对不可能是"再用相同参数调同一个工具"。
+            3. 如果发现自己在重复调用相同工具+相同参数，请立即停止工具调用，
+               直接用自然语言总结已完成的内容回复用户。
 
             示例：
 
@@ -1064,6 +1219,12 @@ public class LLMService {
               → 调用 update_period_start → 返回 success: true
               → ✅ 任务完成，回复"已记录今天为经期开始日期 🌙"
               → ❌ 不要再调用 update_period_start
+
+            用户："我上次经期是6月29日，周期31天，持续7天"
+              → 第1步：调用 update_period_settings(cycleDays=31, periodDuration=7) → success: true
+              → 第2步：调用 update_period_start(startDate="2026-06-29") → success: true
+              → ✅ 所有子任务完成，生成自然语言回复，总结经期设置情况
+              → ❌ 不要再调用 update_period_settings 或 update_period_start
 
             用户："查北京天气，如果下雨提醒我带伞"
               → 调用 query_weather_now → 返回天气数据（success: true）
@@ -1179,7 +1340,7 @@ public class LLMService {
             模糊时间解析规则（非常重要！请严格遵守）：
             ================================================
             当用户使用以下模糊时间表达时，请自动解析为具体时间：
-            1. "等会"、"待会"、"过一会儿"、"一会儿" → 当前时间+10分钟
+            1. "等会"、"待会"、"过一会儿"、"一会儿"、"等一下" → 当前时间（advanceMinutes留空，后端会使用用户设置的默认提前量）
             2. "5分钟后"、"5分后" → 当前时间+5分钟
             3. "10分钟后" → 当前时间+10分钟
             4. "30分钟后" → 当前时间+30分钟
@@ -1190,7 +1351,7 @@ public class LLMService {
             
             示例：
             用户输入："等会提醒我拿快递"
-            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "拿快递", "remindTime": "当前时间+10分钟"}}}
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "拿快递", "remindTime": "当前时间"}}}
             
             用户输入："5分钟后提醒我喝水"
             你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "喝水", "remindTime": "当前时间+5分钟"}}}
@@ -1202,6 +1363,7 @@ public class LLMService {
             你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "提醒", "remindTime": "当前时间"}}}
             
             注意：不要追问用户"等会是多久"，直接按照规则解析并创建提醒！
+            注意：只有当用户明确说了"X分钟"/"X小时"时才设置对应时间；对于"等会"/"等一下"这类模糊表达，remindTime设为当前时间即可，后端会自动加上用户默认提前量。
 
             ================================================
             位置查询规则：
@@ -1320,7 +1482,7 @@ public class LLMService {
                - intentType: 意图类型（REMINDER/QUERY/DELETE/UPDATE/CONFIRM/CANCEL/WEATHER/UNKNOWN）
                - location: 地点（字符串，可选）
                - priority: 优先级（LOW/NORMAL/HIGH，默认NORMAL）
-               - advanceMinutes: 默认提前量（整数，可选，默认10分钟）
+               - advanceMinutes: 默认提前量（整数，可选。注意：对于"等会"/"等一下"等模糊时间不要设置此字段，后端会使用用户的默认提前量。只有明确说了X分钟/小时才设置）
             
             时间解析规则：
             - "明天下午3点" → 当前日期+1天，15:00:00
@@ -1329,11 +1491,11 @@ public class LLMService {
             - "周一上午10点" → 最近的周一，10:00:00
             - "每天早上7点" → 今天，07:00:00（重复提醒）
             - "5分钟后" → 当前时间+5分钟，advanceMinutes=5
-            - "等会"、"待会"、"过一会儿"、"一会儿" → 当前时间+10分钟，advanceMinutes=10
+            - "等会"、"待会"、"过一会儿"、"一会儿"、"等一下" → 当前时间，advanceMinutes不设置
             - "30分钟后" → 当前时间+30分钟，advanceMinutes=30
             - "1小时后" → 当前时间+60分钟，advanceMinutes=60
             - "现在"、"马上" → 当前时间，advanceMinutes=0
-            - 如果无法解析时间，返回当前时间+10分钟，advanceMinutes=10
+            - 如果无法解析时间，返回当前时间，advanceMinutes不设置（后端使用用户默认提前量）
             
             示例输入："明天下午3点还书"
             示例输出：{"title":"还书","remindTime":"%s","intentType":"REMINDER","location":null,"priority":"NORMAL"}

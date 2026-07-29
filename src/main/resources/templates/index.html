@@ -555,7 +555,27 @@
             transform: translateY(-1px);
             box-shadow: var(--shadow-hover);
         }
-        #calendarTitle { font-size: 16px; color: var(--brown-deep); letter-spacing: 1px; }
+        #calendarTitle { font-size: 16px; color: var(--brown-deep); letter-spacing: 1px; cursor: pointer; user-select: none; padding: 4px 10px; border-radius: 8px; transition: background 0.2s; }
+        #calendarTitle:hover { background: var(--peach-pale); }
+
+        /* ===== 日期跳转弹窗 ===== */
+        .date-picker-container { display: flex; flex-direction: column; gap: 16px; margin-bottom: 20px; }
+        .date-picker-selects { display: flex; justify-content: space-around; gap: 20px; padding: 0 10px; }
+        .date-picker-select-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+        .date-picker-select-col label { font-size: 12px; color: var(--brown-light); }
+        .date-picker-select-col select {
+            width: 100%;
+            height: 48px;
+            padding: 0 8px;
+            border: 1px solid var(--peach-pale);
+            border-radius: 8px;
+            background: var(--cream-bg);
+            color: var(--brown-deep);
+            font-size: 15px;
+            outline: none;
+            cursor: pointer;
+        }
+        .date-picker-select-col select:focus { border-color: var(--peach); box-shadow: 0 0 0 3px rgba(255,181,167,0.15); }
         #scheduleList { padding: 16px 0 0; border-top: 1px solid var(--peach-pale); overflow-y: auto; flex: 1; min-height: 0; }
 
         #scheduleItems { min-height: 80px; }
@@ -1539,6 +1559,20 @@
                             <span class="settings-arrow">›</span>
                         </span>
                     </div>
+                    <div class="settings-item" onclick="showEditModal('periodDuration', '经期持续天数')">
+                        <span class="settings-label">经期持续天数</span>
+                        <span class="settings-value">
+                            <span id="valuePeriodDuration">5天</span>
+                            <span class="settings-arrow">›</span>
+                        </span>
+                    </div>
+                    <div class="settings-item" onclick="showLastPeriodStartModal()">
+                        <span class="settings-label">上次经期开始日期</span>
+                        <span class="settings-value">
+                            <span id="valueLastPeriodStart">--</span>
+                            <span class="settings-arrow">›</span>
+                        </span>
+                    </div>
                     <div class="settings-item">
                         <span class="settings-label">开启经期提醒</span>
                         <span class="settings-value">
@@ -1579,6 +1613,9 @@
                         <div class="city-search-results" id="citySearchResults"></div>
                     </div>
                 </div>
+                <div class="date-picker-wrapper" id="modalDatePicker" style="display:none;">
+                    <input type="date" class="modal-input" id="modalDateInput">
+                </div>
                 <div class="modal-buttons">
                     <button class="modal-btn cancel" onclick="hideModal()">取消</button>
                     <button class="modal-btn confirm" onclick="confirmModal()">确认</button>
@@ -1593,6 +1630,32 @@
                 <div class="modal-buttons">
                     <button class="modal-btn cancel" onclick="hideLogoutModal()">取消</button>
                     <button class="modal-btn confirm" style="background:#e74c3c;" onclick="confirmLogout()">退出</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="jumpDateModal" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-title">跳转到日期</div>
+                <div class="date-picker-container">
+                    <div class="date-picker-selects" id="datePickerSelects">
+                        <div class="date-picker-select-col">
+                            <label>年</label>
+                            <select id="pickerYearSelect" size="10" onchange="onYearChange()"></select>
+                        </div>
+                        <div class="date-picker-select-col">
+                            <label>月</label>
+                            <select id="pickerMonthSelect" size="10" onchange="onMonthChange()"></select>
+                        </div>
+                        <div class="date-picker-select-col">
+                            <label>日</label>
+                            <select id="pickerDaySelect" size="10"></select>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-buttons">
+                    <button class="modal-btn cancel" onclick="hideJumpDateModal()">取消</button>
+                    <button class="modal-btn confirm" onclick="confirmJumpDate()">跳转</button>
                 </div>
             </div>
         </div>
@@ -2993,7 +3056,7 @@
             var defaultTab = 'chat';
             switchTab(defaultTab);
             rotatePrompt();
-            setInterval(rotatePrompt, 3000);
+            setInterval(rotatePrompt, 5000);
             connectWebSocket();
 
             // 回车发送消息
@@ -3035,7 +3098,8 @@
             '你可以这样问我：明天下午3点提醒我还书',
             '__TIME_GREETING__',
             '想了解如何使用小助手，可以输入"使用手册"哦',
-            '设置个提醒吧，我来帮你记住！'
+            '设置个提醒吧，我来帮你记住！',
+            '日程日历中点击顶部日期标题可打开日期跳转器'
         ];
         var promptIndex = 0;
         function rotatePrompt() {
@@ -4285,9 +4349,18 @@
 
         function prevPeriod() {
             if (viewMode === 'month') {
+                if (currentYear <= DATE_PICKER_MIN_YEAR && currentMonth <= 1) {
+                    showToast('已到达最早可查看日期', false);
+                    return;
+                }
                 if (currentMonth === 1) { currentMonth = 12; currentYear--; }
                 else { currentMonth--; }
             } else {
+                var prevWeekRange = getTodayWeekRange(currentWeekOffset - 1);
+                if (prevWeekRange.monday.getFullYear() < DATE_PICKER_MIN_YEAR) {
+                    showToast('已到达最早可查看日期', false);
+                    return;
+                }
                 currentWeekOffset--;
             }
             selectedDate = null;
@@ -4296,9 +4369,18 @@
 
         function nextPeriod() {
             if (viewMode === 'month') {
+                if (currentYear >= DATE_PICKER_MAX_YEAR && currentMonth >= 12) {
+                    showToast('已到达最晚可查看日期', false);
+                    return;
+                }
                 if (currentMonth === 12) { currentMonth = 1; currentYear++; }
                 else { currentMonth++; }
             } else {
+                var nextWeekRange = getTodayWeekRange(currentWeekOffset + 1);
+                if (nextWeekRange.sunday.getFullYear() > DATE_PICKER_MAX_YEAR) {
+                    showToast('已到达最晚可查看日期', false);
+                    return;
+                }
                 currentWeekOffset++;
             }
             selectedDate = null;
@@ -4344,6 +4426,12 @@
                     document.getElementById('periodSettings').style.display = 'block';
                     document.getElementById('periodHelpIcon').style.display = 'inline-flex';
                     document.getElementById('valueCycle').textContent = (data.cycleDays || 28) + '天';
+                    document.getElementById('valuePeriodDuration').textContent = (data.periodDuration || 5) + '天';
+                    if (data.lastPeriodStart) {
+                        document.getElementById('valueLastPeriodStart').textContent = data.lastPeriodStart;
+                    } else {
+                        document.getElementById('valueLastPeriodStart').textContent = '--';
+                    }
 
                     var toggle = document.getElementById('togglePeriodReminder');
                     if (data.enablePeriodReminder) {
@@ -4506,15 +4594,42 @@
             document.getElementById('modalInput').style.display = 'block';
             document.getElementById('modalOptions').style.display = 'none';
             document.getElementById('modalCityPicker').style.display = 'none';
+            document.getElementById('modalDatePicker').style.display = 'none';
 
             var value = '';
             if (field === 'nickname') value = document.getElementById('valueNickname').textContent;
             else if (field === 'city') value = document.getElementById('valueCity').textContent;
             else if (field === 'cycleDays') value = document.getElementById('valueCycle').textContent.replace('天', '');
+            else if (field === 'periodDuration') value = document.getElementById('valuePeriodDuration').textContent.replace('天', '');
 
             document.getElementById('modalInput').value = value;
             document.getElementById('modalOverlay').classList.add('show');
             document.getElementById('modalInput').focus();
+        }
+
+        function showLastPeriodStartModal() {
+            currentEditField = 'lastPeriodStart';
+            currentEditType = 'date';
+            document.getElementById('modalTitle').textContent = '上次经期开始日期';
+            document.getElementById('modalInput').style.display = 'none';
+            document.getElementById('modalOptions').style.display = 'none';
+            document.getElementById('modalCityPicker').style.display = 'none';
+            document.getElementById('modalDatePicker').style.display = 'block';
+
+            var dateInput = document.getElementById('modalDateInput');
+            // 回显当前值
+            var currentVal = document.getElementById('valueLastPeriodStart').textContent.trim();
+            if (currentVal && currentVal !== '--') {
+                dateInput.value = currentVal;
+            } else {
+                dateInput.value = '';
+            }
+            // 限制最大日期为今天
+            var today = new Date();
+            var todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+            dateInput.max = todayStr;
+
+            document.getElementById('modalOverlay').classList.add('show');
         }
 
         function showGenderModal() {
@@ -4524,6 +4639,7 @@
             document.getElementById('modalInput').style.display = 'none';
             document.getElementById('modalOptions').style.display = 'flex';
             document.getElementById('modalCityPicker').style.display = 'none';
+            document.getElementById('modalDatePicker').style.display = 'none';
 
             var currentValue = document.getElementById('valueGender').textContent;
             var options = [
@@ -4548,6 +4664,7 @@
             document.getElementById('modalInput').style.display = 'none';
             document.getElementById('modalOptions').style.display = 'flex';
             document.getElementById('modalCityPicker').style.display = 'none';
+            document.getElementById('modalDatePicker').style.display = 'none';
 
             var currentValue = parseInt(document.getElementById('valueAdvance').textContent);
             var options = [5, 10, 15, 30, 60];
@@ -4568,6 +4685,7 @@
             document.getElementById('modalInput').style.display = 'none';
             document.getElementById('modalOptions').style.display = 'none';
             document.getElementById('modalCityPicker').style.display = 'flex';
+            document.getElementById('modalDatePicker').style.display = 'none';
 
             // 重置选中状态
             selectedCityValue = null;
@@ -4753,6 +4871,49 @@
             if (currentEditType === 'input') {
                 value = document.getElementById('modalInput').value.trim();
                 if (!value) return;
+
+                // 月经周期校验：大于0的整数，且大于当前经期持续天数
+                if (currentEditField === 'cycleDays') {
+                    var cycleNum = parseInt(value, 10);
+                    if (isNaN(cycleNum) || String(cycleNum) !== value || cycleNum <= 0) {
+                        showToast('月经周期必须为大于0的整数', false);
+                        return;
+                    }
+                    var currentDuration = parseInt(document.getElementById('valuePeriodDuration').textContent.replace('天', ''), 10) || 5;
+                    if (cycleNum <= currentDuration) {
+                        showToast('月经周期必须大于经期持续天数（' + currentDuration + '天）', false);
+                        return;
+                    }
+                    value = cycleNum;
+                }
+
+                // 经期持续天数校验：大于0且小于月经周期的整数
+                if (currentEditField === 'periodDuration') {
+                    var durNum = parseInt(value, 10);
+                    if (isNaN(durNum) || String(durNum) !== value || durNum <= 0) {
+                        showToast('经期持续天数必须为大于0的整数', false);
+                        return;
+                    }
+                    var currentCycle = parseInt(document.getElementById('valueCycle').textContent.replace('天', ''), 10) || 28;
+                    if (durNum >= currentCycle) {
+                        showToast('经期持续天数必须小于月经周期（' + currentCycle + '天）', false);
+                        return;
+                    }
+                    value = durNum;
+                }
+            } else if (currentEditType === 'date') {
+                value = document.getElementById('modalDateInput').value.trim();
+                if (!value) {
+                    showToast('请选择日期', false);
+                    return;
+                }
+                // 校验不晚于今天
+                var today = new Date();
+                var todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+                if (value > todayStr) {
+                    showToast('上次经期开始日期不能晚于今天', false);
+                    return;
+                }
             } else if (currentEditType === 'city') {
                 // 必须从列表中选择城市，不能自己随便输入保存
                 if (!selectedCityValue) {
@@ -4785,7 +4946,26 @@
             .then(function(response) {
                 if (response.ok) {
                     return response.json().then(function(data) {
-                        updateProfileDisplay(currentEditField, value);
+                        // 经期三个字段：用后端返回的最新值更新显示
+                        // （后端 calculatePeriodStatus 可能自动推进了 lastPeriodStart，
+                        //   所以前端不能用用户输入的旧值，必须用后端返回的最新值）
+                        var u = data.user || {};
+                        var periodValFields = ['cycleDays', 'lastPeriodStart', 'periodDuration'];
+                        if (periodValFields.indexOf(currentEditField) !== -1) {
+                            if (u.cycleDays != null) {
+                                document.getElementById('valueCycle').textContent = u.cycleDays + '天';
+                            }
+                            if (u.periodDuration != null) {
+                                document.getElementById('valuePeriodDuration').textContent = u.periodDuration + '天';
+                            }
+                            document.getElementById('valueLastPeriodStart').textContent = u.lastPeriodStart || '--';
+                        } else {
+                            updateProfileDisplay(currentEditField, value);
+                            // 即使用户改的不是 lastPeriodStart，后端也可能自动推进了它
+                            if (u.lastPeriodStart != null) {
+                                document.getElementById('valueLastPeriodStart').textContent = u.lastPeriodStart;
+                            }
+                        }
                         hideModal();
                         showToast('修改成功', true);
 
@@ -4796,7 +4976,13 @@
                         }
                     });
                 } else {
-                    showToast('修改失败，请重试', false);
+                    // 后端校验失败：显示后端返回的错误消息
+                    return response.json().then(function(errData) {
+                        var msg = (errData && errData.message) ? errData.message : '修改失败，请重试';
+                        showToast(msg, false);
+                    }).catch(function() {
+                        showToast('修改失败，请重试', false);
+                    });
                 }
             })
             .catch(function() {
@@ -4843,6 +5029,10 @@
                 document.getElementById('valueAdvance').textContent = value + '分钟';
             } else if (field === 'cycleDays') {
                 document.getElementById('valueCycle').textContent = value + '天';
+            } else if (field === 'periodDuration') {
+                document.getElementById('valuePeriodDuration').textContent = value + '天';
+            } else if (field === 'lastPeriodStart') {
+                document.getElementById('valueLastPeriodStart').textContent = value || '--';
             }
         }
 
@@ -4876,6 +5066,112 @@
             localStorage.clear();
             window.location.href = '/login';
         }
+
+        // ===== 日期跳转弹窗 =====
+        var DATE_PICKER_MIN_YEAR = 1900;
+        var DATE_PICKER_MAX_YEAR = 3000;
+        var datePickerState = {
+            year: 2026,
+            month: 7,
+            day: 1
+        };
+
+        function daysInMonth(year, month) {
+            return new Date(year, month, 0).getDate();
+        }
+
+        function showJumpDateModal() {
+            var now = new Date();
+            datePickerState.year = now.getFullYear();
+            datePickerState.month = now.getMonth() + 1;
+            datePickerState.day = now.getDate();
+            renderDatePicker();
+            document.getElementById('jumpDateModal').classList.add('show');
+        }
+
+        function hideJumpDateModal() {
+            document.getElementById('jumpDateModal').classList.remove('show');
+        }
+
+        function renderDatePicker() {
+            var yearSelect = document.getElementById('pickerYearSelect');
+            var monthSelect = document.getElementById('pickerMonthSelect');
+            var daySelect = document.getElementById('pickerDaySelect');
+
+            // 年
+            var yearHtml = '';
+            for(var y = DATE_PICKER_MIN_YEAR; y <= DATE_PICKER_MAX_YEAR; y++) {
+                yearHtml += '<option value="' + y + '"' + (y===datePickerState.year?' selected':'') + '>' + y + '</option>';
+            }
+            yearSelect.innerHTML = yearHtml;
+            yearSelect.value = datePickerState.year;
+
+            // 月
+            var monthHtml = '';
+            for(var m = 1; m <= 12; m++) {
+                monthHtml += '<option value="' + m + '"' + (m===datePickerState.month?' selected':'') + '>' + m + '月</option>';
+            }
+            monthSelect.innerHTML = monthHtml;
+            monthSelect.value = datePickerState.month;
+
+            // 日
+            var maxDay = getMaxDay();
+            if(datePickerState.day > maxDay) datePickerState.day = maxDay;
+            var dayHtml = '';
+            for(var d = 1; d <= maxDay; d++) {
+                dayHtml += '<option value="' + d + '"' + (d===datePickerState.day?' selected':'') + '>' + d + '日</option>';
+            }
+            daySelect.innerHTML = dayHtml;
+            daySelect.value = datePickerState.day;
+        }
+
+        function getMaxDay() {
+            return daysInMonth(datePickerState.year, datePickerState.month);
+        }
+
+        function onYearChange() {
+            datePickerState.year = parseInt(document.getElementById('pickerYearSelect').value);
+            renderDatePicker();
+        }
+
+        function onMonthChange() {
+            datePickerState.month = parseInt(document.getElementById('pickerMonthSelect').value);
+            var maxDay = getMaxDay();
+            if(datePickerState.day > maxDay) {
+                datePickerState.day = maxDay;
+            }
+            renderDatePicker();
+        }
+
+        function confirmJumpDate() {
+            datePickerState.year = parseInt(document.getElementById('pickerYearSelect').value);
+            datePickerState.month = parseInt(document.getElementById('pickerMonthSelect').value);
+            datePickerState.day = parseInt(document.getElementById('pickerDaySelect').value);
+
+            jumpToDate(datePickerState.year, datePickerState.month, datePickerState.day);
+        }
+
+        function jumpToDate(y, m, d) {
+            // 更新当前视图
+            currentYear = y;
+            currentMonth = m;
+            selectedDate = y + '-' + String(m).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+
+            hideJumpDateModal();
+
+            // 刷新视图
+            var userId = localStorage.getItem('userId');
+            renderCalendar();
+            if(viewMode === 'week') {
+                loadWeekSchedule(userId);
+            } else {
+                loadMonthSchedule(userId);
+            }
+            loadDaySchedule(userId);
+        }
+
+        // 绑定日历标题点击
+        document.getElementById('calendarTitle').addEventListener('click', showJumpDateModal);
     </script>
 
     <div id="toast"></div>

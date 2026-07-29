@@ -89,13 +89,43 @@ public class UserController {
                         user.setDefaultAdvanceMinutes(toInt(updates.get("defaultAdvanceMinutes")));
                     }
                     if (updates.containsKey("cycleDays")) {
-                        user.setCycleDays(toInt(updates.get("cycleDays")));
-                        periodRelatedChanged = true;
+                        Integer cycle = toInt(updates.get("cycleDays"));
+                        if (cycle != null && cycle <= 0) {
+                            Map<String, Object> err = new HashMap<>();
+                            err.put("success", false);
+                            err.put("message", "月经周期必须大于0");
+                            return ResponseEntity.badRequest().body(err);
+                        }
+                        if (cycle != null) {
+                            // 新周期必须大于当前的经期持续天数
+                            int currentDuration = user.getPeriodDuration() != null ? user.getPeriodDuration() : 5;
+                            if (cycle <= currentDuration) {
+                                Map<String, Object> err = new HashMap<>();
+                                err.put("success", false);
+                                err.put("message", "月经周期必须大于经期持续天数（" + currentDuration + "天）");
+                                return ResponseEntity.badRequest().body(err);
+                            }
+                            user.setCycleDays(cycle);
+                            periodRelatedChanged = true;
+                        }
                     }
                     if (updates.containsKey("periodDuration")) {
                         // 兼容扩展：经期长度变更也触发重新计算
                         Integer dur = toInt(updates.get("periodDuration"));
                         if (dur != null) {
+                            if (dur <= 0) {
+                                Map<String, Object> err = new HashMap<>();
+                                err.put("success", false);
+                                err.put("message", "经期持续天数必须大于0");
+                                return ResponseEntity.badRequest().body(err);
+                            }
+                            int effectiveCycle = user.getCycleDays() != null ? user.getCycleDays() : 28;
+                            if (dur >= effectiveCycle) {
+                                Map<String, Object> err = new HashMap<>();
+                                err.put("success", false);
+                                err.put("message", "经期持续天数必须小于月经周期（" + effectiveCycle + "天）");
+                                return ResponseEntity.badRequest().body(err);
+                            }
                             user.setPeriodDuration(dur);
                             periodRelatedChanged = true;
                         }
@@ -105,8 +135,15 @@ public class UserController {
                         Object raw = updates.get("lastPeriodStart");
                         if (raw != null && !raw.toString().isBlank()) {
                             try {
-                                user.setLastPeriodStart(LocalDate.parse(raw.toString(),
-                                        DateTimeFormatter.ISO_LOCAL_DATE));
+                                LocalDate parsed = LocalDate.parse(raw.toString(),
+                                        DateTimeFormatter.ISO_LOCAL_DATE);
+                                if (parsed.isAfter(LocalDate.now())) {
+                                    Map<String, Object> err = new HashMap<>();
+                                    err.put("success", false);
+                                    err.put("message", "上次经期开始日期不能晚于今天");
+                                    return ResponseEntity.badRequest().body(err);
+                                }
+                                user.setLastPeriodStart(parsed);
                                 periodRelatedChanged = true;
                             } catch (Exception ignored) {
                                 // 前端传的日期格式不对，保留原值
