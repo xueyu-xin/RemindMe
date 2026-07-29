@@ -183,6 +183,29 @@
 			<version>1.7.7</version>
 		</dependency>
 
+		<!-- ========== 文档解析与AI SDK ========== -->
+
+		<!-- DashScope SDK（阿里通义千问官方 SDK） -->
+		<dependency>
+			<groupId>com.alibaba</groupId>
+			<artifactId>dashscope-sdk-java</artifactId>
+			<version>2.16.0</version>
+		</dependency>
+
+		<!-- Apache POI（解析 Excel） -->
+		<dependency>
+			<groupId>org.apache.poi</groupId>
+			<artifactId>poi-ooxml</artifactId>
+			<version>5.3.0</version>
+		</dependency>
+
+		<!-- PDFBox（解析 PDF） -->
+		<dependency>
+			<groupId>org.apache.pdfbox</groupId>
+			<artifactId>pdfbox</artifactId>
+			<version>3.0.3</version>
+		</dependency>
+
 	</dependencies>
 
 	<build>

@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -27,6 +28,7 @@ public class ConfirmationCardResponse {
     @Builder
     @NoArgsConstructor
     @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class ConfirmationData {
         private String sessionId;
         private String title;
@@ -46,6 +48,45 @@ public class ConfirmationCardResponse {
         private String conflictList;
         /** 建议时间 */
         private String suggestedTime;
+
+        // ===== 批量导入场景新增字段 =====
+
+        /** 多日程列表（导入场景） */
+        private List<ScheduleItem> items;
+        /** 是否为批量导入场景 */
+        @Builder.Default
+        private Boolean isBatch = false;
+        /** 来源文件名 */
+        private String sourceFile;
+        /** 总日程数 */
+        private Integer totalCount;
+        /** 成功创建数（结果反馈） */
+        private Integer successCount;
+        /** 失败数（结果反馈） */
+        private Integer failedCount;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ScheduleItem {
+        /** 序号（用于前端展示） */
+        private Integer id;
+        /** 日程标题 */
+        private String title;
+        /** 日期（yyyy-MM-dd） */
+        private String date;
+        /** 时间（HH:mm） */
+        private String time;
+        /** 地点 */
+        private String location;
+        /** 重复类型：ONCE/DAILY/WEEKLY */
+        private String repeatType;
+        /** 是否冲突 */
+        private Boolean hasConflict;
+        /** 冲突描述 */
+        private String conflictMessage;
     }
 
     @Data

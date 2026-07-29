@@ -271,6 +271,59 @@
         /* ===== 聊天区域 ===== */
         .chat-input { display: flex; gap: 12px; margin-top: auto; flex-shrink: 0; }
         .chat-input input { flex: 1; }
+        .upload-btn {
+            background: var(--peach-pale);
+            border: 1px solid var(--peach-border);
+            border-radius: 14px;
+            padding: 0 12px;
+            height: 52px;
+            font-size: 20px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: var(--brown-mid);
+        }
+        .upload-btn:hover {
+            background: var(--peach-soft);
+            transform: scale(1.05);
+        }
+        .upload-btn:active {
+            transform: scale(0.95);
+        }
+
+        .batch-items-list {
+            margin-top: 12px;
+            padding: 8px 12px;
+            background: var(--peach-pale);
+            border-radius: 12px;
+            max-height: 160px;
+            overflow-y: auto;
+        }
+        .batch-item-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 0;
+            border-bottom: 1px dashed var(--peach-border);
+            font-size: 13px;
+        }
+        .batch-item-row:last-child {
+            border-bottom: none;
+        }
+        .batch-item-num {
+            color: var(--brown-mid);
+            font-weight: 600;
+            min-width: 28px;
+        }
+        .batch-item-title {
+            flex: 1;
+            color: var(--brown-dark);
+            font-weight: 500;
+        }
+        .batch-item-time {
+            color: var(--brown-mid);
+            font-size: 12px;
+            white-space: nowrap;
+        }
         #confirmationContainer { flex-shrink: 0; }
         .prompt-bar { flex-shrink: 0; }
         .chat-history {
@@ -1393,6 +1446,8 @@
                 <div class="chat-history" id="chatHistory"></div>
                 <div class="chat-input">
                     <input type="text" id="chatInput" placeholder="输入提醒，如：明天下午3点还书">
+                    <input type="file" id="fileInput" accept=".xlsx,.xls,.pdf,image/*" style="display:none">
+                    <button class="upload-btn" onclick="document.getElementById('fileInput').click()" title="上传日程文件">📎</button>
                     <button onclick="sendMessage()">发送</button>
                 </div>
             </div>
@@ -1660,7 +1715,9 @@
                 remindTime: getCardFieldValue('时间'),
                 location: getCardFieldValue('地点'),
                 priority: getCardFieldValue('优先级'),
-                sessionId: card.getAttribute('data-session-id')
+                sessionId: card.getAttribute('data-session-id'),
+                importId: card.getAttribute('data-import-id'),
+                isBatch: card.querySelector('.batch-items-list') !== null
             };
             return data;
         }
@@ -1702,12 +1759,14 @@
             }
             
             if (card.type === 'confirmation_card') {
-                currentConfirmationSessionId = card.data.sessionId;
+                currentConfirmationSessionId = card.data.sessionId || null;
                 originalConfirmationCard = card;
-                var expiresAt = new Date(card.expiresAt);
+                var expiresAt = card.expiresAt;
                 var hasConflict = card.data.hasConflict === true;
+                var isBatch = card.data.isBatch === true;
+                var importId = card.data.importId || null;
                 
-                var sessionId = card.data.sessionId;
+                var sessionId = card.data.sessionId || 'import-' + (importId || Date.now());
                 conflictStates = {};
                 currentConflictList = [];
                 
@@ -1722,15 +1781,43 @@
                     });
                 }
                 
-                var html = '<div class="confirmation-card ' + (hasConflict ? 'conflict-mode' : '') + '" id="confirmationCard" data-session-id="' + sessionId + '" data-has-conflict="' + (hasConflict ? 'true' : 'false') + '">';
+                var dataAttrs = 'data-session-id="' + sessionId + '"';
+                if (importId) {
+                    dataAttrs += ' data-import-id="' + importId + '"';
+                }
+                dataAttrs += ' data-has-conflict="' + (hasConflict ? 'true' : 'false') + '"';
+                
+                var html = '<div class="confirmation-card ' + (hasConflict ? 'conflict-mode' : '') + '" id="confirmationCard" ' + dataAttrs + '>';
                 html += '<div class="card-title">' + card.message + '</div>';
                 html += '<div class="card-info">';
-                html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + card.data.title + '</span></div>';
-                html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + card.data.remindTime + '</span></div>';
-                if (card.data.location) {
-                    html += '<div class="info-item"><span class="info-label">地点</span><span class="info-value">' + card.data.location + '</span></div>';
+                
+                if (isBatch) {
+                    html += '<div class="info-item"><span class="info-label">来源</span><span class="info-value">' + (card.data.sourceFile || '文件') + '</span></div>';
+                    html += '<div class="info-item"><span class="info-label">共</span><span class="info-value">' + card.data.totalCount + ' 条日程</span></div>';
+                    
+                    if (card.data.items && Array.isArray(card.data.items) && card.data.items.length > 0) {
+                        html += '<div class="batch-items-list">';
+                        card.data.items.forEach(function(item, idx) {
+                            var timeStr = '';
+                            if (item.date) timeStr += item.date;
+                            if (item.time) timeStr += ' ' + item.time;
+                            var locStr = item.location ? ' · ' + item.location : '';
+                            html += '<div class="batch-item-row">';
+                            html += '<span class="batch-item-num">' + (idx + 1) + '.</span>';
+                            html += '<span class="batch-item-title">' + (item.title || '未命名') + '</span>';
+                            html += '<span class="batch-item-time">' + timeStr + locStr + '</span>';
+                            html += '</div>';
+                        });
+                        html += '</div>';
+                    }
+                } else {
+                    html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + card.data.title + '</span></div>';
+                    html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + card.data.remindTime + '</span></div>';
+                    if (card.data.location) {
+                        html += '<div class="info-item"><span class="info-label">地点</span><span class="info-value">' + card.data.location + '</span></div>';
+                    }
+                    html += '<div class="info-item"><span class="info-label">优先级</span><span class="info-value">' + card.data.priority + '</span></div>';
                 }
-                html += '<div class="info-item"><span class="info-label">优先级</span><span class="info-value">' + card.data.priority + '</span></div>';
                 html += '</div>';
                 
                 if (hasConflict && currentConflictList.length > 0) {
@@ -1769,12 +1856,18 @@
                     html += '<button class="action-btn ' + action.style + '" onclick="handleConfirmationAction(\'' + action.id + '\', \'' + sessionId + '\')">' + action.label + '</button>';
                 });
                 html += '</div>';
-                html += '<div class="card-timer" id="timerText">⏳ 15秒后未确认自动确认</div>';
+                if (isBatch) {
+                    html += '<div class="card-timer" id="timerText">📋 请确认以上日程信息</div>';
+                } else {
+                    html += '<div class="card-timer" id="timerText">⏳ 15秒后未确认自动确认</div>';
+                }
                 html += '</div>';
                 
                 container.innerHTML = html;
                 
-                startTimer(expiresAt, card.data.sessionId);
+                if (!isBatch && expiresAt) {
+                    startTimer(expiresAt, card.data.sessionId);
+                }
             }
             
             if (card.type === 'execute_card') {
@@ -2463,6 +2556,59 @@
                         addMessage('bot', '❌ ' + (result.message || result.error || '操作失败'));
                         buttons.forEach(function(btn) { btn.disabled = false; });
                     }
+                } else if (action === 'confirm_import') {
+                    var importCardEl = document.getElementById('confirmationContainer');
+                    var importCard = importCardEl ? importCardEl.querySelector('.confirmation-card') : null;
+                    var importId = null;
+                    if (importCard && importCard.dataset.importId) {
+                        importId = importCard.dataset.importId;
+                    } else {
+                        var data = getCurrentCardData();
+                        if (data && data.importId) importId = data.importId;
+                    }
+                    if (!importId) {
+                        addMessage('bot', '❌ 无法获取导入ID，请重试');
+                        isProcessing = false;
+                        buttons.forEach(function(btn) { btn.disabled = false; });
+                        return;
+                    }
+                    var confirmBtn = Array.from(buttons).find(function(btn) { return btn.textContent.includes('全部创建'); });
+                    if (confirmBtn) {
+                        confirmBtn.textContent = '⏳ 创建中...';
+                    }
+                    const importResponse = await fetch('/api/schedule/confirm/' + importId + '?userId=' + currentUserId, {
+                        method: 'POST',
+                        headers: headers
+                    });
+                    const importResult = await importResponse.json();
+                    if (importResult.success) {
+                        addMessage('bot', '✅ ' + importResult.message);
+                        document.getElementById('confirmationContainer').innerHTML = '';
+                        currentConfirmationSessionId = null;
+                        renderCalendar();
+                    } else {
+                        addMessage('bot', '❌ ' + (importResult.message || '创建失败'));
+                        if (confirmBtn) confirmBtn.textContent = '✅ 全部创建';
+                    }
+                } else if (action === 'cancel_import') {
+                    var cancelCardEl = document.getElementById('confirmationContainer');
+                    var cancelCard = cancelCardEl ? cancelCardEl.querySelector('.confirmation-card') : null;
+                    var cancelImportId = null;
+                    if (cancelCard && cancelCard.dataset.importId) {
+                        cancelImportId = cancelCard.dataset.importId;
+                    } else {
+                        var cancelData = getCurrentCardData();
+                        if (cancelData && cancelData.importId) cancelImportId = cancelData.importId;
+                    }
+                    if (cancelImportId) {
+                        await fetch('/api/schedule/cancel/' + cancelImportId + '?userId=' + currentUserId, {
+                            method: 'POST',
+                            headers: headers
+                        });
+                    }
+                    addMessage('bot', '❌ 已取消导入');
+                    document.getElementById('confirmationContainer').innerHTML = '';
+                    currentConfirmationSessionId = null;
                 }
             } catch (e) {
                 addMessage('bot', '❌ 网络错误，请重试');
@@ -2861,6 +3007,17 @@
                 });
             }
 
+            // 文件上传
+            var fileInput = document.getElementById('fileInput');
+            if (fileInput) {
+                fileInput.addEventListener('change', function(e) {
+                    var file = e.target.files[0];
+                    if (!file) return;
+                    uploadScheduleFile(file);
+                    e.target.value = '';
+                });
+            }
+
             // 加载聊天历史
             setTimeout(loadChatHistory, 300);
         });
@@ -3167,6 +3324,55 @@
                 await sendChatRequest(text);
             } catch (e) {
                 addMessage('bot', '❌ 网络错误，请重试');
+            }
+        }
+
+        async function uploadScheduleFile(file) {
+            var formData = new FormData();
+            formData.append('file', file);
+            formData.append('userId', currentUserId);
+
+            addMessage('user', '📎 上传文件：' + file.name);
+
+            try {
+                var token = localStorage.getItem('token');
+                var headers = {};
+                if (token) {
+                    headers['Authorization'] = 'Bearer ' + token;
+                }
+
+                addMessage('bot', '⏳ 正在解析文件并识别日程...');
+
+                var response = await fetch('/api/schedule/upload', {
+                    method: 'POST',
+                    headers: headers,
+                    body: formData
+                });
+                var result = await response.json();
+
+                if (result.success) {
+                    var card = {
+                        type: 'confirmation_card',
+                        message: '📋 已识别 ' + result.totalCount + ' 个日程，请确认：',
+                        data: {
+                            isBatch: true,
+                            sourceFile: file.name,
+                            items: result.items,
+                            totalCount: result.totalCount,
+                            hasConflict: result.hasConflict,
+                            importId: result.importId
+                        },
+                        actions: [
+                            { id: 'confirm_import', label: '✅ 全部创建', style: 'primary' },
+                            { id: 'cancel_import', label: '❌ 取消', style: 'danger' }
+                        ]
+                    };
+                    showConfirmationCard(card);
+                } else {
+                    addMessage('bot', '❌ 识别失败：' + (result.message || '请重试'));
+                }
+            } catch (e) {
+                addMessage('bot', '❌ 上传失败：网络错误，请重试');
             }
         }
 
