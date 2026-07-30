@@ -1,6 +1,6 @@
 # 校园生活提醒助手 (Life Reminder)
 
-> 基于 Agent 的智能化校园生活提醒系统，支持自然语言创建提醒、课表智能导入、天气联动、经期管理等功能。
+> 基于 Agent 的智能化校园生活提醒系统，支持自然语言创建提醒、课表智能导入、天气查询、经期管理等功能。
 
 ---
 
@@ -16,12 +16,13 @@
 |---------|------|
 | **AI 对话提醒** | 基于 ReAct 模式的 Agent，支持自然语言创建、查询、修改、取消提醒 |
 | **课表智能导入** | 支持 Excel / PDF / 图片上传，AI 自动识别课表结构并批量生成提醒 |
+| **天气查询** | 实时天气、天气预报、空气质量、天气预警查询（对接和风天气 API） |
 | **天气联动提醒** | 根据天气状况（高温/低温/暴雨）自动生成关联提醒 |
 | **经期管理** | 经期追踪、状态预测、经期提醒自动生成 |
 | **个人记忆系统 (RAG)** | 基于 ChromaDB + Ollama 的向量知识库，实现用户信息长期记忆 |
-| **周期提醒** | 支持按日/周/月重复的周期性提醒 |
-| **日历视图** | 可视化日历展示所有提醒 |
-| **实时推送** | 基于 WebSocket 的卡片式提醒推送与交互 |
+| **周期提醒** | 支持按日/周/月重复的周期性提醒，每日自动生成实例 |
+| **日历视图** | 可视化月/周/日日历展示，支持农历显示与日期跳转（1900-3000 年） |
+| **实时推送** | 基于 WebSocket 的卡片式提醒推送与交互确认 |
 | **冲突检测** | 创建提醒时自动检测时间冲突，支持覆盖/跳过策略 |
 
 ### 1.3 适用场景
@@ -29,7 +30,7 @@
 - 大学生日常日程管理
 - 课程表批量导入与提醒生成
 - 考试、作业、截止日期提醒
-- 天气敏感场景的自动提醒（如带伞、添衣）
+- 天气敏感场景查询（出行前查看天气、穿衣建议等）
 - 经期追踪与健康管理
 - 个人知识管理与记忆存储
 
@@ -57,11 +58,11 @@
 
 | 技术 | 版本 | 说明 |
 |-----|------|-----|
-| DeepSeek-V4-Flash | — | 主对话模型 |
+| DeepSeek-V4-Flash | — | 主对话模型（ReAct Agent + 工具调用） |
 | 通义千问 (qwen-vl-plus) | — | 多模态识别模型（课表图片识别） |
-| Ollama | — | 本地 Embedding 模型运行时 |
+| Ollama | 0.32.5 | 本地 Embedding 模型运行时 |
 | qwen3-embedding:4b | — | 文本向量嵌入模型 |
-| ChromaDB | — | 向量数据库（RAG 知识库） |
+| ChromaDB | 1.5.9 | 向量数据库（RAG 知识库） |
 | DashScope SDK | 2.16.0 | 阿里通义千问官方 SDK |
 
 ### 2.4 实时通信与安全
@@ -69,8 +70,7 @@
 | 技术 | 版本 | 说明 |
 |-----|------|-----|
 | Spring WebSocket | (Boot 管理) | 实时消息推送 |
-| Spring Security | (Boot 管理) | 认证授权框架 |
-| JJWT | 0.12.5 | JWT 令牌处理 |
+| Spring Security | (Boot 管理) | BCrypt 密码加密 |
 
 ### 2.5 前端与模板
 
@@ -78,6 +78,7 @@
 |-----|------|-----|
 | Thymeleaf | (Boot 管理) | 服务端模板引擎 |
 | 原生 HTML/CSS/JS | — | 前端页面 |
+| SockJS / STOMP.js | — | WebSocket 客户端 |
 
 ### 2.6 文档解析与工具
 
@@ -98,7 +99,7 @@
 | 环境 | 版本要求 | 说明 |
 |-----|---------|-----|
 | JDK | 21+ | 推荐使用 JDK 21 |
-| Maven | 3.8+ | 项目构建工具 |
+| Maven | 3.8+ | 项目构建工具（或使用自带的 `mvnw`） |
 | MySQL | 8.0+ | 关系型数据库 |
 | Chrome / Edge | 最新版 | 推荐浏览器 |
 
@@ -106,15 +107,14 @@
 
 | 服务 | 版本要求 | 说明 |
 |-----|---------|-----|
-| Ollama | 最新版 | 本地运行 Embedding 模型 |
-| ChromaDB | 0.4+ | 向量数据库 |
+| Ollama | 0.32.5 | 本地运行 Embedding 模型 |
+| ChromaDB | 1.5.9 | 向量数据库 |
 
 ### 3.3 Ollama 模型
 
 需在本地 Ollama 中安装以下模型：
 
 ```bash
-# 拉取 qwen3-embedding:4b 用于文本向量化
 ollama pull qwen3-embedding:4b
 ```
 
@@ -124,12 +124,15 @@ ollama pull qwen3-embedding:4b
 # 使用 pip 安装
 pip install chromadb
 
-# 启动 ChromaDB 服务（绑定所有网卡，允许外部访问）
+# 启动 ChromaDB 服务（绑定所有网卡）
 chroma run --host 0.0.0.0 --port 8000
-
-# 或使用 Docker
-docker run -p 8000:8000 chromadb/chroma
 ```
+
+### 3.5 字体文件
+
+项目使用以下自定义字体（需放在 `src/main/resources/fonts/` 目录下）：
+- `MaoKenShiJinHei-2.ttf`（猫啃什锦黑）
+- `MaoKenZhuYuanTi-MaokenZhuyuanTi-2.ttf`（猫啃筑圆体）
 
 ---
 
@@ -206,17 +209,10 @@ spring:
         options:
           model: qwen3-embedding:4b
 
-jwt:
-  secret: ${JWT_SECRET:your-jwt-secret-key-at-least-256-bits-long}
-  expiration: 604800000
-
 weather:
   api:
     key: ${WEATHER_API_KEY:your-weather-api-key}
     host: ${WEATHER_API_HOST:your-weather-api-host}
-
-sms:
-  api-key: ${SMS_API_KEY:your-sms-api-key}
 
 logging:
   level:
@@ -230,11 +226,11 @@ agent:
 
 amap:
   api:
-    key: ${AMAP_API_KEY:}
+    key: ${AMAP_API_KEY:your-amap-api-key}
 
 dashscope:
   api:
-    key: ${DASHSCOPE_API_KEY:}
+    key: ${DASHSCOPE_API_KEY:your-dashscope-api-key}
 ```
 
 ### 4.2 配置项说明
@@ -243,7 +239,7 @@ dashscope:
 
 | 配置项 | 说明 | 是否必填 |
 |-------|------|---------|
-| `spring.datasource.url` | MySQL 连接 URL | 是 |
+| `spring.datasource.url` | MySQL 连接 URL（默认端口 3307） | 是 |
 | `spring.datasource.username` | 数据库用户名 | 是 |
 | `spring.datasource.password` | 数据库密码 | 是 |
 | `spring.jpa.hibernate.ddl-auto` | DDL 策略，`update` 自动更新表结构 | 是 |
@@ -260,90 +256,73 @@ dashscope:
 | `spring.ai.ollama.base-url` | Ollama 服务地址 | 是 |
 | `spring.ai.ollama.embedding.options.model` | Embedding 模型名称 | 是 |
 
-#### JWT 配置
+#### 外部服务配置
 
 | 配置项 | 说明 | 是否必填 |
 |-------|------|---------|
-| `jwt.secret` | JWT 签名密钥（至少 256 位） | 是 |
-| `jwt.expiration` | Token 有效期（毫秒），默认 7 天 | 是 |
-
-#### 可选服务配置
-
-| 配置项 | 说明 | 是否必填 |
-|-------|------|---------|
-| `weather.api.key` | 天气 API Key | 否（天气功能需要） |
-| `weather.api.host` | 天气 API 地址 | 否（天气功能需要） |
-| `sms.api-key` | 短信服务 API Key | 否（短信功能需要） |
-| `amap.api.key` | 高德地图 API Key | 否（地图功能需要） |
-| `dashscope.api.key` | 通义千问 API Key | 否（图片/课表识别需要） |
+| `weather.api.key` | 和风天气 API Key | 否（天气功能需要时配置） |
+| `weather.api.host` | 和风天气 API 主机地址 | 否（天气功能需要时配置） |
+| `amap.api.key` | 高德地图 API Key | 否（地理编码功能需要时配置） |
+| `dashscope.api.key` | 通义千问 API Key | 否（课表图片识别需要时配置） |
 
 ---
 
-## 5. API 密钥与外部服务配置
+## 5. 环境变量与外部服务配置
 
 ### 5.1 环境变量列表
 
 | 环境变量 | 对应配置项 | 用途 | 获取方式 |
 |---------|----------|------|---------|
-| `DEEPSEEK_API_KEY` | `spring.ai.openai.api-key` | 主对话 AI 模型 | [https://platform.deepseek.com](https://platform.deepseek.com) 注册后获取 |
-| `JWT_SECRET` | `jwt.secret` | JWT 令牌签名密钥 | 自行生成（建议至少 256 位随机字符串） |
+| `DEEPSEEK_API_KEY` | `spring.ai.openai.api-key` | 主对话 AI 模型（Agent 核心） | [https://platform.deepseek.com](https://platform.deepseek.com) 注册后获取 |
+| `WEATHER_API_KEY` | `weather.api.key` | 和风天气 API Key | [https://dev.qweather.com](https://dev.qweather.com) 申请 |
+| `WEATHER_API_HOST` | `weather.api.host` | 和风天气 API 主机地址 | 与 Weather API Key 同源 |
+| `AMAP_API_KEY` | `amap.api.key` | 高德地图 API（地理编码/城市搜索） | [https://lbs.amap.com](https://lbs.amap.com) 申请 Key |
 | `DASHSCOPE_API_KEY` | `dashscope.api.key` | 通义千问多模态识别（课表图片识别） | [https://dashscope.console.aliyun.com](https://dashscope.console.aliyun.com) 开通服务后获取 |
-| `WEATHER_API_KEY` | `weather.api.key` | 天气数据查询 | 和风天气、心知天气等服务商申请 |
-| `WEATHER_API_HOST` | `weather.api.host` | 天气 API 服务地址 | 与 Weather API Key 同源 |
-| `SMS_API_KEY` | `sms.api-key` | 短信验证码发送 | 阿里云短信、腾讯云短信等服务商申请 |
-| `AMAP_API_KEY` | `amap.api.key` | 高德地图 API（地点搜索/地理编码） | [https://lbs.amap.com](https://lbs.amap.com) 申请 Key |
+
+> **说明**：以上变量均有默认值兜底，不配也能启动（对应功能不可用）。如需完整功能，请配置对应变量。
 
 ### 5.2 设置环境变量
 
 #### Windows (PowerShell)
 
 ```powershell
-# 临时设置（当前会话有效）
+# 临时设置（当前会话有效，启动前执行），输入真实的api key/api host
 $env:DEEPSEEK_API_KEY = "your-deepseek-api-key"
-$env:JWT_SECRET = "your-jwt-secret-key-at-least-256-bits-long"
-$env:DASHSCOPE_API_KEY = "your-dashscope-api-key"
 $env:WEATHER_API_KEY = "your-weather-api-key"
-$env:WEATHER_API_HOST = "your-weather-api-host"
-$env:SMS_API_KEY = "your-sms-api-key"
+$env:WEATHER_API_HOST = "https://your-weather-api-host"
 $env:AMAP_API_KEY = "your-amap-api-key"
+$env:DASHSCOPE_API_KEY = "your-dashscope-api-key"
 
-# 或在启动时通过 JVM 参数传递
-mvn spring-boot:run -Dspring-boot.run.jvmArguments="
-  -DDEEPSEEK_API_KEY=your-key
-  -DJWT_SECRET=your-secret
-  -DDASHSCOPE_API_KEY=your-key
-"
+# 启动项目
+.\mvnw.cmd spring-boot:run
 ```
 
 #### macOS / Linux (bash)
 
 ```bash
-# 临时设置
 export DEEPSEEK_API_KEY="your-deepseek-api-key"
-export JWT_SECRET="your-jwt-secret-key-at-least-256-bits-long"
-export DASHSCOPE_API_KEY="your-dashscope-api-key"
 export WEATHER_API_KEY="your-weather-api-key"
-export WEATHER_API_HOST="your-weather-api-host"
-export SMS_API_KEY="your-sms-api-key"
+export WEATHER_API_HOST="https://your-weather-api-host"
 export AMAP_API_KEY="your-amap-api-key"
+export DASHSCOPE_API_KEY="your-dashscope-api-key"
 
-# 写入配置文件（永久生效）
-echo 'export DEEPSEEK_API_KEY="your-key"' >> ~/.bashrc
-source ~/.bashrc
+./mvnw spring-boot:run
 ```
 
-#### 启动时通过 JVM 参数传递（推荐）
+#### 启动时通过 JVM 参数传递
 
 ```bash
-java -jar life-reminder.jar \
+java -jar target/life-reminder-0.0.1-SNAPSHOT.jar \
   -DDEEPSEEK_API_KEY=your-deepseek-api-key \
-  -DJWT_SECRET=your-jwt-secret-key-at-least-256-bits-long \
+  -DWEATHER_API_KEY=your-weather-api-key \
+  -DWEATHER_API_HOST=https://https://your-weather-api-host \
+  -DAMAP_API_KEY=your-amap-api-key \
   -DDASHSCOPE_API_KEY=your-dashscope-api-key
 ```
 
 ---
 
-## 6. 数据库初始化
+## 6. 数据库说明
 
 ### 6.1 创建数据库
 
@@ -355,16 +334,16 @@ CREATE DATABASE IF NOT EXISTS reminder
 
 ### 6.2 数据库表结构
 
-JPA 配置为 `ddl-auto: update`，首次启动时自动创建以下表：
+JPA 配置为 `ddl-auto: update`，首次启动时自动创建以下 10 张表：
 
 | 表名 | 说明 |
 |------|------|
-| `users` | 用户表：账号信息、偏好设置、经期参数 |
-| `reminders` | 提醒表：所有用户提醒，支持单点和时间段 |
+| `users` | 用户表：账号信息、偏好设置、经期参数等等 |
+| `reminders` | 提醒表：所有用户提醒，支持单点和时间段，含确认状态、执行状态 |
 | `push_logs` | 推送日志表：记录每一次推送动作 |
-| `confirmation_sessions` | 确认会话表：提醒创建确认流程的会话管理 |
-| `verification_codes` | 验证码表：手机验证码存储与校验 |
-| `user_dialog_stats` | 对话统计表：用户对话记录，用于 RAG |
+| `confirmation_sessions` | 确认会话表：提醒创建两阶段确认流程的会话管理 |
+| `verification_codes` | 验证码表：手机验证码存储与校验（模拟验证码） |
+| `user_dialog_stats` | 对话统计表：用户对话记录，用于 RAG 知识库 |
 | `schedule_imports` | 课表导入表：文件导入任务记录 |
 | `schedule_import_items` | 课表导入明细表：每一条待创建提醒 |
 | `recurring_reminders` | 周期提醒模板表：按日/周/月重复规则 |
@@ -381,26 +360,29 @@ users ──1:N──> recurring_reminders
 
 schedule_imports ──1:N──> schedule_import_items
 recurring_reminders ──1:N──> recurring_instances
+recurring_instances ──1:1──> reminders (实例对应实际提醒)
 confirmation_sessions ──1:1──> reminders (确认后回填)
 reminders ──1:N──> push_logs
 ```
+
+### 6.4 完整建表 SQL
+
+如需手动建表，参考 `sql/reminder-仅结构.sql` 文件。
 
 ---
 
 ## 7. 启动步骤
 
-### 7.1 克隆项目
+### 7.1 前置条件
 
-```bash
-git clone <repository-url>
-cd RemindMe
-```
+1. **MySQL**：确保 MySQL 服务已启动，已创建 `reminder` 数据库
+2. **Ollama**：已安装并运行，已拉取 `qwen3-embedding:4b` 模型
+3. **ChromaDB**：已安装并运行（`chroma run --host 0.0.0.0 --port 8000`）
+4. **字体**：`MaoKenShiJinHei-2.ttf` 和 `MaoKenZhuYuanTi-MaokenZhuyuanTi-2.ttf` 放在 `src/main/resources/fonts/` 下
 
-### 7.2 配置 `application.yml`
+### 7.2 配置数据库连接
 
-根据 [第 4 章](#4-配置说明) 的说明，修改 `src/main/resources/application.yml`：
-
-**最低配置（必须修改）：**
+修改 `src/main/resources/application.yml` 中的数据库配置：
 
 ```yaml
 spring:
@@ -412,42 +394,41 @@ spring:
 
 ### 7.3 设置环境变量
 
-至少需要设置以下必填项：
+至少需要设置以下必填项（Agent 功能必需）：
 
-```bash
-# 方式一：环境变量
-export DEEPSEEK_API_KEY="your-deepseek-api-key"
-export JWT_SECRET="your-jwt-secret-key"
+```powershell
+# Windows PowerShell
+$env:DEEPSEEK_API_KEY = "your-deepseek-api-key"
+```
 
-# 方式二：修改 application.yml 中的默认值
-# 将 ${DEEPSEEK_API_KEY:your-deepseek-api-key} 改为实际值
+如需完整功能，额外配置：
+
+```powershell
+$env:WEATHER_API_KEY = "your-weather-api-key"
+$env:WEATHER_API_HOST = "https://your-weather-api-host"
+$env:AMAP_API_KEY = "your-amap-api-key"
+$env:DASHSCOPE_API_KEY = "your-dashscope-api-key"
 ```
 
 ### 7.4 启动外部依赖服务
 
 ```bash
-# 1. 启动 MySQL 数据库
-# 确保 MySQL 正在运行，且已创建 reminder 数据库
-
-# 2. 启动 Ollama（本地 Embedding 服务）
+# 1. 启动 Ollama
 ollama serve  # 默认端口 11434
 
-# 3. 启动 ChromaDB（向量数据库）
+# 2. 启动 ChromaDB
 chroma run --host 0.0.0.0 --port 8000
-# 或 Docker 方式：
-# docker run -d -p 8000:8000 chromadb/chroma
 ```
 
 ### 7.5 启动 Spring Boot 应用
 
 ```bash
-# 开发模式
-mvn spring-boot:run
+# 使用 Maven Wrapper（无需本地安装 Maven）
+.\mvnw.cmd spring-boot:run    # Windows
+./mvnw spring-boot:run       # macOS / Linux
 
-# 打包构建
-mvn clean package
-
-# 运行打包后的 Jar
+# 或打包后运行
+.\mvnw.cmd clean package
 java -jar target/life-reminder-0.0.1-SNAPSHOT.jar
 ```
 
@@ -457,24 +438,24 @@ java -jar target/life-reminder-0.0.1-SNAPSHOT.jar
 
 - **首页**：[http://localhost:8083](http://localhost:8083)
 - **登录页**：[http://localhost:8083/login](http://localhost:8083/login)
-- **健康检查**：[http://localhost:8083/api/health](http://localhost:8083/api/health)
+- **注册页**：[http://localhost:8083/register](http://localhost:8083/register)
 
 ---
 
 ## 8. 项目结构说明
 
-### 8.1 完整包结构
+### 8.1 包结构
 
 ```
 com.dormrepair.remindme
 ├── agent/                          # AI Agent 模块
 │   ├── AgentService.java           # Agent 核心调度（ReAct 循环）
 │   ├── AgentResponse.java          # Agent 响应 DTO
-│   ├── AgentTool.java              # 工具接口
+│   ├── AgentTool.java              # 工具接口注解
 │   ├── ConversationMemory.java     # 对话记忆管理
 │   ├── ToolCall.java               # 工具调用记录
 │   ├── ToolDefinition.java         # 工具定义
-│   ├── ToolRegistry.java           # 工具注册中心
+│   ├── ToolRegistry.java           # 工具注册中心（扫描 @AgentTool）
 │   └── event/                      # Agent 事件
 │       ├── AgentEvent.java
 │       ├── EventPublisher.java
@@ -482,10 +463,10 @@ com.dormrepair.remindme
 │       ├── ReminderConfirmedEvent.java
 │       └── ReminderCreatedEvent.java
 ├── config/                         # 配置模块
-│   ├── AppConfig.java              # 应用基础配置
+│   ├── AppConfig.java              # 应用基础配置（时区等）
 │   ├── ChromaConfig.java           # ChromaDB 向量库配置
 │   ├── QwenConfig.java             # 通义千问配置
-│   ├── SecurityConfig.java         # Spring Security 配置
+│   ├── SecurityConfig.java         # Spring Security 配置（BCrypt 放行）
 │   ├── WeatherConfig.java          # 天气服务配置
 │   ├── WebConfig.java              # Web 配置
 │   └── WebSocketConfig.java        # WebSocket 配置
@@ -495,7 +476,7 @@ com.dormrepair.remindme
 │   ├── CalendarController.java     # 日历视图接口
 │   ├── ChatController.java         # 对话接口
 │   ├── CityController.java         # 城市搜索接口
-│   ├── ConfirmationController.java # 确认流程接口
+│   ├── ConfirmationController.java # 确认流程接口（多阶段）
 │   ├── IndexController.java        # 首页路由
 │   ├── RagController.java          # RAG 知识库接口
 │   ├── RecurringReminderController.java  # 周期提醒接口
@@ -505,12 +486,32 @@ com.dormrepair.remindme
 │   └── WeatherController.java     # 天气查询接口
 ├── dto/                            # 数据传输对象
 │   ├── request/                    # 请求 DTO
+│   │   ├── LoginRequest.java       # 登录请求
+│   │   ├── PeriodConfirmRequest.java  # 经期确认请求
+│   │   ├── RagTestRequest.java     # RAG 测试请求
+│   │   ├── RegisterRequest.java    # 注册请求
+│   │   ├── ReminderCreateRequest.java # 创建提醒请求
+│   │   ├── ReminderUpdateRequest.java # 更新提醒请求
+│   │   └── SendCodeRequest.java    # 发送验证码请求
 │   ├── response/                   # 响应 DTO
+│   │   ├── AirQualityResponse.java # 空气质量响应
+│   │   ├── CalendarResponse.java   # 日历响应
+│   │   ├── CitySearchResult.java   # 城市搜索结果
+│   │   ├── ConfirmationCardResponse.java # 确认卡片响应
+│   │   ├── ConflictResponse.java   # 冲突响应
+│   │   ├── KnowledgeResult.java    # 知识检索结果
+│   │   ├── LoginResponse.java      # 登录响应
+│   │   ├── PeriodStatusResponse.java   # 经期状态响应
+│   │   ├── ReminderResponse.java   # 提醒响应
+│   │   ├── Result.java             # 通用响应封装
+│   │   ├── WeatherAlertResponse.java  # 天气预警响应
+│   │   ├── WeatherForecastResponse.java # 天气预报响应
+│   │   └── WeatherNowResponse.java # 实时天气响应
 │   ├── CourseTimeConfigDTO.java    # 课表时间配置
-│   ├── ManualCourseDTO.java        # 手动课程 DTO
-│   ├── ScheduleItemDTO.java        # 日程项 DTO
-│   ├── ScheduleTableDTO.java       # 课表结构化 DTO
-│   └── TimeSlotDTO.java            # 时间段 DTO
+│   ├── ManualCourseDTO.java        # 手动课程
+│   ├── ScheduleItemDTO.java        # 日程项
+│   ├── ScheduleTableDTO.java       # 课表结构化
+│   └── TimeSlotDTO.java            # 时间段
 ├── entity/                         # JPA 实体
 │   ├── ConfirmationSession.java    # 确认会话
 │   ├── PushLog.java                # 推送日志
@@ -519,7 +520,7 @@ com.dormrepair.remindme
 │   ├── Reminder.java               # 提醒（核心）
 │   ├── ScheduleImport.java         # 课表导入任务
 │   ├── ScheduleImportItem.java    # 课表导入明细
-│   ├── User.java                   # 用户
+│   ├── User.java                   # 用户（含经期参数）
 │   ├── UserDialogStats.java        # 对话统计
 │   └── VerificationCode.java       # 验证码
 ├── enums/                          # 枚举定义
@@ -537,48 +538,81 @@ com.dormrepair.remindme
 ├── handler/                        # 全局异常处理
 │   └── GlobalExceptionHandler.java
 ├── repository/                     # Spring Data JPA 仓储
+│   ├── ConfirmationRepository.java  # 确认会话仓储
+│   ├── PushLogRepository.java       # 推送日志仓储
+│   ├── RecurringInstanceRepository.java  # 周期实例仓储
+│   ├── RecurringReminderRepository.java # 周期模板仓储
+│   ├── ReminderRepository.java      # 提醒仓储（核心）
+│   ├── ScheduleImportItemRepository.java # 课表明细仓储
+│   ├── ScheduleImportRepository.java # 课表导入仓储
+│   ├── UserDialogStatsRepository.java # 对话统计仓储
+│   ├── UserRepository.java          # 用户仓储
+│   └── VerificationCodeRepository.java # 验证码仓储
 ├── service/                        # 业务服务
-│   ├── AgentService.java           # AI Agent 服务
-│   ├── ConfirmationService.java    # 确认会话服务
+│   ├── ConfirmationService.java    # 确认会话服务（两阶段确认）
 │   ├── ConflictDetectionService.java  # 冲突检测服务
 │   ├── DialogStatsService.java     # 对话统计服务
-│   ├── LLMService.java             # LLM 调用服务
-│   ├── LocationService.java        # 地点服务
-│   ├── PeriodService.java          # 经期管理服务
+│   ├── LLMService.java             # LLM 调用服务（系统提示词、兜底总结）
+│   ├── LocationService.java        # 地点服务（地理编码）
+│   ├── PeriodService.java          # 经期管理服务（自动推进+持久化）
 │   ├── PushService.java            # 推送服务
 │   ├── QwenRecognitionService.java # 通义千问识别服务
-│   ├── RagService.java             # RAG 知识库服务
+│   ├── RagService.java             # RAG 知识库服务（向量检索）
 │   ├── RecurringReminderService.java   # 周期提醒服务
-│   ├── ReminderService.java        # 提醒核心服务
+│   ├── ReminderService.java        # 提醒核心服务（CRUD + Agent 工具）
 │   ├── ScheduleImportService.java  # 课表导入服务
-│   ├── SchedulerService.java       # 定时调度服务
+│   ├── SchedulerService.java       # 定时调度服务（每日 1 点生成周期实例）
 │   ├── TimeInferenceService.java   # 时间推断服务
-│   ├── UserService.java            # 用户服务
-│   ├── VerificationCodeService.java # 验证码服务
-│   ├── WeatherService.java         # 天气服务
+│   ├── UserService.java            # 用户服务（含 Agent 偏好工具）
+│   ├── VerificationCodeService.java # 验证码服务（模拟验证码）
+│   ├── WeatherService.java         # 天气服务（和风天气 API 封装）
 │   └── WebSocketPushService.java   # WebSocket 推送服务
 ├── utils/                          # 工具类
 │   ├── FileParserUtil.java         # 文件解析工具
-│   ├── JwtUtils.java               # JWT 工具
-│   ├── TimeTools.java              # 时间工具
+│   ├── TimeTools.java              # 时间工具（含 Agent 工具）
 │   └── TimeUtils.java              # 时间通用工具
 └── RemindMeApplication.java        # 启动类
 ```
 
-### 8.2 核心模块说明
+### 8.2 前端结构
+
+```
+src/main/resources/
+├── templates/
+│   ├── index.html                  # 主页面（对话 + 日历 + 我的）
+│   ├── login.html                  # 登录页
+│   └── register.html               # 注册页
+├── static/
+│   ├── css/
+│   │   ├── card.css                # 卡片样式
+│   │   ├── main.css                # 主样式
+│   │   └── notification.css        # 通知样式
+│   ├── js/
+│   │   ├── main.js                 # 主逻辑（对话、日历、表单等）
+│   │   ├── card.js                 # 卡片组件逻辑
+│   │   ├── notification.js         # 通知/Toast 逻辑
+│   │   └── sound.js                # 音效逻辑
+│   └── fonts/
+│       ├── MaoKenShiJinHei-2.ttf
+│       └── MaoKenZhuYuanTi-MaokenZhuyuanTi-2.ttf
+└── public_knowledge.json           # 公共知识库（系统使用手册）
+```
+
+### 8.3 核心模块说明
 
 | 模块 | 包路径 | 说明 |
 |------|-------|------|
-| **AI Agent** | `agent/` | 基于 ReAct 模式的 AI 调度器，支持工具调用、对话记忆、事件驱动 |
-| **LLM 服务** | `service/LLMService.java` | DeepSeek API 封装，负责对话生成 |
-| **RAG 知识库** | `service/RagService.java` | 基于 ChromaDB + Ollama 的向量检索 |
+| **AI Agent** | `agent/` | 基于 ReAct 模式的 AI 调度器，支持工具调用、对话记忆、事件驱动、兜底总结 |
+| **LLM 服务** | `service/LLMService.java` | DeepSeek API 封装，含系统提示词铁律、兜底总结、防幻觉 |
+| **RAG 知识库** | `service/RagService.java` | 基于 ChromaDB + Ollama 的向量检索，支持私有记忆+公共手册 |
 | **课表识别** | `service/QwenRecognitionService.java` | 通义千问多模态课表识别 |
 | **课表导入** | `service/ScheduleImportService.java` | 文件解析 → AI 识别 → 批量创建 |
-| **提醒核心** | `service/ReminderService.java` | 提醒 CRUD、冲突检测、优先级处理 |
-| **确认流程** | `service/ConfirmationService.java` | 确认卡片、覆盖操作、超时处理 |
-| **定时调度** | `service/SchedulerService.java` | 定时扫描待推送提醒，触发推送 |
+| **提醒核心** | `service/ReminderService.java` | 提醒 CRUD、冲突检测、优先级处理、Agent 工具 |
+| **确认流程** | `service/ConfirmationService.java` | 两阶段确认卡片、覆盖操作、5 分钟超时 |
+| **定时调度** | `service/SchedulerService.java` | 每日 1 点扫描生成周期提醒实例 |
 | **WebSocket 推送** | `service/WebSocketPushService.java` | 实时卡片推送到前端 |
-| **安全认证** | `config/SecurityConfig.java` + `utils/JwtUtils.java` | BCrypt 密码加密 + JWT Token |
+| **安全认证** | `config/SecurityConfig.java` | BCrypt 密码加密（登录用），接口放行 |
+| **天气服务** | `service/WeatherService.java` | 和风天气 API 封装（实时/预报/空气质量/预警） |
 
 ---
 
@@ -590,15 +624,12 @@ com.dormrepair.remindme
 
 **解决**：
 
-```bash
-# Windows (PowerShell)
+```powershell
+# Windows
 netstat -ano | findstr :8083
 taskkill /PID <进程ID> /F
 
-# macOS / Linux
-lsof -ti:8083 | xargs kill -9
-
-# 或修改 application.yml 中的端口
+# 或修改 application.yml
 server:
   port: 8084
 ```
@@ -612,8 +643,7 @@ server:
 1. 确认 MySQL 服务已启动
 2. 确认数据库 `reminder` 已创建
 3. 检查用户名密码是否正确
-4. 检查端口是否正确（默认 3307）
-5. 如果使用 Docker MySQL，确认网络连通
+4. 检查端口是否正确（默认 3307，若使用默认 MySQL 端口需改为 3306）
 
 ```bash
 # 测试 MySQL 连接
@@ -627,9 +657,8 @@ mysql -h localhost -P 3307 -u root -p
 **解决**：
 
 1. 确认应用已正常启动
-2. 检查 `WebSocketConfig` 中的端点配置
-3. 前端连接地址应为 `ws://localhost:8083/ws?user-id={userId}`
-4. 确认浏览器允许 WebSocket 连接（检查防火墙/代理）
+2. 前端连接地址为 `ws://localhost:8083/ws?user-id={userId}`
+3. 确认浏览器允许 WebSocket 连接
 
 ### 9.4 ChromaDB 连接失败
 
@@ -639,7 +668,7 @@ mysql -h localhost -P 3307 -u root -p
 
 1. 确认 ChromaDB 服务已启动
 2. 确认端口 8000 未被占用
-3. 检查 `application.yml` 中的 `chroma.client.host` 和 `chroma.client.port` 配置
+3. 首次启动会自动创建 `public_knowledge` 集合
 
 ```bash
 # 检查 ChromaDB 状态
@@ -690,31 +719,23 @@ ollama pull qwen3-embedding:4b
 
 **解决**：
 
-项目统一使用 `Asia/Shanghai` 时区，已在多处配置：
-
-- `application.yml` → `spring.jackson.time-zone: Asia/Shanghai`
-- `application.yml` → `spring.jackson.date-format: yyyy-MM-dd HH:mm:ss`
-- `application.yml` → 数据库连接 `serverTimezone=Asia/Shanghai`
-- `RemindMeApplication` → `@PostConstruct` 中设置 JVM 默认时区
-
-如需修改时区，需同时修改以上四处。
+项目统一使用 `Asia/Shanghai` 时区。如需修改，需同时修改：
+- `application.yml` → `spring.jackson.time-zone`
+- `application.yml` → `spring.jackson.date-format`
+- 数据库连接 `serverTimezone`
 
 ---
 
 ## 附录
 
-### A. 数据库建表 DDL
-
-首次启动时 JPA 自动创建表。如需手动建表，参考 [DATA_DICT.md](项目设计文档/DATA_DICT.md) 中的 DDL 语句。
-
-### B. 主要 API 端点
+### A. 主要 API 端点
 
 | 方法 | 端点 | 说明 |
 |------|------|------|
 | POST | `/api/auth/register` | 用户注册 |
 | POST | `/api/auth/login` | 用户登录 |
-| POST | `/api/auth/send-code` | 发送验证码 |
-| POST | `/api/chat/send` | 发送对话消息 |
+| POST | `/api/auth/send-code` | 发送验证码（模拟，前端弹窗显示） |
+| POST | `/api/chat/send` | 发送对话消息（Agent 入口） |
 | GET | `/api/chat/history` | 获取对话历史 |
 | POST | `/api/reminders/create` | 创建提醒 |
 | GET | `/api/reminders/list` | 查询提醒列表 |
@@ -727,22 +748,52 @@ ollama pull qwen3-embedding:4b
 | POST | `/api/confirmations/{sessionId}/cancel` | 取消确认 |
 | POST | `/api/confirmations/{sessionId}/overwrite` | 覆盖冲突 |
 | POST | `/api/confirmations/{sessionId}/reparse` | 重新解析 |
-| GET | `/api/calendar/{userId}/{year}/{month}` | 查询日历 |
-| POST | `/api/schedule-import/upload` | 上传课表文件 |
-| POST | `/api/schedule-import/{importId}/confirm` | 确认导入 |
-| POST | `/api/schedule-import/{importId}/cancel` | 取消导入 |
-| GET | `/api/weather/current` | 查询当前天气 |
+| GET | `/api/calendar/month` | 月视图日历数据 |
+| GET | `/api/calendar/week` | 周视图日历数据 |
+| GET | `/api/calendar/day` | 日视图日历数据 |
+| GET | `/api/calendar/lunar-to-solar` | 农历转公历 |
+| POST | `/api/schedule/upload` | 上传课表文件 |
+| POST | `/api/schedule/confirm-ai` | AI 确认导入 |
+| POST | `/api/schedule/manual-add` | 手动添加课程 |
+| GET | `/api/weather/now` | 查询实时天气 |
 | GET | `/api/weather/forecast` | 查询天气预报 |
 | POST | `/api/rag/query` | RAG 知识库查询 |
 | POST | `/api/rag/store` | 存储知识到 RAG |
 
-### C. WebSocket 端点
+### B. WebSocket 端点
 
 | 端点 | 说明 |
 |------|------|
 | `/ws` | WebSocket 连接端点（需携带 `user-id` 参数） |
 | `/queue/confirmations` | 确认卡片推送目的地 |
 | `/queue/messages` | 通用消息推送目的地 |
+
+### C. Agent 工具列表（部分）
+
+| 工具名 | 说明 |
+|-------|------|
+| `create_reminder` | 创建提醒 |
+| `query_reminders` | 查询提醒 |
+| `update_reminder` | 修改提醒 |
+| `cancel_reminder` | 取消单个提醒 |
+| `cancel_reminders_by_date` | 按日期取消提醒 |
+| `get_reminder_detail` | 查看提醒详情 |
+| `create_recurring_reminder` | 创建周期提醒 |
+| `query_weather_now` | 查询实时天气 |
+| `query_weather_forecast` | 查询天气预报 |
+| `query_air_quality` | 查询空气质量 |
+| `query_weather_alert` | 查询天气预警 |
+| `retrieve_private_knowledge` | 检索用户私有记忆 |
+| `add_private_memory` | 存储用户记忆 |
+| `retrieve_public_knowledge` | 检索系统使用手册 |
+| `get_user_preferences` | 获取用户偏好 |
+| `set_user_preferences` | 修改用户偏好 |
+| `get_location` | 获取用户位置 |
+| `geocode_city` | 城市地理编码 |
+| `calculate_date` | 日期计算（如"3天后"） |
+| `get_period_status` | 查询经期状态 |
+| `update_period_start` | 更新经期开始日期 |
+| `update_period_settings` | 更新经期参数 |
 
 ### D. 技术版本速查
 
@@ -752,7 +803,6 @@ ollama pull qwen3-embedding:4b
 | Spring AI | 1.1.4 |
 | JDK | 21 |
 | MySQL | 8.0+ |
-| JJWT | 0.12.5 |
 | Lombok | 1.18.46 |
 | DashScope SDK | 2.16.0 |
 | Apache POI | 5.3.0 |
@@ -760,5 +810,3 @@ ollama pull qwen3-embedding:4b
 | lunar | 1.7.7 |
 
 ---
-
-

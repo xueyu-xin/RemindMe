@@ -69,7 +69,7 @@ spring:
 weather:
   api:
     key: ${WEATHER_API_KEY:your-weather-api-key}
-    host: ${WEATHER_API_HOST:your-weather-api-host}
+    host: ${WEATHER_API_HOST:https://your-weather-api-host}
 
 logging:
   level:
@@ -83,8 +83,8 @@ agent:
 
 amap:
   api:
-    key: ${AMAP_API_KEY:}
+    key: ${AMAP_API_KEY:your-amap-api-key}
 
 dashscope:
   api:
-    key: ${DASHSCOPE_API_KEY:}
+    key: ${DASHSCOPE_API_KEY:your-dashscope-api-key}
