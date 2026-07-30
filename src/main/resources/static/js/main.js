@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿/**
  * 主脚本 - Main JavaScript
  * 集成卡片系统(CardSystem)、通知系统(NotificationSystem)、音效系统(SoundSystem)
  * 本文件必须在 sound.js、notification.js、card.js 之后加载
@@ -65,7 +65,7 @@ function handleWebSocketMessageV2(msg) {
                 title: (msg.data && msg.data.title) || msg.message || '提醒',
                 time: msg.data ? msg.data.remindTime : '',
                 location: msg.data ? msg.data.location : '',
-                remark: msg.message || '',
+                remark: (msg.data && msg.data.note) ? msg.data.note : (msg.message || ''),
                 priority: msg.data ? msg.data.priority : 'NORMAL',
                 reminderId: msg.data ? msg.data.reminderId : null,
                 sessionId: msg.data ? msg.data.sessionId : null,
@@ -327,6 +327,9 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                     if (card.data.location) {
                         html += '<div class="info-item"><span class="info-label">地点</span><span class="info-value">' + card.data.location + '</span></div>';
                     }
+                    if (card.data.note) {
+                        html += '<div class="info-item"><span class="info-label">备注</span><span class="info-value">' + card.data.note + '</span></div>';
+                    }
                     html += '<div class="info-item"><span class="info-label">优先级</span><span class="info-value">' + card.data.priority + '</span></div>';
                 }
                 html += '</div>';
@@ -390,6 +393,9 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                 html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + card.data.remindTime + '</span></div>';
                 if (card.data.location) {
                     html += '<div class="info-item"><span class="info-label">地点</span><span class="info-value">' + card.data.location + '</span></div>';
+                }
+                if (card.data.note) {
+                    html += '<div class="info-item"><span class="info-label">备注</span><span class="info-value">' + card.data.note + '</span></div>';
                 }
                 html += '</div>';
                 html += '<div class="card-actions">';
@@ -1177,7 +1183,7 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                     title: msg.data.title || '提醒已触发',
                     time: msg.data.remindTime || '',
                     location: msg.data.location || '',
-                    remark: msg.message || '',
+                    remark: msg.data.note ? msg.data.note : (msg.message || ''),
                     priority: msg.data.priority || 'NORMAL',
                     reminderId: msg.data.reminderId,
                     sessionId: msg.data.sessionId,

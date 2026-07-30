@@ -42,6 +42,9 @@ public class ReminderCreateRequest {
     // 地点，可选
     private String location;
 
+    // 备注，可选，用户对提醒的补充说明
+    private String note;
+
     // 优先级，默认 NORMAL，可选值：LOW/NORMAL/HIGH，决定提醒通知的样式和权重
     private String priority = "NORMAL";
 

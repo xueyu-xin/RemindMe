@@ -962,6 +962,7 @@ public class ConfirmationService {
         reminder.setPriority(Priority.valueOf(
                 ((String) parsedData.getOrDefault("priority", "NORMAL")).toUpperCase()));
         reminder.setLocation((String) parsedData.get("location"));
+        reminder.setNote((String) parsedData.get("note"));
         int defaultAdvance = userService.getUserById(userId)
                 .map(u -> u.getDefaultAdvanceMinutes())
                 .orElse(10);
@@ -992,6 +993,7 @@ public class ConfirmationService {
                 .endTime((String) parsedData.get("endTime"))
                 .priority((String) parsedData.getOrDefault("priority", "NORMAL"))
                 .location((String) parsedData.get("location"))
+                .note((String) parsedData.get("note"))
                 .advanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", defaultAdvance))
                 .confidence((Double) parsedData.getOrDefault("confidence", 0.95))
                 .hasConflict(hasConflict)
@@ -1172,6 +1174,7 @@ public class ConfirmationService {
         parsedData.put("title", reminder.getTitle());
         parsedData.put("remindTime", reminder.getRemindTime().format(FORMATTER));
         parsedData.put("location", reminder.getLocation());
+        parsedData.put("note", reminder.getNote());
         parsedData.put("priority", reminder.getPriority().name());
         parsedData.put("advanceMinutes", reminder.getAdvanceMinutes());
         parsedData.put("attempt", reminder.getConfirmAttempts());
@@ -1273,6 +1276,7 @@ public class ConfirmationService {
                 .remindTime((String) parsedData.get("remindTime"))
                 .priority((String) parsedData.get("priority"))
                 .location((String) parsedData.get("location"))
+                .note((String) parsedData.get("note"))
                 .advanceMinutes((Integer) parsedData.get("advanceMinutes"))
                 .weatherSuggestion((String) parsedData.get("weatherSuggestion"))
                 .build();
@@ -1317,6 +1321,7 @@ public class ConfirmationService {
                     data.put("advanceMinutes", session.getParsedAdvanceMinutes());
                     // 从 parsedData 中提取建议时间
                     Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+                    data.put("note", parsedData.get("note"));
                     data.put("suggestedTime", parsedData.get("suggestedTime"));
                     data.put("hasConflict", parsedData.get("hasConflict"));
                     data.put("conflictMessage", parsedData.get("conflictMessage"));
@@ -1585,6 +1590,18 @@ public class ConfirmationService {
         }
         
         reminder.setLocation(session.getParsedLocation());
+        // 从 parsedData JSON 中提取 note 字段（ConfirmationSession 未单独建列）
+        try {
+            Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+            if (parsedData != null) {
+                Object noteObj = parsedData.get("note");
+                if (noteObj != null) {
+                    reminder.setNote(String.valueOf(noteObj));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("解析 parsedData 提取 note 失败: sessionId={}, error={}", session.getSessionId(), e.getMessage());
+        }
         reminder.setAdvanceMinutes(session.getParsedAdvanceMinutes() != null ? session.getParsedAdvanceMinutes() : 10);
         reminder.setStatus(ReminderStatus.PENDING);
         reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);

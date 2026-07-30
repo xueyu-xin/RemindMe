@@ -56,6 +56,10 @@ public class Reminder {
     // 地点（可选）
     private String location;
 
+    // 备注（可选）：用户对提醒的补充说明
+    @Column(name = "note")
+    private String note;
+
     // 优先级：LOW / NORMAL / HIGH，默认 NORMAL；影响推送顺序与失败重试策略
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

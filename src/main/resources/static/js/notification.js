@@ -87,10 +87,10 @@ var NotificationSystem = (function() {
 
         notif.status = 'confirmed';
 
-        // 调用后端接口
+        // 调用后端接口：阶段二执行确认（标记提醒为 SENT/CONFIRMED，停止调度器推送）
         if (notif.sessionId) {
             var userId = localStorage.getItem('userId');
-            fetch('/api/confirmations/' + notif.sessionId + '/confirm?userId=' + userId, {
+            fetch('/api/confirmations/' + notif.sessionId + '/execute/confirm?userId=' + userId, {
                 method: 'POST',
                 headers: getHeaders()
             }).catch(function(err) {

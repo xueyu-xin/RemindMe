@@ -27,6 +27,8 @@ import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 // 提醒核心业务服务
@@ -56,6 +58,7 @@ public class ReminderService {
         String endTimeStr = request.getEndTime() != null ? request.getEndTime().format(FORMATTER) : null;
         String priority = request.getPriority() != null ? request.getPriority() : "NORMAL";
         String location = request.getLocation();
+        String note = request.getNote();
 
         return createReminderForAgent(
                 request.getUserId(),
@@ -63,6 +66,7 @@ public class ReminderService {
                 remindTimeStr,
                 endTimeStr,
                 location,
+                note,
                 priority
         );
     }
@@ -92,6 +96,9 @@ public class ReminderService {
         }
         if (request.getLocation() != null) {
             reminder.setLocation(request.getLocation());
+        }
+        if (request.getNote() != null) {
+            reminder.setNote(request.getNote());
         }
         if (request.getPriority() != null) {
             reminder.setPriority(Priority.valueOf(request.getPriority()));
@@ -160,6 +167,7 @@ public class ReminderService {
         response.setAdvanceMinutes(reminder.getAdvanceMinutes());
         response.setCronExpression(reminder.getCronExpression());
         response.setLocation(reminder.getLocation());
+        response.setNote(reminder.getNote());
         response.setPriority(reminder.getPriority().name());
         response.setStatus(reminder.getStatus().name());
         response.setConfirmStatus(reminder.getConfirmStatus().name());
@@ -174,11 +182,11 @@ public class ReminderService {
     // Agent 工具：创建提醒
     // 触发阶段一确认流程；标题命中周期关键词时路由到周期提醒
     // userId 用户ID；title 标题；remindTime 提醒时间（yyyy-MM-dd HH:mm:ss）
-    // endTime 结束时间（可选）；location 地点（可选）；priority 优先级（LOW/NORMAL/HIGH，默认 NORMAL）
+    // endTime 结束时间（可选）；location 地点（可选）；note 备注（可选）；priority 优先级（LOW/NORMAL/HIGH，默认 NORMAL）
     @AgentTool(name = "create_reminder", description = "创建提醒，用户要求设置提醒时调用")
     @Transactional
     public Map<String, Object> createReminderForAgent(Long userId, String title, String remindTime,
-            String endTime, String location, String priority) {
+            String endTime, String location, String note, String priority) {
         
         log.info("Agent调用创建提醒: userId={}, title={}, remindTime={}, endTime={}", userId, title, remindTime, endTime);
         
@@ -197,36 +205,50 @@ public class ReminderService {
             }
 
             // 解析时间
-            LocalDateTime parsedTime = LocalDateTime.parse(remindTime, FORMATTER);
-            LocalDateTime parsedEndTime = endTime != null ? LocalDateTime.parse(endTime, FORMATTER) : null;
-            
-            // 获取用户默认提前量
-            int defaultAdvance = userRepository.findById(userId)
-                    .map(User::getDefaultAdvanceMinutes)
-                    .orElse(10);
-            
-            LocalDateTime now = LocalDateTime.now();
-            long diffMinutes = java.time.Duration.between(now, parsedTime).toMinutes();
+            LocalDateTime parsedTime;
             int finalAdvance;
-            
-            if(diffMinutes == 0 || (diffMinutes > -1 && diffMinutes < 0)) {
-                // 用户说"等会"/"等一下" → 使用用户默认提前量
-                parsedTime = now.plusMinutes(defaultAdvance);
+
+            // 相对时间检测：优先解析 "X分钟后" 等相对时间表达，避免 diffMinutes=0 误判
+            LocalDateTime relativeTime = parseRelativeTimeInRemindTime(remindTime);
+            if (relativeTime != null) {
+                parsedTime = relativeTime;
                 remindTime = parsedTime.format(FORMATTER);
-                finalAdvance = defaultAdvance;
-            } else if(diffMinutes > 1 && diffMinutes <= 1440) {
-                // 用户说"X分钟后" → 使用实际差值作为提前量
-                finalAdvance = (int) diffMinutes;
+                long relDiff = java.time.Duration.between(LocalDateTime.now(), parsedTime).toMinutes();
+                finalAdvance = relDiff > 0 && relDiff <= 1440 ? (int) relDiff : 10;
+                log.info("相对时间解析成功: remindTime={}, parsedTime={}, advanceMinutes={}", remindTime, parsedTime, finalAdvance);
             } else {
-                // 其他明确时间（如明天下午3点）→ 使用默认提前量
-                finalAdvance = defaultAdvance;
+                // 原有逻辑：解析绝对时间，通过 diffMinutes 判断语义
+                parsedTime = LocalDateTime.parse(remindTime, FORMATTER);
+
+                int defaultAdvance = userRepository.findById(userId)
+                        .map(User::getDefaultAdvanceMinutes)
+                        .orElse(10);
+
+                LocalDateTime now = LocalDateTime.now();
+                long diffMinutes = java.time.Duration.between(now, parsedTime).toMinutes();
+
+                if(diffMinutes == 0 || (diffMinutes > -1 && diffMinutes < 0)) {
+                    // 用户说"等会"/"等一下" → 使用用户默认提前量
+                    parsedTime = now.plusMinutes(defaultAdvance);
+                    remindTime = parsedTime.format(FORMATTER);
+                    finalAdvance = defaultAdvance;
+                } else if(diffMinutes > 1 && diffMinutes <= 1440) {
+                    // 用户说"X分钟后" → 使用实际差值作为提前量
+                    finalAdvance = (int) diffMinutes;
+                } else {
+                    // 其他明确时间（如明天下午3点）→ 使用默认提前量
+                    finalAdvance = defaultAdvance;
+                }
             }
+
+            LocalDateTime parsedEndTime = endTime != null ? LocalDateTime.parse(endTime, FORMATTER) : null;
             
             // 构建确认会话的解析数据
             Map<String, Object> parsedData = new HashMap<>();
             parsedData.put("title", title);
             parsedData.put("remindTime", remindTime);
             parsedData.put("location", location);
+            parsedData.put("note", note);
             parsedData.put("priority", priority != null ? priority : "NORMAL");
             parsedData.put("advanceMinutes", finalAdvance);
             parsedData.put("source", "USER_INPUT");
@@ -272,6 +294,7 @@ public class ReminderService {
             result.put("title", title);
             result.put("remindTime", remindTime);
             result.put("location", location);
+            result.put("note", note);
             result.put("priority", priority != null ? priority : "NORMAL");
             result.put("sessionCreated", true);
             result.put("sessionId", card.getData().getSessionId());
@@ -327,6 +350,7 @@ public class ReminderService {
                         item.put("title", r.getTitle());
                         item.put("remindTime", r.getRemindTime().format(FORMATTER));
                         item.put("location", r.getLocation());
+                        item.put("note", r.getNote());
                         item.put("priority", r.getPriority().name());
                         item.put("status", r.getStatus().name());
                         item.put("confirmStatus", r.getConfirmStatus().name());
@@ -353,19 +377,19 @@ public class ReminderService {
     // Agent 工具：更新提醒
     // 修改指定提醒的信息，仅覆盖入参非空字段
     // userId 用户ID；reminderId 提醒ID；title 标题（可选）
-    // remindTime 提醒时间（可选，yyyy-MM-dd HH:mm:ss）；endTime 结束时间（可选）；location 地点（可选）
+    // remindTime 提醒时间（可选，yyyy-MM-dd HH:mm:ss）；endTime 结束时间（可选）；location 地点（可选）；note 备注（可选）
     @AgentTool(name = "update_reminder", description = "修改提醒，用户要求更改提醒时调用")
     @Transactional
     public Map<String, Object> updateReminderForAgent(Long userId, Long reminderId, String title,
-            String remindTime, String endTime, String location) {
-        
+            String remindTime, String endTime, String location, String note) {
+
         log.info("Agent调用更新提醒: userId={}, reminderId={}, endTime={}", userId, reminderId, endTime);
-        
+
         Map<String, Object> result = new HashMap<>();
-        
+
         try {
             Reminder reminder = getReminderByIdAndUserId(reminderId, userId);
-            
+
             if (title != null && !title.isBlank()) {
                 reminder.setTitle(title);
             }
@@ -380,9 +404,12 @@ public class ReminderService {
             if (location != null) {
                 reminder.setLocation(location);
             }
-            
+            if (note != null) {
+                reminder.setNote(note);
+            }
+
             Reminder saved = reminderRepository.save(reminder);
-            
+
             result.put("success", true);
             result.put("message", "提醒已更新");
             result.put("id", saved.getId());
@@ -392,8 +419,9 @@ public class ReminderService {
                 result.put("endTime", saved.getEndTime().format(FORMATTER));
             }
             result.put("location", saved.getLocation());
+            result.put("note", saved.getNote());
             result.put("priority", saved.getPriority().name());
-            
+
             log.info("Agent更新提醒成功: reminderId={}", reminderId);
             
         } catch (Exception e) {
@@ -458,6 +486,7 @@ public class ReminderService {
             result.put("advanceMinutes", reminder.getAdvanceMinutes());
             result.put("cronExpression", reminder.getCronExpression());
             result.put("location", reminder.getLocation());
+            result.put("note", reminder.getNote());
             result.put("priority", reminder.getPriority().name());
             result.put("status", reminder.getStatus().name());
             result.put("confirmStatus", reminder.getConfirmStatus().name());
@@ -608,6 +637,40 @@ public class ReminderService {
         }
 
         return result;
+    }
+
+    // 相对时间解析：检测 remindTime 参数是否为 "X分钟后"、"X小时后"、"X天后" 等相对时间表达
+    // 命中则返回对应的 LocalDateTime，未命中返回 null
+    private LocalDateTime parseRelativeTimeInRemindTime(String remindTime) {
+        if (remindTime == null || remindTime.isBlank()) {
+            return null;
+        }
+
+        // 匹配 "X分钟后" / "X分后"
+        Pattern minutePattern = Pattern.compile("(\\d+)\\s*分(?:钟)?后");
+        Matcher minuteMatcher = minutePattern.matcher(remindTime);
+        if (minuteMatcher.find()) {
+            int minutes = Integer.parseInt(minuteMatcher.group(1));
+            return LocalDateTime.now().plusMinutes(minutes);
+        }
+
+        // 匹配 "X小时后"
+        Pattern hourPattern = Pattern.compile("(\\d+)\\s*小时后");
+        Matcher hourMatcher = hourPattern.matcher(remindTime);
+        if (hourMatcher.find()) {
+            int hours = Integer.parseInt(hourMatcher.group(1));
+            return LocalDateTime.now().plusHours(hours);
+        }
+
+        // 匹配 "X天后"
+        Pattern dayPattern = Pattern.compile("(\\d+)\\s*天后");
+        Matcher dayMatcher = dayPattern.matcher(remindTime);
+        if (dayMatcher.find()) {
+            int days = Integer.parseInt(dayMatcher.group(1));
+            return LocalDateTime.now().plusDays(days);
+        }
+
+        return null;
     }
 
     // 周期关键词识别：扫描标题里的"每天/每周/每月"等词，推断重复类型与默认跨度
