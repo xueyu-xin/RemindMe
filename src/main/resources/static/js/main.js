@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
+﻿/**
  * 主脚本 - Main JavaScript
  * 集成卡片系统(CardSystem)、通知系统(NotificationSystem)、音效系统(SoundSystem)
  * 本文件必须在 sound.js、notification.js、card.js 之后加载
