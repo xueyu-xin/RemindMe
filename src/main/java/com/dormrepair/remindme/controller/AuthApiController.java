@@ -7,7 +7,6 @@ import com.dormrepair.remindme.dto.response.LoginResponse;
 import com.dormrepair.remindme.entity.User;
 import com.dormrepair.remindme.service.UserService;
 import com.dormrepair.remindme.service.VerificationCodeService;
-import com.dormrepair.remindme.utils.JwtUtils;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -28,8 +27,6 @@ public class AuthApiController {
     private final UserService userService;
     // 验证码服务：负责生成、存储、校验短信验证码的生命周期
     private final VerificationCodeService verificationCodeService;
-    // JWT 工具：登录成功后生成带用户身份的 Token，后续请求通过 Header 携带此 Token
-    private final JwtUtils jwtUtils;
 
     // 用户注册接口。校验手机号与验证码有效性，创建用户记录后返回生成的 userId
     // request - 包含手机号、验证码、密码、昵称等注册信息（由 RegisterRequest 字段约束校验）
@@ -45,14 +42,11 @@ public class AuthApiController {
         return ResponseEntity.ok(response);
     }
 
-    // 用户登录接口。校验手机号+密码（或验证码）匹配后生成 JWT Token 写入返回体
+    // 用户登录接口。校验手机号+密码（或验证码）匹配后返回用户基础信息
     // request - 包含手机号、密码/验证码等登录凭证
     @PostMapping("/login")
     public ResponseEntity<LoginResponse> login(@Valid @RequestBody LoginRequest request) {
         LoginResponse response = userService.login(request);
-        // 登录成功后，以 userId+phone 为载荷生成 JWT，保存后在后续请求中通过 Authorization 头回传
-        String token = jwtUtils.generateToken(response.getUserId(), request.getPhone());
-        response.setToken(token);
 
         return ResponseEntity.ok(response);
     }

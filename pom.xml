@@ -115,31 +115,6 @@
 			<artifactId>spring-ai-starter-model-ollama</artifactId>
 		</dependency>
 
-		<!-- ========== JWT ========== -->
-
-		<!-- JJWT API：JWT令牌生成与解析核心API -->
-		<dependency>
-			<groupId>io.jsonwebtoken</groupId>
-			<artifactId>jjwt-api</artifactId>
-			<version>${jjwt.version}</version>
-		</dependency>
-
-		<!-- JJWT 实现：运行时依赖，提供JWT处理的具体实现 -->
-		<dependency>
-			<groupId>io.jsonwebtoken</groupId>
-			<artifactId>jjwt-impl</artifactId>
-			<version>${jjwt.version}</version>
-			<scope>runtime</scope>
-		</dependency>
-
-		<!-- JJWT Jackson：运行时依赖，支持JSON序列化/反序列化 -->
-		<dependency>
-			<groupId>io.jsonwebtoken</groupId>
-			<artifactId>jjwt-jackson</artifactId>
-			<version>${jjwt.version}</version>
-			<scope>runtime</scope>
-		</dependency>
-
 		<!-- ========== 工具类 ========== -->
 
 		<!-- Lombok：简化Java代码，自动生成getter/setter等 -->
