@@ -35,7 +35,6 @@ public class SchedulerService {
     // 各业务依赖：提醒仓储、确认卡片、WebSocket 推送、天气、LLM、用户偏好、周期提醒
     private final ReminderRepository reminderRepository;
     private final ConfirmationService confirmationService;
-    private final WebSocketPushService webSocketPushService;
     private final WeatherService weatherService;
     private final LLMService llmService;
     private final UserService userService;
@@ -114,15 +113,10 @@ public class SchedulerService {
                     confirmationService.pushExecuteCard(reminder, weatherSuggestion);
 
                     reminder.setLastConfirmRemindAt(LocalDateTime.now());
-                    if (reminder.getConfirmAttempts() == 0) {
-                        reminder.setConfirmAttempts(1);
-                    } else {
-                        reminder.setConfirmAttempts(reminder.getConfirmAttempts() + 1);
-                    }
                     reminderRepository.save(reminder);
 
-                    log.info("阶段二提醒已推送: id={}, title={}, attempt={}, weatherSuggestion={}",
-                            reminder.getId(), reminder.getTitle(), reminder.getConfirmAttempts(), weatherSuggestion);
+                    log.info("阶段二提醒已推送: id={}, title={}, weatherSuggestion={}",
+                            reminder.getId(), reminder.getTitle(), weatherSuggestion);
 
                 } catch (Exception e) {
                     log.error("推送阶段二提醒失败: id={}", reminder.getId(), e);
@@ -327,11 +321,11 @@ public class SchedulerService {
         String temperature;
     }
 
-    // 每小时执行：检查连续 3 次未响应的提醒，自动标记为默认执行
+    // 每小时执行：检查连续多次未响应的提醒，仅记录日志，不自动确认
     @Scheduled(cron = "0 0 * * * ?")
     @Transactional
     public void checkConfirmTimeout() {
-        log.debug("检查超时未确认提醒...");
+        log.debug("检查超时未确认提醒（仅记录日志）...");
 
         List<Reminder> timeoutReminders = reminderRepository
                 .findByStatusAndConfirmStatusAndExecutionStatusAndConfirmAttemptsGreaterThanEqual(
@@ -341,34 +335,12 @@ public class SchedulerService {
                         3);
 
         for (Reminder reminder : timeoutReminders) {
-            try {
-                reminder.setExecutionStatus(ExecutionStatus.DEFAULTED);
-                reminder.setStatus(ReminderStatus.SENT);
-                reminderRepository.save(reminder);
-                log.info("提醒默认确认执行(3次稍后): id={}", reminder.getId());
-
-                // 推送自动确认消息
-                pushExecuteAutoConfirm(reminder);
-            } catch (Exception e) {
-                log.error("检查确认超时失败: id={}", reminder.getId(), e);
-            }
+            log.warn("提醒长时间未响应(非自动确认): id={}, title={}, confirmAttempts={}",
+                    reminder.getId(), reminder.getTitle(), reminder.getConfirmAttempts());
         }
-    }
 
-    // 通过 WebSocket 推送自动确认通知，告知用户该提醒已自动确认
-    private void pushExecuteAutoConfirm(Reminder reminder) {
-        try {
-            Map<String, Object> data = new HashMap<>();
-            data.put("type", "execute_auto_confirm");
-            data.put("success", true);
-            data.put("message", "⏰ 提醒已自动确认（3次稍后未响应）：" + reminder.getTitle());
-            data.put("reminderId", reminder.getId());
-            data.put("title", reminder.getTitle());
-
-            webSocketPushService.pushToUser(reminder.getUserId(), "/topic/confirmations", data);
-            log.info("推送阶段二自动确认消息: userId={}, reminderId={}", reminder.getUserId(), reminder.getId());
-        } catch (Exception e) {
-            log.error("推送阶段二自动确认消息失败: userId={}, error={}", reminder.getUserId(), e.getMessage());
+        if (!timeoutReminders.isEmpty()) {
+            log.info("阶段二提醒超时检查完成: {} 条提醒长时间未响应，保持待定状态", timeoutReminders.size());
         }
     }
 

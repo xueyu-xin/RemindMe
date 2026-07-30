@@ -209,7 +209,7 @@ public class ReminderService {
             long diffMinutes = java.time.Duration.between(now, parsedTime).toMinutes();
             int finalAdvance;
             
-            if(diffMinutes <= 1 && diffMinutes >= -1) {
+            if(diffMinutes == 0 || (diffMinutes > -1 && diffMinutes < 0)) {
                 // 用户说"等会"/"等一下" → 使用用户默认提前量
                 parsedTime = now.plusMinutes(defaultAdvance);
                 remindTime = parsedTime.format(FORMATTER);
