@@ -723,15 +723,26 @@ public class AgentService {
     // LLM 不可用时走默认文案兜底
     private String buildConfirmationLead(Long userId, String title, String remindTime,
                                          String location, boolean isRecurring) {
-        String defaultText = isRecurring
-                ? "📅 我帮你解析了周期提醒，请在下方卡片确认："
-                : "📋 我帮你解析了提醒信息，请在下方卡片确认：";
+        // 兜底文案：根据提醒类型使用不同风格
+        String defaultText;
+        if (isRecurring) {
+            defaultText = "好啦，周期提醒已准备好，帮你设为" + (title != null ? "「" + title + "」" : "") +
+                    (remindTime != null ? "，时间" + remindTime : "") + "，在下方卡片确认一下吧～";
+        } else {
+            defaultText = "好啦，" + (title != null ? "「" + title + "」" : "提醒") +
+                    (remindTime != null ? "已设为" + remindTime : "") + "，在下方卡片确认一下吧～";
+        }
+
         try {
             StringBuilder sb = new StringBuilder();
-            sb.append("以下是刚解析到的待确认提醒信息，请生成一句对用户的引导语，要求：\n");
-            sb.append("- 直接告诉用户你创建了什么提醒（包含标题和时间），让用户确认或取消；\n");
-            sb.append("- 不要输出任何JSON、工具调用、演戏格式；\n");
-            sb.append("- 不要过程语前缀，不要表情堆砌，50字以内。\n\n");
+            sb.append("请根据以下提醒信息，生成一句自然、口语化的引导语，引导用户在确认卡片上确认或取消。\n\n");
+            sb.append("要求：\n");
+            sb.append("- 直接用朋友的语气告诉用户你创建了什么提醒，包含标题和时间\n");
+            sb.append("- 不要输出任何JSON、工具调用、演戏格式\n");
+            sb.append("- 不要使用'正在生成'、'请稍候'等过程性语言\n");
+            sb.append("- 50字以内，自然友好\n");
+            sb.append("- 日常提醒轻松随意，重要/周期提醒更认真清晰\n\n");
+
             sb.append("提醒标题：").append(title == null ? "(未命名)" : title).append("\n");
             sb.append("提醒时间：").append(remindTime == null ? "(未设置)" : remindTime).append("\n");
             if (location != null && !location.isBlank()) {
@@ -742,18 +753,14 @@ public class AgentService {
             }
 
             String hint = sb.toString();
-            List<ToolDefinition> noTools = List.of();  // 确认引导阶段禁止再调工具
+            List<ToolDefinition> noTools = List.of();
             List<Message> history = conversationMemory.getHistory(userId);
             String reply = llmService.chatWithTools(hint, noTools, history);
             reply = sanitizeLlmOutput(reply);
             if (reply == null || reply.isBlank()) {
                 return defaultText;
             }
-            // 确保引导语里包含"确认/取消"类字样，否则在末尾拼接默认卡片提示
-            if (reply.contains("请确认") || reply.contains("确认") || reply.contains("取消")) {
-                return reply;
-            }
-            return reply + "\n" + defaultText;
+            return reply;
         } catch (Exception e) {
             log.warn("生成确认卡片引导语失败，使用兜底文案: {}", e.getMessage());
             return defaultText;

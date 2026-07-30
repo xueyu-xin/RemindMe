@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.service;
 
+import com.dormrepair.remindme.agent.AgentResponse;
 import com.dormrepair.remindme.agent.AgentService;
 import com.dormrepair.remindme.agent.event.EventPublisher;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse;
@@ -18,6 +19,7 @@ import com.dormrepair.remindme.repository.ConfirmationRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.transaction.support.TransactionTemplate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -50,6 +52,7 @@ public class ConfirmationService {
     private final ConflictDetectionService conflictDetectionService;
     private final AgentService agentService;
     private final UserService userService;
+    private final TransactionTemplate transactionTemplate;
 
     // 周期提醒服务，用 @Lazy 避免循环依赖
     @org.springframework.beans.factory.annotation.Autowired
@@ -135,16 +138,67 @@ public class ConfirmationService {
         return confirm(sessionId, userId, List.of());
     }
 
-    // 确认会话：校验状态与过期时间，周期提醒走周期分支，普通提醒删除指定冲突后创建提醒并发布事件
-    @Transactional
+    // 确认会话：原子标记状态→创建提醒→提交事务→调用 AgentService 生成人性化回复（事务外）
     public Map<String, Object> confirm(String sessionId, Long userId, List<Long> conflictIdsToOverwrite) {
+        // 在事务内执行 DB 操作（原子标记 + 创建提醒）
+        Map<String, Object> result = transactionTemplate.execute(status -> {
+            int updated = confirmationRepository.markConfirmed(sessionId, userId, LocalDateTime.now());
+            if (updated == 0) {
+                return handleDuplicateConfirm(sessionId, userId);
+            }
+
+            ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                    .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+
+            if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
+                throw new IllegalArgumentException("该会话已过期，请重新创建");
+            }
+
+            Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+
+            if (Boolean.TRUE.equals(parsedData.get("isRecurring"))) {
+                return confirmRecurring(session, userId, parsedData);
+            }
+
+            List<String> overwrittenTitles = deleteConflicts(userId, conflictIdsToOverwrite);
+            Reminder reminder = createReminder(userId, parsedData, ConfirmStatus.CONFIRMED);
+
+            session.setStage("REMINDER_EXECUTE");
+            session.setReminderId(reminder.getId());
+            confirmationRepository.save(session);
+
+            String overwrittenTitle = overwrittenTitles.isEmpty() ? null : String.join("、", overwrittenTitles);
+            Map<String, Object> basicResult = new HashMap<>();
+            basicResult.put("success", true);
+            basicResult.put("reminderId", reminder.getId());
+            basicResult.put("title", reminder.getTitle());
+            basicResult.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+            if (!overwrittenTitles.isEmpty()) {
+                basicResult.put("overwrittenTitle", overwrittenTitle);
+            }
+            basicResult.put("_llmFallback", buildConfirmSuccessMessage(reminder, overwrittenTitle));
+            log.info("确认创建(事务内): sessionId={}, userId={}, reminderId={}, deletedConflicts={}", sessionId, userId, reminder.getId(), overwrittenTitles.size());
+            return basicResult;
+        });
+
+        // 事务提交后，调用 AgentService 生成人性化回复（不占用数据库连接）
+        if (result != null && Boolean.TRUE.equals(result.get("success"))) {
+            String fallbackMsg = (String) result.remove("_llmFallback");
+            enrichWithAgentReply(result, userId, sessionId, true);
+            if (result.get("message") == null) {
+                result.put("message", fallbackMsg != null ? fallbackMsg : "提醒已确认");
+            }
+        }
+
+        return result;
+    }
+
+    // 处理重复确认请求：返回已存在的结果，不创建新提醒
+    private Map<String, Object> handleDuplicateConfirm(String sessionId, Long userId) {
         ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
 
         SessionStatus status = session.getStatus();
-        if (status == SessionStatus.CONFIRMED) {
-            throw new IllegalArgumentException("该会话已确认，不能重复确认");
-        }
         if (status == SessionStatus.CANCELLED) {
             throw new IllegalArgumentException("该会话已取消，不能确认");
         }
@@ -152,62 +206,36 @@ public class ConfirmationService {
             throw new IllegalArgumentException("该会话已过期，不能确认");
         }
 
-        if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
-            session.setStatus(SessionStatus.EXPIRED);
-            confirmationRepository.save(session);
-            throw new IllegalArgumentException("该会话已过期，请重新创建");
+        // 已经是 CONFIRMED：返回已创建的提醒信息
+        if (status == SessionStatus.CONFIRMED) {
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("isDuplicate", true);
+            if (session.getReminderId() != null) {
+                result.put("reminderId", session.getReminderId());
+                Reminder reminder = reminderRepository.findById(session.getReminderId()).orElse(null);
+                if (reminder != null) {
+                    result.put("title", reminder.getTitle());
+                    result.put("remindTime", reminder.getRemindTime() != null
+                            ? reminder.getRemindTime().format(FORMATTER) : "");
+                }
+            }
+            result.put("message", "该提醒已确认，无需重复操作～");
+            log.info("重复确认请求已拦截: sessionId={}, userId={}", sessionId, userId);
+            return result;
         }
 
-        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
-
-        // 周期提醒：走周期创建流程
-        if (Boolean.TRUE.equals(parsedData.get("isRecurring"))) {
-            return confirmRecurring(session, userId, parsedData);
-        }
-
-        List<String> overwrittenTitles = deleteConflicts(userId, conflictIdsToOverwrite);
-
-        Reminder reminder = createReminder(userId, parsedData, ConfirmStatus.CONFIRMED);
-
-        session.setStatus(SessionStatus.CONFIRMED);
-        session.setStage("REMINDER_EXECUTE");
-        session.setReminderId(reminder.getId());
-        confirmationRepository.save(session);
-
-        String overwrittenTitle = overwrittenTitles.isEmpty() ? null : String.join("、", overwrittenTitles);
-        String successMessage = buildConfirmSuccessMessage(reminder, overwrittenTitle);
-
-        Map<String, Object> result = new HashMap<>();
-        result.put("success", true);
-        result.put("message", successMessage);
-        result.put("reminderId", reminder.getId());
-        result.put("title", reminder.getTitle());
-        result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
-        if (!overwrittenTitles.isEmpty()) {
-            result.put("overwrittenTitle", overwrittenTitle);
-        }
-
-        log.info("确认创建: sessionId={}, userId={}, reminderId={}, deletedConflicts={}", sessionId, userId, reminder.getId(), overwrittenTitles.size());
-
-        try {
-            eventPublisher.publishReminderConfirmed(userId, reminder.getId(), reminder.getTitle());
-            log.info("发布确认事件: sessionId={}, userId={}, reminderId={}", sessionId, userId, reminder.getId());
-        } catch (Exception e) {
-            log.error("发布确认事件失败: sessionId={}, userId={}, error={}", sessionId, userId, e.getMessage(), e);
-        }
-
-        return result;
+        throw new IllegalArgumentException("会话状态异常，请重试");
     }
 
-    // 周期提醒确认分支：调用周期生成实例，更新会话状态并发布确认事件
+    // 周期提醒确认分支：调用周期生成实例，更新会话状态，不再发布事件（由统一回复流程处理）
     private Map<String, Object> confirmRecurring(ConfirmationSession session, Long userId, Map<String, Object> parsedData) {
         String title = (String) parsedData.get("title");
-        // 使用纯时间 HH:mm:ss，如果没有则从完整时间中提取
         String remindTime = (String) parsedData.get("recurringRemindTime");
         if (remindTime == null) {
             String fullTime = (String) parsedData.get("remindTime");
             if (fullTime != null && fullTime.length() > 10) {
-                remindTime = fullTime.substring(11);  // 提取时间部分
+                remindTime = fullTime.substring(11);
             }
         }
         String startDate = (String) parsedData.get("startDate");
@@ -219,13 +247,11 @@ public class ConfirmationService {
         Map<String, Object> createResult = recurringReminderService.generateInstancesFromConfirm(
                 userId, title, remindTime, startDate, endDate, repeatType, location, priority);
 
-        session.setStatus(SessionStatus.CONFIRMED);
         session.setStage("REMINDER_EXECUTE");
         confirmationRepository.save(session);
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", createResult.get("success"));
-        result.put("message", createResult.get("message"));
         result.put("isRecurring", true);
         if (createResult.get("recurringId") != null) {
             result.put("recurringId", createResult.get("recurringId"));
@@ -240,29 +266,42 @@ public class ConfirmationService {
             result.put("conflictCount", createResult.get("conflictCount"));
         }
 
-        log.info("周期提醒确认创建: sessionId={}, userId={}, recurringId={}", session.getSessionId(), userId, createResult.get("recurringId"));
-
+        // 调用 AgentService 生成人性化回复
         try {
-            eventPublisher.publishReminderConfirmed(userId, null, title);
+            AgentResponse agentResponse = agentService.handleConfirmationResult(userId, session.getSessionId(), true);
+            if (agentResponse != null && agentResponse.getContent() != null) {
+                result.put("message", agentResponse.getContent());
+            } else {
+                result.put("message", createResult.get("message"));
+            }
         } catch (Exception e) {
-            log.error("发布确认事件失败: {}", e.getMessage());
+            log.warn("AgentService 生成回复失败，使用兜底文案: sessionId={}, error={}", session.getSessionId(), e.getMessage());
+            result.put("message", createResult.get("message"));
         }
 
+        log.info("周期提醒确认创建: sessionId={}, userId={}, recurringId={}", session.getSessionId(), userId, createResult.get("recurringId"));
         return result;
     }
 
     // 周期提醒-直接创建全部：不覆盖冲突，冲突日多条并存
     @Transactional
     public Map<String, Object> confirmRecurringDirect(String sessionId, Long userId) {
-        ConfirmationSession session = findAndValidateSession(sessionId, userId);
+        ConfirmationSession session = atomicMarkConfirmed(sessionId, userId);
+        if (session.getStatus() == SessionStatus.CONFIRMED) {
+            Map<String, Object> dup = new HashMap<>();
+            dup.put("success", true);
+            dup.put("isDuplicate", true);
+            dup.put("message", "该提醒已确认，无需重复操作～");
+            return dup;
+        }
         Map<String, Object> parsedData = parseParsedData(session.getParsedData());
         Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "direct");
 
-        session.setStatus(SessionStatus.CONFIRMED);
         session.setStage("REMINDER_EXECUTE");
         confirmationRepository.save(session);
 
         Map<String, Object> result = new HashMap<>(createResult);
+        enrichWithAgentReply(result, userId, sessionId, true);
         pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
         log.info("周期提醒直接创建: sessionId={}, userId={}", sessionId, userId);
         return result;
@@ -271,15 +310,22 @@ public class ConfirmationService {
     // 周期提醒-创建无冲突部分：跳过冲突日，仅生成不冲突的实例
     @Transactional
     public Map<String, Object> confirmRecurringSkip(String sessionId, Long userId) {
-        ConfirmationSession session = findAndValidateSession(sessionId, userId);
+        ConfirmationSession session = atomicMarkConfirmed(sessionId, userId);
+        if (session.getStatus() == SessionStatus.CONFIRMED) {
+            Map<String, Object> dup = new HashMap<>();
+            dup.put("success", true);
+            dup.put("isDuplicate", true);
+            dup.put("message", "该提醒已确认，无需重复操作～");
+            return dup;
+        }
         Map<String, Object> parsedData = parseParsedData(session.getParsedData());
         Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "skip");
 
-        session.setStatus(SessionStatus.CONFIRMED);
         session.setStage("REMINDER_EXECUTE");
         confirmationRepository.save(session);
 
         Map<String, Object> result = new HashMap<>(createResult);
+        enrichWithAgentReply(result, userId, sessionId, true);
         pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
         log.info("周期提醒跳过冲突创建: sessionId={}, userId={}", sessionId, userId);
         return result;
@@ -288,21 +334,28 @@ public class ConfirmationService {
     // 周期提醒-全部覆盖：删除冲突提醒后再创建全部实例
     @Transactional
     public Map<String, Object> confirmRecurringOverwriteAll(String sessionId, Long userId) {
-        ConfirmationSession session = findAndValidateSession(sessionId, userId);
+        ConfirmationSession session = atomicMarkConfirmed(sessionId, userId);
+        if (session.getStatus() == SessionStatus.CONFIRMED) {
+            Map<String, Object> dup = new HashMap<>();
+            dup.put("success", true);
+            dup.put("isDuplicate", true);
+            dup.put("message", "该提醒已确认，无需重复操作～");
+            return dup;
+        }
         Map<String, Object> parsedData = parseParsedData(session.getParsedData());
         Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "overwrite");
 
-        session.setStatus(SessionStatus.CONFIRMED);
         session.setStage("REMINDER_EXECUTE");
         confirmationRepository.save(session);
 
         Map<String, Object> result = new HashMap<>(createResult);
+        enrichWithAgentReply(result, userId, sessionId, true);
         pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
         log.info("周期提醒全部覆盖创建: sessionId={}, userId={}", sessionId, userId);
         return result;
     }
 
-    // 查找并校验会话：确认存在、未终态、未过期，过期会标记 EXPIRED
+    // 查找并校验会话：已替换为原子 markConfirmed 模式，此方法仅用于非确认类操作（如编辑、重新解析）
     private ConfirmationSession findAndValidateSession(String sessionId, Long userId) {
         ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
@@ -322,6 +375,39 @@ public class ConfirmationService {
             throw new IllegalArgumentException("该会话已过期，请重新创建");
         }
         return session;
+    }
+
+    // 通用：原子标记会话为 CONFIRMED + 调用 AgentService 生成人性化回复
+    // 返回 { session, isDuplicate }，isDuplicate=true 表示已被处理过
+    private ConfirmationSession atomicMarkConfirmed(String sessionId, Long userId) {
+        int updated = confirmationRepository.markConfirmed(sessionId, userId, LocalDateTime.now());
+        if (updated == 0) {
+            // 已被处理过，读取当前状态
+            ConfirmationSession existing = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                    .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+            if (existing.getStatus() == SessionStatus.CANCELLED) {
+                throw new IllegalArgumentException("该会话已取消，不能确认");
+            }
+            if (existing.getStatus() == SessionStatus.EXPIRED) {
+                throw new IllegalArgumentException("该会话已过期，不能确认");
+            }
+            // CONFIRMED: 直接返回（调用方判断 isDuplicate）
+            return existing;
+        }
+        return confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+    }
+
+    // 通用：调用 AgentService 生成确认回复，注入到 result 的 message 字段
+    private void enrichWithAgentReply(Map<String, Object> result, Long userId, String sessionId, boolean confirmed) {
+        try {
+            AgentResponse agentResponse = agentService.handleConfirmationResult(userId, sessionId, confirmed);
+            if (agentResponse != null && agentResponse.getContent() != null) {
+                result.put("message", agentResponse.getContent());
+            }
+        } catch (Exception e) {
+            log.warn("AgentService 生成回复失败: sessionId={}, error={}", sessionId, e.getMessage());
+        }
     }
 
     // 按 mode 调用周期提醒的不同生成策略：direct 全量 / skip 跳过冲突 / overwrite 覆盖冲突
@@ -351,180 +437,130 @@ public class ConfirmationService {
         };
     }
 
-    // 取消确认会话：校验状态与过期后置为 CANCELLED，并发布提醒取消事件
-    @Transactional
+    // 取消确认会话：原子标记为 CANCELLED + AgentService 生成人性化回复（事务外）
     public Map<String, Object> cancel(String sessionId, Long userId) {
-        // 1. 先查找会话（不检查过期时间）
-        ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
-                .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+        Map<String, Object> result = transactionTemplate.execute(status -> {
+            int updated = confirmationRepository.markCancelled(sessionId, userId, LocalDateTime.now());
+            if (updated == 0) {
+                ConfirmationSession existing = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                        .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+                if (existing.getStatus() == SessionStatus.CONFIRMED) {
+                    throw new IllegalArgumentException("该会话已确认，不能取消");
+                }
+                if (existing.getStatus() == SessionStatus.CANCELLED) {
+                    Map<String, Object> dup = new HashMap<>();
+                    dup.put("success", true);
+                    dup.put("isDuplicate", true);
+                    dup.put("message", "该会话已取消");
+                    return dup;
+                }
+                if (existing.getStatus() == SessionStatus.EXPIRED) {
+                    throw new IllegalArgumentException("该会话已过期，不能取消");
+                }
+            }
+            Map<String, Object> r = new HashMap<>();
+            r.put("success", true);
+            return r;
+        });
 
-        // 2. 检查会话状态
-        SessionStatus status = session.getStatus();
-        if (status == SessionStatus.CONFIRMED) {
-            throw new IllegalArgumentException("该会话已确认，不能取消");
+        // 事务提交后，调用 AgentService 生成人性化取消回复
+        if (result != null && Boolean.TRUE.equals(result.get("success")) && !Boolean.TRUE.equals(result.get("isDuplicate"))) {
+            try {
+                AgentResponse agentResponse = agentService.handleConfirmationResult(userId, sessionId, false);
+                if (agentResponse != null && agentResponse.getContent() != null) {
+                    result.put("message", agentResponse.getContent());
+                } else {
+                    result.put("message", "好的，已取消提醒。");
+                }
+            } catch (Exception e) {
+                log.warn("AgentService 生成取消回复失败: sessionId={}, error={}", sessionId, e.getMessage());
+                result.put("message", "好的，已取消提醒。");
+            }
         }
-        if (status == SessionStatus.CANCELLED) {
-            throw new IllegalArgumentException("该会话已取消，不能重复取消");
-        }
-        if (status == SessionStatus.EXPIRED) {
-            throw new IllegalArgumentException("该会话已过期，不能取消");
-        }
-
-        // 3. 检查是否过期
-        if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
-            session.setStatus(SessionStatus.EXPIRED);
-            confirmationRepository.save(session);
-            throw new IllegalArgumentException("该会话已过期，请重新创建");
-        }
-
-        // 4. 所有检查通过，正常执行取消逻辑
-        session.setStatus(SessionStatus.CANCELLED);
-        confirmationRepository.save(session);
-
-        Map<String, Object> result = new HashMap<>();
-        result.put("success", true);
-        result.put("message", "❌ 已取消创建提醒");
 
         log.info("取消确认会话: sessionId={}, userId={}", sessionId, userId);
-
-        // 发布提醒取消事件（通知Agent）
-        try {
-            eventPublisher.publishReminderCancelled(userId, session.getReminderId(), session.getParsedTitle());
-            log.info("发布取消事件: sessionId={}, userId={}", sessionId, userId);
-        } catch (Exception e) {
-            log.error("发布取消事件失败: sessionId={}, userId={}, error={}", sessionId, userId, e.getMessage(), e);
-        }
-
         return result;
     }
 
-    // 覆盖创建（全量）：删除会话中记录的所有冲突提醒，再创建新提醒并发布事件
-    @Transactional
+    // 覆盖创建（全量）：事务内 DB 操作 + 事务外 AgentService 回复
     public Map<String, Object> handleOverwrite(String sessionId, Long userId) {
-        log.info("=== handleOverwrite (全量) 被调用 === sessionId={}, userId={}", sessionId, userId);
-
-        try {
-            Map<String, Object> result = new HashMap<>();
-
+        Map<String, Object> result = transactionTemplate.execute(status -> {
+            int updated = confirmationRepository.markConfirmed(sessionId, userId, LocalDateTime.now());
+            if (updated == 0) {
+                ConfirmationSession existing = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                        .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+                if (existing.getStatus() == SessionStatus.CONFIRMED) {
+                    Map<String, Object> dup = new HashMap<>();
+                    dup.put("success", true);
+                    dup.put("isDuplicate", true);
+                    dup.put("message", "该提醒已确认，无需重复操作～");
+                    return dup;
+                }
+                throw new IllegalArgumentException("会话状态异常，请重试");
+            }
             ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                     .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
-
-            SessionStatus status = session.getStatus();
-            if (status == SessionStatus.CONFIRMED) {
-                throw new IllegalArgumentException("该会话已确认，不能重复操作");
-            }
-            if (status == SessionStatus.CANCELLED) {
-                throw new IllegalArgumentException("该会话已取消");
-            }
-            if (status == SessionStatus.EXPIRED) {
-                throw new IllegalArgumentException("该会话已过期，请重新创建");
-            }
-
-            if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
-                session.setStatus(SessionStatus.EXPIRED);
-                confirmationRepository.save(session);
-                throw new IllegalArgumentException("该会话已过期，请重新创建");
-            }
-
             Map<String, Object> parsedData = parseParsedData(session.getParsedData());
-
             List<Long> allConflictIds = getAllConflictIds(parsedData);
             List<String> overwrittenTitles = deleteConflicts(userId, allConflictIds);
-
             Reminder reminder = createReminder(userId, parsedData, ConfirmStatus.CONFIRMED);
-
-            session.setStatus(SessionStatus.CONFIRMED);
             session.setStage("REMINDER_EXECUTE");
             session.setReminderId(reminder.getId());
             confirmationRepository.save(session);
-
             String overwrittenTitle = overwrittenTitles.isEmpty() ? null : String.join("、", overwrittenTitles);
-            String successMessage = buildConfirmSuccessMessage(reminder, overwrittenTitle);
-
-            result.put("success", true);
-            result.put("message", successMessage);
-            result.put("reminderId", reminder.getId());
-            if (!overwrittenTitles.isEmpty()) {
-                result.put("overwrittenTitle", overwrittenTitle);
-            }
-
-            log.info("全量覆盖成功: sessionId={}, reminderId={}, deletedConflicts={}", sessionId, reminder.getId(), overwrittenTitles.size());
-
-            try {
-                eventPublisher.publishReminderConfirmed(userId, reminder.getId(), reminder.getTitle());
-            } catch (Exception e) {
-                log.error("发布确认事件失败: {}", e.getMessage(), e);
-            }
-
-            return result;
-        } catch (Exception e) {
-            log.error("handleOverwrite 执行失败: sessionId={}, userId={}", sessionId, userId, e);
-            throw e;
+            Map<String, Object> r = new HashMap<>();
+            r.put("success", true);
+            r.put("reminderId", reminder.getId());
+            r.put("title", reminder.getTitle());
+            r.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+            if (!overwrittenTitles.isEmpty()) r.put("overwrittenTitle", overwrittenTitle);
+            log.info("全量覆盖成功(事务内): sessionId={}, reminderId={}", sessionId, reminder.getId());
+            return r;
+        });
+        if (result != null && Boolean.TRUE.equals(result.get("success")) && !Boolean.TRUE.equals(result.get("isDuplicate"))) {
+            enrichWithAgentReply(result, userId, sessionId, true);
         }
+        return result;
     }
 
-    // 覆盖创建（指定 ID）：仅删除指定的冲突提醒，再创建新提醒并发布事件
-    @Transactional
+    // 覆盖创建（指定 ID）：事务内 DB 操作 + 事务外 AgentService 回复
     public Map<String, Object> handleOverwrite(String sessionId, Long userId, List<Long> conflictIdsToOverwrite) {
-        log.info("=== handleOverwrite (指定ID) 被调用 === sessionId={}, userId={}, conflictIds={}", sessionId, userId, conflictIdsToOverwrite);
-
-        try {
-            Map<String, Object> result = new HashMap<>();
-
+        Map<String, Object> result = transactionTemplate.execute(status -> {
+            int updated = confirmationRepository.markConfirmed(sessionId, userId, LocalDateTime.now());
+            if (updated == 0) {
+                ConfirmationSession existing = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+                        .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+                if (existing.getStatus() == SessionStatus.CONFIRMED) {
+                    Map<String, Object> dup = new HashMap<>();
+                    dup.put("success", true);
+                    dup.put("isDuplicate", true);
+                    dup.put("message", "该提醒已确认，无需重复操作～");
+                    return dup;
+                }
+                throw new IllegalArgumentException("会话状态异常，请重试");
+            }
             ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                     .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
-
-            SessionStatus status = session.getStatus();
-            if (status == SessionStatus.CONFIRMED) {
-                throw new IllegalArgumentException("该会话已确认，不能重复操作");
-            }
-            if (status == SessionStatus.CANCELLED) {
-                throw new IllegalArgumentException("该会话已取消");
-            }
-            if (status == SessionStatus.EXPIRED) {
-                throw new IllegalArgumentException("该会话已过期，请重新创建");
-            }
-
-            if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
-                session.setStatus(SessionStatus.EXPIRED);
-                confirmationRepository.save(session);
-                throw new IllegalArgumentException("该会话已过期，请重新创建");
-            }
-
             Map<String, Object> parsedData = parseParsedData(session.getParsedData());
-
             List<String> overwrittenTitles = deleteConflicts(userId, conflictIdsToOverwrite);
-
             Reminder reminder = createReminder(userId, parsedData, ConfirmStatus.CONFIRMED);
-
-            session.setStatus(SessionStatus.CONFIRMED);
             session.setStage("REMINDER_EXECUTE");
             session.setReminderId(reminder.getId());
             confirmationRepository.save(session);
-
             String overwrittenTitle = overwrittenTitles.isEmpty() ? null : String.join("、", overwrittenTitles);
-            String successMessage = buildConfirmSuccessMessage(reminder, overwrittenTitle);
-
-            result.put("success", true);
-            result.put("message", successMessage);
-            result.put("reminderId", reminder.getId());
-            if (!overwrittenTitles.isEmpty()) {
-                result.put("overwrittenTitle", overwrittenTitle);
-            }
-
-            log.info("指定ID覆盖成功: sessionId={}, reminderId={}, deletedConflicts={}", sessionId, reminder.getId(), overwrittenTitles.size());
-
-            try {
-                eventPublisher.publishReminderConfirmed(userId, reminder.getId(), reminder.getTitle());
-            } catch (Exception e) {
-                log.error("发布确认事件失败: {}", e.getMessage(), e);
-            }
-
-            return result;
-        } catch (Exception e) {
-            log.error("handleOverwrite(指定ID) 执行失败: sessionId={}, userId={}", sessionId, userId, e);
-            throw e;
+            Map<String, Object> r = new HashMap<>();
+            r.put("success", true);
+            r.put("reminderId", reminder.getId());
+            r.put("title", reminder.getTitle());
+            r.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+            if (!overwrittenTitles.isEmpty()) r.put("overwrittenTitle", overwrittenTitle);
+            log.info("指定ID覆盖成功(事务内): sessionId={}, reminderId={}", sessionId, reminder.getId());
+            return r;
+        });
+        if (result != null && Boolean.TRUE.equals(result.get("success")) && !Boolean.TRUE.equals(result.get("isDuplicate"))) {
+            enrichWithAgentReply(result, userId, sessionId, true);
         }
+        return result;
     }
 
     // 从 parsedData 中汇总所有冲突提醒 ID：含单个 conflictId 与 conflictList 列表，去重返回

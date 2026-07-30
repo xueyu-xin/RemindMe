@@ -22,8 +22,8 @@ public class ConflictDetectionService {
 
     private final ReminderRepository reminderRepository;
 
-    // 单点提醒的冲突窗口：前后各 30 分钟视为冲突
-    private static final int CONFLICT_WINDOW_MINUTES = 30;
+    // 单点提醒的冲突窗口：前后各 5 分钟视为冲突
+    private static final int CONFLICT_WINDOW_MINUTES = 5;
     private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
 
     // 单点提醒冲突检测的便捷重载，endTime 传 null

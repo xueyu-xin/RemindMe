@@ -1,4 +1,4 @@
-﻿/**
+﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿/**
  * 主脚本 - Main JavaScript
  * 集成卡片系统(CardSystem)、通知系统(NotificationSystem)、音效系统(SoundSystem)
  * 本文件必须在 sound.js、notification.js、card.js 之后加载
@@ -46,6 +46,31 @@ function handleWebSocketMessageV2(msg) {
         return false;
     }
     if (msg.type === 'confirmation_card' || msg.type === 'single_confirm_card') {
+        // 清理临时消息
+        if (typeof removeTempMessages === 'function') removeTempMessages();
+
+        // 显示引导语（如果有）
+        var leadMsg = msg.leadMessage || msg.naturalMessage || msg.message;
+        var wsSessionId = msg.data ? msg.data.sessionId : msg.sessionId;
+        if (leadMsg && typeof addMessage === 'function') {
+            addMessage('bot', leadMsg, { skipSave: true, isTemp: true, groupId: 'card-' + wsSessionId });
+        }
+
+        // 去重检查
+        if (wsSessionId) {
+            var existingWsCard = document.querySelector('.confirmation-card[data-session-id="' + wsSessionId + '"]');
+            if (existingWsCard) {
+                return true; // 已存在，跳过
+            }
+        }
+
+        // 保存待确认会话状态
+        if (wsSessionId) {
+            try {
+                savePendingSession(wsSessionId, leadMsg || '', msg);
+            } catch (_) {}
+        }
+
         if (window.CardSystem) {
             CardSystem.show({
                 message: msg.message || '请确认信息',
@@ -57,6 +82,74 @@ function handleWebSocketMessageV2(msg) {
         }
         return false;
     }
+
+    if (msg.type === 'card_confirmed' || msg.type === 'card_cancelled') {
+        var confirmSessionId = msg.data ? msg.data.sessionId : msg.sessionId;
+        
+        // 去重：如果 HTTP 响应已处理过该会话，跳过消息显示（仅清理卡片）
+        if (confirmSessionId && processedSessionIds[confirmSessionId] === 'done') {
+            // 仅清理卡片和引导语，不显示重复消息
+            if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + confirmSessionId);
+            var skipCardEl = document.querySelector('.confirmation-card[data-session-id="' + confirmSessionId + '"]');
+            if (skipCardEl) skipCardEl.remove();
+            if (typeof clearPendingSession === 'function') clearPendingSession(confirmSessionId);
+            if (window.CardSystem) CardSystem.clear();
+            return true;
+        }
+        
+        // 按 sessionId 清理对应的引导语和卡片
+        if (confirmSessionId) {
+            if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + confirmSessionId);
+            var confirmCardEl = document.querySelector('.confirmation-card[data-session-id="' + confirmSessionId + '"]');
+            if (confirmCardEl) confirmCardEl.remove();
+            if (typeof clearPendingSession === 'function') clearPendingSession(confirmSessionId);
+        } else {
+            if (typeof removeTempMessages === 'function') removeTempMessages();
+            if (typeof clearPendingSession === 'function') clearPendingSession();
+        }
+        if (window.CardSystem) CardSystem.clear();
+
+        var replyMsg = msg.message || (msg.type === 'card_confirmed' ? '好的，提醒已确认啦～' : '好的，已取消提醒。');
+        if (typeof addMessage === 'function') {
+            addMessage('bot', replyMsg, { skipSave: false });
+        }
+        if (typeof renderCalendar === 'function') renderCalendar();
+        return true;
+    }
+
+    if (msg.type === 'timeout_auto_create') {
+        var timeoutSessionId = msg.data ? msg.data.sessionId : msg.sessionId;
+        
+        // 去重：如果已处理过，跳过消息显示
+        if (timeoutSessionId && processedSessionIds[timeoutSessionId] === 'done') {
+            if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + timeoutSessionId);
+            var tCardEl = document.querySelector('.confirmation-card[data-session-id="' + timeoutSessionId + '"]');
+            if (tCardEl) tCardEl.remove();
+            if (typeof clearPendingSession === 'function') clearPendingSession(timeoutSessionId);
+            return true;
+        }
+        if (timeoutSessionId) processedSessionIds[timeoutSessionId] = 'done';
+        
+        // 按 sessionId 清理对应的引导语和卡片
+        if (timeoutSessionId) {
+            if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + timeoutSessionId);
+            var timeoutCardEl = document.querySelector('.confirmation-card[data-session-id="' + timeoutSessionId + '"]');
+            if (timeoutCardEl) timeoutCardEl.remove();
+            if (typeof clearPendingSession === 'function') clearPendingSession(timeoutSessionId);
+        } else {
+            if (typeof removeTempMessages === 'function') removeTempMessages();
+            if (typeof clearPendingSession === 'function') clearPendingSession();
+        }
+        if (window.CardSystem) CardSystem.clear();
+
+        var autoMsg = msg.message || '⏰ 时间到啦，已帮你自动确认提醒～';
+        if (typeof addMessage === 'function') {
+            addMessage('bot', autoMsg, { skipSave: false });
+        }
+        if (typeof renderCalendar === 'function') renderCalendar();
+        return true;
+    }
+
     // [已废弃] execute_auto_confirm 不再触发，阶段二不自动确认
     if (msg.type === 'execute_card' || msg.type === 'execute_auto_confirm') {
         if (window.NotificationSystem) {
@@ -72,7 +165,6 @@ function handleWebSocketMessageV2(msg) {
                 attempt: msg.data ? msg.data.attempt : 1
             });
         }
-        // [已废弃] execute_auto_confirm 不再触发，保留仅为向后兼容
         if (msg.type === 'execute_auto_confirm') {
             if (typeof addMessage === 'function') { addMessage('bot', msg.message || '✅ 提醒已自动确认'); }
             if (typeof renderCalendar === 'function') { renderCalendar(); }
@@ -90,13 +182,23 @@ function handleConfirmationActionV2(actionId, sessionId) {
         .then(function(res) { return res.json(); })
         .then(function(result) {
             if (result.success) {
-                addMessage('bot', actionId === 'confirm' ? '✅ 已确认' : actionId === 'cancel' ? '❌ 已取消' : (result.message || '操作成功'));
-                if (window.CardSystem) { CardSystem.clear(); }
-                if (typeof renderCalendar === 'function') { renderCalendar(); }
+                // 按 sessionId 清理对应的引导语和卡片
+                if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + sessionId);
+                var v2CardEl = document.querySelector('.confirmation-card[data-session-id="' + sessionId + '"]');
+                if (v2CardEl) v2CardEl.remove();
+                if (typeof clearPendingSession === 'function') clearPendingSession(sessionId);
+                if (window.CardSystem) CardSystem.clear();
+                var replyMsg = result.message || (actionId === 'confirm' ? '好的，提醒已确认啦～' : '好的，已取消提醒。');
+                addMessage('bot', replyMsg, { skipSave: false });
+                if (typeof renderCalendar === 'function') renderCalendar();
             } else {
                 addMessage('bot', '❌ ' + (result.message || '操作失败'));
             }
-        }).catch(function(err) { addMessage('bot', '❌ 请求失败: ' + err.message); });
+        }).catch(function(err) {
+            if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + sessionId);
+            if (typeof clearPendingSession === 'function') clearPendingSession(sessionId);
+            addMessage('bot', '❌ 请求失败，请重试', { skipSave: false });
+        });
 }
 
 // ===== 导出全局接口 =====
@@ -104,6 +206,11 @@ window.initApp = initApp;
 // 注意：switchTab 由内联代码定义（更完整的实现），此处不覆盖
 window.handleWebSocketMessageV2 = handleWebSocketMessageV2;
 window.handleConfirmationActionV2 = handleConfirmationActionV2;
+window.removeTempMessages = removeTempMessages;
+window.removeMessagesByGroup = removeMessagesByGroup;
+window.addMessage = addMessage;
+window.restorePendingSession = restorePendingSession;
+window.saveMessageToBackend = saveMessageToBackend;
 
 // ===== 以下为原有内联 JavaScript（已从 index.html 迁移）=====
         let currentUserId = parseInt(localStorage.getItem('userId')) || 1;
@@ -118,6 +225,8 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
 
         var stompClient = null;
         var isProcessing = false;
+        var processedSessionIds = {}; // 已处理的 sessionId -> true，用于去重
+        window.processedSessionIds = processedSessionIds;
         var lastUserInput = '';
         var conflictStates = {};
         var currentConflictList = [];
@@ -160,7 +269,16 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                 console.log('WebSocket连接成功: ' + frame);
                 stompClient.subscribe('/user/queue/confirmations', function(message) {
                     var card = JSON.parse(message.body);
+                    // 清理对应的引导语临时消息
+                    var sid = card.data && card.data.sessionId;
+                    if (sid) {
+                        removeMessagesByGroup('card-' + sid);
+                    }
                     showConfirmationCard(card);
+                    // 保存卡片数据到 sessionStorage
+                    if (sid) {
+                        savePendingSession(sid, null, card);
+                    }
                 });
                 stompClient.subscribe('/user/queue/messages', function(message) {
                     var msg;
@@ -218,6 +336,9 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
         }
 
         function showConfirmationCard(card) {
+            // 清理临时消息
+            if (typeof removeTempMessages === 'function') removeTempMessages();
+
             var container = document.getElementById('confirmationContainer');
 
             // 使用 CardSystem 处理确认卡片（如可用）
@@ -271,6 +392,12 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                 var importId = card.data.importId || null;
                 
                 var sessionId = card.data.sessionId || 'import-' + (importId || Date.now());
+                // 去重：如果同 sessionId 的卡片已存在，跳过
+                var existingCard = document.querySelector('.confirmation-card[data-session-id="' + sessionId + '"]');
+                if (existingCard) {
+                    console.log('卡片已存在，跳过重复渲染: sessionId=' + sessionId);
+                    return;
+                }
                 conflictStates = {};
                 currentConflictList = [];
                 
@@ -291,7 +418,7 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                 }
                 dataAttrs += ' data-has-conflict="' + (hasConflict ? 'true' : 'false') + '"';
                 
-                var html = '<div class="confirmation-card ' + (hasConflict ? 'conflict-mode' : '') + '" id="confirmationCard" ' + dataAttrs + '>';
+                var html = '<div class="confirmation-card ' + (hasConflict ? 'conflict-mode' : '') + '" id="confirmationCard-' + sessionId + '" ' + dataAttrs + '>';
                 html += '<div class="card-title">' + card.message + '</div>';
                 html += '<div class="card-info">';
                 
@@ -372,13 +499,13 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                 html += '</div>';
                 var noTimeout = card.data.noTimeout === true;
                 if (isBatch || noTimeout) {
-                    html += '<div class="card-timer" id="timerText">📋 请确认以上信息</div>';
+                    html += '<div class="card-timer" id="timerText-' + sessionId + '">📋 请确认以上信息</div>';
                 } else {
-                    html += '<div class="card-timer" id="timerText">⏳ 5分钟后未确认自动确认</div>';
+                    html += '<div class="card-timer" id="timerText-' + sessionId + '">⏳ 5分钟后未确认自动确认</div>';
                 }
                 html += '</div>';
-                
-                container.innerHTML = html;
+
+                container.insertAdjacentHTML('beforeend', html);
                 
                 if (!isBatch && !noTimeout && expiresAt) {
                     startTimer(expiresAt, card.data.sessionId);
@@ -1603,8 +1730,8 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
             timerInterval = setInterval(function() {
                 var now = new Date();
                 var remaining = Math.ceil((expiresAt - now) / 1000);
-                
-                var timerText = document.getElementById('timerText');
+
+                var timerText = document.getElementById('timerText-' + currentTimerSessionId) || document.getElementById('timerText');
                 if (timerText) {
                     if (remaining <= 0) {
                         clearInterval(timerInterval);
@@ -1675,12 +1802,22 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
 
         async function handleConfirmationAction(action, sessionId) {
             console.log('📝 handleConfirmationAction 被调用:', action, sessionId, 'type:', typeof action);
+            
+            // 会话级去重：同一个 sessionId 不重复处理
+            if (sessionId && processedSessionIds[sessionId]) {
+                console.warn('会话已处理，忽略重复请求: sessionId=' + sessionId);
+                return;
+            }
+            
             if (isProcessing) return;
             isProcessing = true;
             
-            // 禁用所有按钮
-            var buttons = document.querySelectorAll('.action-btn, .mini-btn');
-            buttons.forEach(function(btn) { btn.disabled = true; });
+            // 标记该会话为处理中
+            if (sessionId) processedSessionIds[sessionId] = true;
+            
+            // 立即禁用所有操作按钮（包括卡片内的）
+            var allButtons = document.querySelectorAll('.action-btn, .mini-btn, .confirmation-card button, .card-action-btn');
+            allButtons.forEach(function(btn) { btn.disabled = true; btn.style.pointerEvents = 'none'; });
             
             if (timerInterval) clearInterval(timerInterval);
             
@@ -1707,11 +1844,7 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                         if (result.overwrittenTitle) {
                             confirmMsg = '✅ 已覆盖「' + result.overwrittenTitle + '」，新提醒已创建';
                         }
-                        addMessage('bot', confirmMsg);
-                        document.getElementById('confirmationContainer').innerHTML = '';
-                        conflictStates = {};
-                        currentConflictList = [];
-                        renderCalendar();
+                        handleConfirmFinalResponse(result, true, sessionId);
                     } else {
                         addMessage('bot', '❌ ' + result.message);
                     }
@@ -1722,8 +1855,7 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                     });
                     const result = await response.json();
                     if (result.success) {
-                        addMessage('bot', result.message);
-                        document.getElementById('confirmationContainer').innerHTML = '';
+                        handleConfirmFinalResponse(result, false, sessionId);
                     } else {
                         addMessage('bot', '❌ ' + result.message);
                     }
@@ -1763,15 +1895,7 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                         });
                         const result = await response.json();
                         if (result.success) {
-                            var overwriteMsg = result.message;
-                            if (result.overwrittenTitle) {
-                                overwriteMsg = '✅ 已覆盖「' + result.overwrittenTitle + '」，新提醒已创建';
-                            }
-                            addMessage('bot', overwriteMsg);
-                            document.getElementById('confirmationContainer').innerHTML = '';
-                            conflictStates = {};
-                            currentConflictList = [];
-                            renderCalendar();
+                            handleConfirmFinalResponse(result, true, sessionId);
                         } else {
                             addMessage('bot', '❌ ' + result.message);
                             if (overwriteBtn) {
@@ -1780,7 +1904,8 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                             }
                         }
                     } catch (e) {
-                        addMessage('bot', '❌ 网络错误，请重试');
+                        removeTempMessages();
+                        addMessage('bot', '❌ 网络错误，请重试', { skipSave: false });
                         if (overwriteBtn) {
                             overwriteBtn.textContent = '📝 覆盖';
                             overwriteBtn.disabled = false;
@@ -1806,14 +1931,7 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                     const response = await fetch(urlMap[action], { method: 'POST', headers: headers });
                     const result = await response.json();
                     if (result.success) {
-                        var msg = result.message;
-                        if (result.overwrittenTitle) {
-                            msg = '✅ 已覆盖「' + result.overwrittenTitle + '」，' + result.message;
-                        }
-                        addMessage('bot', msg);
-                        document.getElementById('confirmationContainer').innerHTML = '';
-                        if (typeof originalConfirmationCard !== 'undefined') originalConfirmationCard = null;
-                        renderCalendar();
+                        handleConfirmFinalResponse(result, true, sessionId);
                     } else {
                         addMessage('bot', '❌ ' + (result.message || result.error || '操作失败'));
                         buttons.forEach(function(btn) { btn.disabled = false; });
@@ -1844,9 +1962,7 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                     });
                     const importResult = await importResponse.json();
                     if (importResult.success) {
-                        addMessage('bot', '✅ ' + importResult.message);
-                        document.getElementById('confirmationContainer').innerHTML = '';
-                        renderCalendar();
+                        handleConfirmFinalResponse(importResult, true, sessionId);
                     } else {
                         addMessage('bot', '❌ ' + (importResult.message || '创建失败'));
                         if (confirmBtn) confirmBtn.textContent = '✅ 全部创建';
@@ -1867,8 +1983,7 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                             headers: headers
                         });
                     }
-                    addMessage('bot', '❌ 已取消导入');
-                    document.getElementById('confirmationContainer').innerHTML = '';
+                    handleConfirmFinalResponse({ message: '已取消导入' }, false, sessionId);
                 } else if (action === 'schedule_direct' || action === 'schedule_skip' || action === 'schedule_overwrite') {
                     var importId = sessionId;
                     if (!importId || importId === 'undefined' || importId === 'null' || importId === '') {
@@ -1902,11 +2017,9 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                     });
                     const scheduleResult = await scheduleResponse.json();
                     if (scheduleResult.success) {
-                        addMessage('bot', '✅ ' + scheduleResult.message);
-                        document.getElementById('confirmationContainer').innerHTML = '';
+                        handleConfirmFinalResponse(scheduleResult, true, sessionId);
                         conflictStates = {};
                         currentConflictList = [];
-                        renderCalendar();
                     } else {
                         addMessage('bot', '❌ ' + (scheduleResult.message || '操作失败'));
                         if (scheduleBtn) {
@@ -1915,10 +2028,16 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                     }
                 }
             } catch (e) {
-                addMessage('bot', '❌ 网络错误，请重试');
+                removeTempMessages();
+                clearPendingSession();
+                // 失败时移除 sessionId 标记，允许重试
+                if (sessionId) delete processedSessionIds[sessionId];
+                addMessage('bot', '❌ 网络错误，请重试', { skipSave: false });
             } finally {
                 isProcessing = false;
-                buttons.forEach(function(btn) { btn.disabled = false; });
+                // 恢复所有按钮（但已处理的会话保持标记，不会再触发）
+                var allBtns = document.querySelectorAll('.action-btn, .mini-btn, .confirmation-card button, .card-action-btn');
+                allBtns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
             }
         }
 
@@ -1955,14 +2074,19 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                 const result = await response.json();
                 
                 if (result.success) {
-                    addMessage('bot', result.message);
+                    if (typeof removeTempMessages === 'function') removeTempMessages();
+                    if (typeof clearPendingSession === 'function') clearPendingSession();
+                    var replyMsg = result.message || '操作成功';
+                    addMessage('bot', replyMsg, { skipSave: false });
                     document.getElementById('confirmationContainer').innerHTML = '';
                     renderCalendar();
                 } else {
                     addMessage('bot', '❌ ' + result.message);
                 }
             } catch (e) {
-                addMessage('bot', '❌ 网络错误，请重试');
+                if (typeof removeTempMessages === 'function') removeTempMessages();
+                if (typeof clearPendingSession === 'function') clearPendingSession();
+                addMessage('bot', '❌ 网络错误，请重试', { skipSave: false });
             } finally {
                 isProcessing = false;
                 buttons.forEach(function(btn) { btn.disabled = false; });
@@ -2342,7 +2466,15 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
             }
 
             // 加载聊天历史
-            setTimeout(loadChatHistory, 300);
+            setTimeout(function() {
+                loadChatHistory();
+                // 恢复待确认会话（刷新后恢复卡片和引导语）
+                setTimeout(function() {
+                    if (typeof restorePendingSession === 'function') {
+                        restorePendingSession();
+                    }
+                }, 800);
+            }, 300);
         });
 
         function getTimeGreeting() {
@@ -2470,13 +2602,8 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                 const result = await response.json();
 
                 if (result.needConfirmation) {
-                    // 卡片由 WebSocket 推送
-                    // 如果卡片还没显示，才显示等待提示
-                    var container = document.getElementById('confirmationContainer');
-                    if (!container || container.innerHTML.trim() === '') {
-                        addMessage('bot', '⏳ 正在生成确认卡片...');
-                    }
-                    // sessionId 由 WebSocket 推送时更新，这里不处理
+                    // HTTP 响应只负责显示引导语，卡片由 WebSocket 推送
+                    handleConfirmResponse(result);
                     return;
                 } else if (result.address) {
                     // 位置查询响应：显示地址并更新设置页
@@ -2518,7 +2645,9 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
                     addMessage('bot', '❌ ' + errMsg);
                 }
             } catch (e) {
-                addMessage('bot', '❌ 网络错误，请重试');
+                removeTempMessages();
+                clearPendingSession();
+                addMessage('bot', '❌ 网络错误，请重试', { skipSave: false });
             }
         }
 
@@ -2764,58 +2893,293 @@ window.handleConfirmationActionV2 = handleConfirmationActionV2;
             }
         }
 
-        function addMessage(role, text, skipSave) {
+        function addMessage(role, text, options) {
             const history = document.getElementById('chatHistory');
             if (!history) return;
-            
+
+            // 兼容旧的 skipSave 参数（第三个参数为 boolean 时）
+            var opts = {};
+            if (typeof options === 'boolean') {
+                opts.skipSave = options;
+            } else if (typeof options === 'object' && options !== null) {
+                opts = options;
+            }
+
+            var msgId = opts.replaceId || ('msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5));
+
+            // 替换已有消息
+            if (opts.replaceId) {
+                var existing = document.getElementById(opts.replaceId);
+                if (existing) {
+                    existing.innerHTML = text.replace(/\n/g, '<br>');
+                    existing.classList.remove('fade-in');
+                    // 触发重新动画
+                    void existing.offsetWidth;
+                    existing.classList.add('fade-in');
+                    history.scrollTop = history.scrollHeight;
+                    if (!opts.skipSave && text && text.trim().length > 0 && currentUserId) {
+                        saveMessageToBackend(role, text);
+                    }
+                    return msgId;
+                }
+            }
+
             // 检测是否为网络错误消息，添加重试按钮（按钮在气泡外面）
             if (role === 'bot' && (text.indexOf('网络错误') !== -1 || text.indexOf('请重试') !== -1)) {
-                var msgId = 'msg-' + Date.now();
                 var wrapper = document.createElement('div');
                 wrapper.className = 'error-msg-wrapper';
-                
+
                 var msg = document.createElement('div');
-                msg.className = `chat-message ${role}`;
+                msg.className = 'chat-message ' + role + (opts.className ? ' ' + opts.className : '');
                 msg.id = msgId;
                 msg.innerHTML = text.replace(/\n/g, '<br>');
-                
+
+                if (opts.isTemp) msg.setAttribute('data-temp', 'true');
+                if (opts.groupId) msg.setAttribute('data-group', opts.groupId);
+
                 var btn = document.createElement('button');
                 btn.className = 'retry-btn';
                 btn.setAttribute('onclick', 'retryLastMessage(\'' + msgId + '\')');
                 btn.setAttribute('title', '重新发送');
                 btn.innerHTML = '↻ <span class="retry-text">重试</span>';
-                
+
                 wrapper.appendChild(msg);
                 wrapper.appendChild(btn);
                 history.appendChild(wrapper);
             } else {
-                const msg = document.createElement('div');
-                msg.className = `chat-message ${role}`;
+                var msg = document.createElement('div');
+                msg.className = 'chat-message ' + role + (opts.className ? ' ' + opts.className : '');
+                msg.id = msgId;
                 msg.innerHTML = text.replace(/\n/g, '<br>');
+                if (opts.isTemp) msg.setAttribute('data-temp', 'true');
+                if (opts.groupId) msg.setAttribute('data-group', opts.groupId);
                 history.appendChild(msg);
             }
-            
+
             history.scrollTop = history.scrollHeight;
 
             // 非跳过存储场景：异步保存消息到后端
-            if (!skipSave && text && text.trim().length > 0 && currentUserId) {
-                var saveKey = role + '|' + text.length + '|' + text.slice(0, 30) + '|' + Date.now();
-                if (pendingSaveKeys.has(saveKey)) return;
-                pendingSaveKeys.add(saveKey);
-                setTimeout(function() { pendingSaveKeys.delete(saveKey); }, 5000);
-
-                fetch('/api/chat/save-message', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        userId: currentUserId,
-                        role: role,
-                        content: text.trim()
-                    })
-                }).catch(function(err) {
-                    // 静默失败
-                });
+            if (!opts.skipSave && text && text.trim().length > 0 && currentUserId) {
+                saveMessageToBackend(role, text);
             }
+
+            return msgId;
+        }
+
+        function saveMessageToBackend(role, text) {
+            var saveKey = role + '|' + text.length + '|' + text.slice(0, 30) + '|' + Date.now();
+            if (pendingSaveKeys.has(saveKey)) return;
+            pendingSaveKeys.add(saveKey);
+            setTimeout(function() { pendingSaveKeys.delete(saveKey); }, 5000);
+
+            fetch('/api/chat/save-message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    userId: currentUserId,
+                    role: role,
+                    content: text.trim()
+                })
+            }).catch(function(err) {
+                // 静默失败
+            });
+        }
+
+        // 清理所有临时消息（data-temp="true"）
+        function removeTempMessages() {
+            var history = document.getElementById('chatHistory');
+            if (!history) return;
+            var tempMsgs = history.querySelectorAll('[data-temp="true"]');
+            tempMsgs.forEach(function(el) {
+                var wrapper = el.closest('.error-msg-wrapper');
+                if (wrapper) {
+                    wrapper.remove();
+                } else {
+                    el.remove();
+                }
+            });
+        }
+
+        // 按 groupId 批量移除消息
+        function removeMessagesByGroup(groupId) {
+            var history = document.getElementById('chatHistory');
+            if (!history || !groupId) return;
+            var groupMsgs = history.querySelectorAll('[data-group="' + groupId + '"]');
+            groupMsgs.forEach(function(el) {
+                var wrapper = el.closest('.error-msg-wrapper');
+                if (wrapper) {
+                    wrapper.remove();
+                } else {
+                    el.remove();
+                }
+            });
+        }
+
+        // ============ 会话状态持久化与恢复 ============
+        var PENDING_SESSION_KEY = 'remindme_pending_sessions'; // 注意：key 改为复数
+        var PENDING_SESSION_TTL = 5 * 60 * 1000; // 5分钟有效期
+
+        // 保存/更新单个待确认会话（支持多卡片）
+        function savePendingSession(sessionId, leadMessage, cardData) {
+            try {
+                var sessions = loadAllPendingSessions();
+                var existing = sessions.find(function(s) { return s.sessionId === sessionId; });
+                if (existing) {
+                    // 更新已有会话
+                    if (leadMessage !== null) existing.leadMessage = leadMessage;
+                    if (cardData !== null) existing.cardData = cardData;
+                    existing.timestamp = Date.now();
+                } else {
+                    sessions.push({
+                        sessionId: sessionId,
+                        leadMessage: leadMessage || '',
+                        cardData: cardData || null,
+                        timestamp: Date.now()
+                    });
+                }
+                sessionStorage.setItem(PENDING_SESSION_KEY, JSON.stringify(sessions));
+            } catch (e) {
+                console.warn('保存待确认会话失败:', e.message);
+            }
+        }
+
+        // 加载所有待确认会话（过滤已过期的）
+        function loadAllPendingSessions() {
+            try {
+                var raw = sessionStorage.getItem(PENDING_SESSION_KEY);
+                if (!raw) return [];
+                var sessions = JSON.parse(raw);
+                if (!Array.isArray(sessions)) return [];
+                // 过滤已过期的
+                var valid = sessions.filter(function(s) {
+                    return Date.now() - s.timestamp <= PENDING_SESSION_TTL;
+                });
+                if (valid.length !== sessions.length) {
+                    sessionStorage.setItem(PENDING_SESSION_KEY, JSON.stringify(valid));
+                }
+                return valid;
+            } catch (e) {
+                return [];
+            }
+        }
+
+        // 兼容旧接口：返回第一个会话
+        function loadPendingSession() {
+            var sessions = loadAllPendingSessions();
+            return sessions.length > 0 ? sessions[0] : null;
+        }
+
+        // 清理指定会话（或全部）
+        function clearPendingSession(sessionId) {
+            try {
+                if (!sessionId) {
+                    sessionStorage.removeItem(PENDING_SESSION_KEY);
+                    return;
+                }
+                var sessions = loadAllPendingSessions();
+                var filtered = sessions.filter(function(s) { return s.sessionId !== sessionId; });
+                sessionStorage.setItem(PENDING_SESSION_KEY, JSON.stringify(filtered));
+            } catch (e) {}
+        }
+
+        // 恢复所有待确认会话（多卡片独立恢复）
+        function restorePendingSession() {
+            try {
+                var sessions = loadAllPendingSessions();
+                if (!sessions || sessions.length === 0) return;
+
+                sessions.forEach(function(state) {
+                    if (!state.sessionId) return;
+
+                    var groupId = 'card-' + state.sessionId;
+
+                    // 恢复引导语（临时消息，检查是否已存在）
+                    if (state.leadMessage) {
+                        var history = document.getElementById('chatHistory');
+                        if (history) {
+                            var existingMsgs = history.querySelectorAll('[data-group="' + groupId + '"]');
+                            if (existingMsgs.length === 0) {
+                                addMessage('bot', state.leadMessage, { skipSave: true, isTemp: true, groupId: groupId });
+                            }
+                        }
+                    }
+
+                    // 恢复卡片（如果有卡片数据）
+                    if (state.cardData) {
+                        var cardData = state.cardData;
+                        if (typeof cardData === 'object' && !cardData.type) {
+                            cardData.type = 'confirmation_card';
+                        }
+                        showConfirmationCard(cardData);
+                    }
+                });
+            } catch (e) {
+                console.warn('恢复待确认会话失败:', e.message);
+                try { clearPendingSession(); } catch (_) {}
+            }
+        }
+
+        // ============ 确认流程增强 ============
+        function handleConfirmResponse(result) {
+            if (!result) return;
+
+            var leadMsg = result.leadMessage || result.message;
+            var sessionId = result.sessionId;
+            var groupId = 'card-' + sessionId;
+
+            // 显示引导语为临时消息（确认后自动消失），不保存到后端
+            if (leadMsg) {
+                addMessage('bot', leadMsg, { skipSave: true, isTemp: true, groupId: groupId });
+            }
+
+            // 保存待确认会话状态（仅引导语，卡片数据待 WebSocket 推送后补充）
+            if (sessionId) {
+                savePendingSession(sessionId, leadMsg || '', null);
+            }
+        }
+
+        // ============ 最终回复处理 ============
+        function handleConfirmFinalResponse(result, confirmed, sessionId) {
+            var sid = sessionId || (result && result.sessionId);
+
+            // 去重：如果该会话已完成处理，跳过
+            if (sid && processedSessionIds[sid] === 'done') {
+                return;
+            }
+            if (sid) processedSessionIds[sid] = 'done';
+
+            // 清理对应的临时引导语
+            if (sid) {
+                removeMessagesByGroup('card-' + sid);
+            }
+            // 兼容：如果没有 sessionId，清理所有临时消息
+            if (!sid) {
+                removeTempMessages();
+            }
+
+            // 清理对应的卡片
+            if (sid) {
+                var cardEl = document.querySelector('.confirmation-card[data-session-id="' + sid + '"]');
+                if (cardEl) cardEl.remove();
+                clearPendingSession(sid);
+            } else {
+                // 兼容旧调用：清空所有卡片
+                removeTempMessages();
+                clearPendingSession();
+                var container = document.getElementById('confirmationContainer');
+                if (container) container.innerHTML = '';
+            }
+
+            // 清理 CardSystem 中对应的卡片
+            if (window.CardSystem) {
+                CardSystem.clear();
+            }
+
+            var defaultMsg = confirmed ? '好的，提醒已确认啦～' : '好的，已取消提醒。';
+            var replyMsg = (result && result.message) ? result.message : defaultMsg;
+
+            addMessage('bot', replyMsg, { skipSave: false });
+            if (typeof renderCalendar === 'function') renderCalendar();
         }
 
         /**

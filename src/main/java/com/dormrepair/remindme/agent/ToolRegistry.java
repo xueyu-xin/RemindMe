@@ -167,7 +167,8 @@ public class ToolRegistry implements SmartInitializingSingleton {
                 "endTime", "结束时间，格式为 yyyy-MM-dd HH:mm:ss（可选，用于时间段提醒，如'下午3点到5点开会'时传入结束时间）",
                 "location", "提醒地点（可选）",
                 "note", "备注（可选），用户对提醒的补充说明、注意事项或需要准备的物品，如'记得带借书证'、'带礼物'等",
-                "priority", "优先级，可选值 LOW/NORMAL/HIGH（默认NORMAL）"
+                "priority", "优先级，可选值 LOW/NORMAL/HIGH（默认NORMAL）",
+                "advanceMinutes", "提前提醒分钟数（可选）。当用户说'X分钟后'时传入X，说'等会/马上'时传入0，明确时间（如'明天下午3点'）时不传。"
         ));
         paramDescriptions.put("queryRemindersForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",
