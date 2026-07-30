@@ -45,6 +45,28 @@ public class AgentResponse {
     // success=false 时：错误描述
     private String errorMessage;
 
+    // 自然语言引导语：在卡片显示前展示的 LLM 生成提示
+    private String leadMessage;
+
+    // 响应状态：idle/processing/card_shown/done
+    @Builder.Default
+    private ResponseStatus status = ResponseStatus.IDLE;
+
+    // 是否为临时状态消息（前端可据此清理）
+    @Builder.Default
+    private boolean isTemp = false;
+
+    // 要替换的消息标识（前端据此更新已有消息而不是追加）
+    private String replaceTarget;
+
+    // 响应状态枚举
+    public enum ResponseStatus {
+        IDLE,
+        PROCESSING,
+        CARD_SHOWN,
+        DONE
+    }
+
     // 响应类型枚举
     public enum ResponseType {
         // 普通自然语言回复
@@ -81,7 +103,9 @@ public class AgentResponse {
         return AgentResponse.builder()
                 .type(ResponseType.CONFIRMATION)
                 .content(content)
+                .leadMessage(content)
                 .needConfirmation(true)
+                .status(ResponseStatus.CARD_SHOWN)
                 .success(true)
                 .build();
     }
@@ -91,9 +115,11 @@ public class AgentResponse {
         return AgentResponse.builder()
                 .type(ResponseType.CONFIRMATION)
                 .content(content)
+                .leadMessage(content)
                 .needConfirmation(true)
                 .sessionId(sessionId)
                 .confirmationData(confirmationData)
+                .status(ResponseStatus.CARD_SHOWN)
                 .success(true)
                 .build();
     }

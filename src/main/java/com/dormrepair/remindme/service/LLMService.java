@@ -65,7 +65,8 @@ public class LLMService {
 
             JsonNode root = objectMapper.readTree(content);
 
-            int advanceMinutes = root.has("advanceMinutes") ? root.get("advanceMinutes").asInt() : defaultAdvance;
+            int advanceMinutes = root.has("advanceMinutes") && !root.get("advanceMinutes").isNull()
+                    ? root.get("advanceMinutes").asInt() : defaultAdvance;
 
             return ParsedResult.builder()
                     .title(root.has("title") ? root.get("title").asText() : null)
@@ -1297,20 +1298,24 @@ public class LLMService {
             ================================================
             当用户使用以下模糊时间表达时，请自动解析为具体时间：
             1. "等会"、"待会"、"过一会儿"、"一会儿"、"等一下" → 当前时间（advanceMinutes留空，后端会使用用户设置的默认提前量）
-            2. "5分钟后"、"5分后" → 当前时间+5分钟
-            3. "10分钟后" → 当前时间+10分钟
-            4. "30分钟后" → 当前时间+30分钟
-            5. "1小时后"、"1个小时后" → 当前时间+60分钟
-            6. "半小时后" → 当前时间+30分钟
-            7. "现在"、"马上"、"立刻" → 当前时间
-            8. "几分钟后" → 当前时间+5分钟
+            2. "1分钟后"、"一分钟后"、"1分后" → 当前时间+1分钟，advanceMinutes=1
+            3. "5分钟后"、"5分后" → 当前时间+5分钟，advanceMinutes=5
+            4. "10分钟后" → 当前时间+10分钟，advanceMinutes=10
+            5. "30分钟后" → 当前时间+30分钟，advanceMinutes=30
+            6. "1小时后"、"1个小时后" → 当前时间+60分钟，advanceMinutes=60
+            7. "半小时后" → 当前时间+30分钟，advanceMinutes=30
+            8. "现在"、"马上"、"立刻" → 当前时间，advanceMinutes=0
+            9. "几分钟后" → 当前时间+5分钟，advanceMinutes=5
             
             示例：
             用户输入："等会提醒我拿快递"
             你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "拿快递", "remindTime": "当前时间"}}}
             
+            用户输入："1分钟后提醒我喝水"
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "喝水", "remindTime": "当前时间+1分钟", "advanceMinutes": 1}}}
+            
             用户输入："5分钟后提醒我喝水"
-            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "喝水", "remindTime": "当前时间+5分钟"}}}
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "喝水", "remindTime": "当前时间+5分钟", "advanceMinutes": 5}}}
             
             用户输入："1小时后提醒我开会"
             你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "开会", "remindTime": "当前时间+60分钟"}}}
@@ -1444,6 +1449,7 @@ public class LLMService {
             - "本周六晚上8点" → 本周六，20:00:00
             - "周一上午10点" → 最近的周一，10:00:00
             - "每天早上7点" → 今天，07:00:00（重复提醒）
+            - "1分钟后"、"一分钟后"、"1分后" → 当前时间+1分钟，advanceMinutes=1
             - "5分钟后" → 当前时间+5分钟，advanceMinutes=5
             - "等会"、"待会"、"过一会儿"、"一会儿"、"等一下" → 当前时间，advanceMinutes不设置
             - "30分钟后" → 当前时间+30分钟，advanceMinutes=30

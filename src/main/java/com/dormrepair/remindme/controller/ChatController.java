@@ -92,23 +92,22 @@ public class ChatController {
                             response.put("toolArgs", agentResponse.getToolArgs());
                             break;
                         case CONFIRMATION:
+                            // HTTP 响应只返回引导语和 sessionId，卡片数据通过 WebSocket 推送
                             response.put("success", true);
                             response.put("needConfirmation", true);
                             response.put("type", "confirmation_required");
-                            response.put("message", agentResponse.getContent());
+                            response.put("message", agentResponse.getLeadMessage() != null
+                                    ? agentResponse.getLeadMessage() : agentResponse.getContent());
+                            response.put("leadMessage", agentResponse.getLeadMessage());
                             response.put("sessionId", agentResponse.getSessionId());
-                            response.put("data", agentResponse.getConfirmationData());
-                            // 周期提醒标识，供调用方识别
+                            response.put("status", "card_pending");
+                            // 周期提醒标识（从 confirmationData 中提取，但不返回完整 data）
                             Map<String, Object> cdata = agentResponse.getConfirmationData();
-                            if (cdata != null && cdata.get("data") instanceof Map) {
-                                @SuppressWarnings("unchecked")
-                                Map<String, Object> inner = (Map<String, Object>) cdata.get("data");
-                                if (Boolean.TRUE.equals(inner.get("isRecurring"))) {
-                                    response.put("isRecurring", true);
-                                }
+                            if (cdata != null && cdata.get("isRecurring") != null) {
+                                response.put("isRecurring", cdata.get("isRecurring"));
                             }
-                            log.info("Agent返回CONFIRMATION: sessionId={}, isRecurring={}",
-                                    agentResponse.getSessionId(), response.get("isRecurring"));
+                            log.info("Agent返回CONFIRMATION: sessionId={}, 卡片数据通过WebSocket推送",
+                                    agentResponse.getSessionId());
                             break;
                         default:
                             response.put("success", true);

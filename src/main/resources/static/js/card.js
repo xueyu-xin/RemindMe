@@ -154,18 +154,53 @@ var CardSystem = (function() {
     function confirm(sessionId, userId) {
         stopCountdown(sessionId);
 
+        // 禁用所有操作按钮防止重复点击
+        var cardEl = document.getElementById('card-' + sessionId);
+        if (cardEl) {
+            var btns = cardEl.querySelectorAll('.action-btn');
+            btns.forEach(function(btn) { btn.disabled = true; btn.style.pointerEvents = 'none'; });
+        }
+
         fetch('/api/confirmations/' + sessionId + '/confirm?userId=' + userId, {
             method: 'POST',
             headers: getHeaders()
         }).then(function(res) { return res.json(); })
         .then(function(result) {
             if (result.success) {
-                addBotMessage(result.message || '✅ 已确认');
+                // 清理引导语（临时消息）
+                if (typeof window.removeMessagesByGroup === 'function') {
+                    window.removeMessagesByGroup('card-' + sessionId);
+                } else if (typeof window.removeTempMessages === 'function') {
+                    window.removeTempMessages();
+                }
+
+                // 设置会话标记，防止 WebSocket card_confirmed 重复显示
+                if (window.processedSessionIds) {
+                    window.processedSessionIds[sessionId] = 'done';
+                }
+
+                // 使用全局 addMessage 显示确认回复（保存到后端，触发副作用）
+                if (typeof window.addMessage === 'function') {
+                    window.addMessage('bot', result.message || '✅ 已确认', { skipSave: false });
+                } else {
+                    addBotMessage(result.message || '✅ 已确认');
+                }
+
                 removeCard(sessionId);
             } else {
+                // 恢复按钮
+                if (cardEl) {
+                    var btns = cardEl.querySelectorAll('.action-btn');
+                    btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
+                }
                 showError(result.message || '确认失败');
             }
         }).catch(function(err) {
+            // 恢复按钮
+            if (cardEl) {
+                var btns = cardEl.querySelectorAll('.action-btn');
+                btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
+            }
             showError('请求失败: ' + err.message);
         });
     }
@@ -176,18 +211,51 @@ var CardSystem = (function() {
     function cancel(sessionId, userId) {
         stopCountdown(sessionId);
 
+        // 禁用所有操作按钮防止重复点击
+        var cardEl = document.getElementById('card-' + sessionId);
+        if (cardEl) {
+            var btns = cardEl.querySelectorAll('.action-btn');
+            btns.forEach(function(btn) { btn.disabled = true; btn.style.pointerEvents = 'none'; });
+        }
+
         fetch('/api/confirmations/' + sessionId + '/cancel?userId=' + userId, {
             method: 'POST',
             headers: getHeaders()
         }).then(function(res) { return res.json(); })
         .then(function(result) {
             if (result.success) {
-                addBotMessage(result.message || '❌ 已取消');
+                // 清理引导语（临时消息）
+                if (typeof window.removeMessagesByGroup === 'function') {
+                    window.removeMessagesByGroup('card-' + sessionId);
+                } else if (typeof window.removeTempMessages === 'function') {
+                    window.removeTempMessages();
+                }
+
+                // 设置会话标记
+                if (window.processedSessionIds) {
+                    window.processedSessionIds[sessionId] = 'done';
+                }
+
+                // 使用全局 addMessage 显示取消回复
+                if (typeof window.addMessage === 'function') {
+                    window.addMessage('bot', result.message || '❌ 已取消', { skipSave: false });
+                } else {
+                    addBotMessage(result.message || '❌ 已取消');
+                }
+
                 removeCard(sessionId);
             } else {
+                if (cardEl) {
+                    var btns = cardEl.querySelectorAll('.action-btn');
+                    btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
+                }
                 showError(result.message || '取消失败');
             }
         }).catch(function(err) {
+            if (cardEl) {
+                var btns = cardEl.querySelectorAll('.action-btn');
+                btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
+            }
             showError('请求失败: ' + err.message);
         });
     }
@@ -417,7 +485,23 @@ var CardSystem = (function() {
      * 超时自动确认（针对特定卡片）
      */
     function autoConfirm(sessionId) {
-        addBotMessage('⏰ 超时未操作，已自动确认');
+        // 清理引导语
+        if (typeof window.removeMessagesByGroup === 'function') {
+            window.removeMessagesByGroup('card-' + sessionId);
+        } else if (typeof window.removeTempMessages === 'function') {
+            window.removeTempMessages();
+        }
+
+        if (window.processedSessionIds) {
+            window.processedSessionIds[sessionId] = 'done';
+        }
+
+        // 使用全局 addMessage
+        if (typeof window.addMessage === 'function') {
+            window.addMessage('bot', '⏰ 超时未操作，已自动确认', { skipSave: false });
+        } else {
+            addBotMessage('⏰ 超时未操作，已自动确认');
+        }
         removeCard(sessionId);
 
         var userId = localStorage.getItem('userId');
@@ -435,6 +519,13 @@ var CardSystem = (function() {
     function handleCustomAction(actionId, sessionId, userId) {
         var endpoint = actionId === 'retry' ? 'reparse' : actionId;
 
+        // 禁用按钮
+        var cardEl = document.getElementById('card-' + sessionId);
+        if (cardEl) {
+            var btns = cardEl.querySelectorAll('.action-btn');
+            btns.forEach(function(btn) { btn.disabled = true; btn.style.pointerEvents = 'none'; });
+        }
+
         fetch('/api/confirmations/' + sessionId + '/' + endpoint + '?userId=' + userId, {
             method: 'POST',
             headers: getHeaders()
@@ -442,15 +533,38 @@ var CardSystem = (function() {
         .then(function(result) {
             if (result.success) {
                 if (actionId === 'confirm' || actionId === 'cancel') {
-                    addBotMessage(result.message || '操作成功');
+                    // 清理引导语
+                    if (typeof window.removeMessagesByGroup === 'function') {
+                        window.removeMessagesByGroup('card-' + sessionId);
+                    } else if (typeof window.removeTempMessages === 'function') {
+                        window.removeTempMessages();
+                    }
+
+                    if (window.processedSessionIds) {
+                        window.processedSessionIds[sessionId] = 'done';
+                    }
+
+                    if (typeof window.addMessage === 'function') {
+                        window.addMessage('bot', result.message || '操作成功', { skipSave: false });
+                    } else {
+                        addBotMessage(result.message || '操作成功');
+                    }
                     removeCard(sessionId);
                 } else {
                     fetchCardData(sessionId, userId);
                 }
             } else {
+                if (cardEl) {
+                    var btns = cardEl.querySelectorAll('.action-btn');
+                    btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
+                }
                 showError(result.message || '操作失败');
             }
         }).catch(function(err) {
+            if (cardEl) {
+                var btns = cardEl.querySelectorAll('.action-btn');
+                btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
+            }
             showError('请求失败: ' + err.message);
         });
     }
