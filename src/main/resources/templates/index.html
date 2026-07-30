@@ -2206,8 +2206,9 @@
                     html += '<button class="action-btn ' + action.style + '" onclick="handleConfirmationAction(\'' + action.id + '\', \'' + sessionId + '\')">' + action.label + '</button>';
                 });
                 html += '</div>';
-                if (isBatch) {
-                    html += '<div class="card-timer" id="timerText">📋 请确认以上日程信息</div>';
+                var noTimeout = card.data.noTimeout === true;
+                if (isBatch || noTimeout) {
+                    html += '<div class="card-timer" id="timerText">📋 请确认以上信息</div>';
                 } else {
                     html += '<div class="card-timer" id="timerText">⏳ 5分钟后未确认自动确认</div>';
                 }
@@ -2215,7 +2216,7 @@
                 
                 container.innerHTML = html;
                 
-                if (!isBatch && expiresAt) {
+                if (!isBatch && !noTimeout && expiresAt) {
                     startTimer(expiresAt, card.data.sessionId);
                 }
             }
@@ -3979,8 +3980,8 @@
                             message: '📅 已更新周期提醒信息，请确认：',
                             data: data,
                             actions: result.actions && result.actions.length > 0 ? result.actions : defaultActions,
-                            timeout: result.timeout || 180,
-                            expiresAt: result.expiresAt || new Date(Date.now() + 15000).toISOString()
+                            timeout: result.timeout || 30,
+                            expiresAt: result.expiresAt || new Date(Date.now() + 30000).toISOString()
                         };
                         showConfirmationCard(card);
                     } catch (e) {
@@ -4054,8 +4055,8 @@
                             message: data.hasConflict === true ? ('⚠️ ' + data.conflictMessage) : '📋 我帮你解析了提醒信息，请确认：',
                             data: data,
                             actions: result.actions && result.actions.length > 0 ? result.actions : defaultActions,
-                            timeout: result.timeout || 180,
-                            expiresAt: result.expiresAt || new Date(Date.now() + 15000).toISOString()
+                            timeout: result.timeout || 30,
+                            expiresAt: result.expiresAt || new Date(Date.now() + 30000).toISOString()
                         };
                         showConfirmationCard(card);
                     } catch (e) {

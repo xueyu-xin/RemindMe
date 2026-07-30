@@ -56,16 +56,28 @@ public class ConfirmationService {
     @org.springframework.context.annotation.Lazy
     private RecurringReminderService recurringReminderService;
 
-    // 统一时间格式与超时配置：确认会话默认 300 秒过期
+    // 统一时间格式与超时配置：确认会话默认 30 秒过期
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-    private static final int TIMEOUT_SECONDS = 300;
+    private static final int TIMEOUT_SECONDS = 30;
 
     // 阶段一：创建信息确认会话，解析提醒字段后构建并推送确认卡片
     @Transactional
     public ConfirmationCardResponse createSession(Long userId, String originalInput, Map<String, Object> parsedData) {
         String sessionId = UUID.randomUUID().toString();
-        LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(TIMEOUT_SECONDS);
+
+        // 根据会话类型设置不同的过期时间
+        boolean isRecurring = Boolean.TRUE.equals(parsedData.get("isRecurring"));
+        boolean hasConflict = Boolean.TRUE.equals(parsedData.get("hasConflict"));
+
+        LocalDateTime expiresAt;
+        if (isRecurring || hasConflict) {
+            // 周期提醒或有冲突的会话：延长过期时间为30天，让用户可以随时回来确认（与批量导入一致）
+            expiresAt = LocalDateTime.now().plusDays(30);
+        } else {
+            // 无冲突的单次提醒：保持30秒超时自动确认
+            expiresAt = LocalDateTime.now().plusSeconds(TIMEOUT_SECONDS);
+        }
 
         String parsedDataJson;
         try {
@@ -791,39 +803,47 @@ public class ConfirmationService {
                 try {
                     Map<String, Object> parsedData = parseParsedData(session.getParsedData());
 
-                    // 周期提醒：走周期创建流程
-                    if (Boolean.TRUE.equals(parsedData.get("isRecurring"))) {
-                        handleExpiredRecurringSession(session, parsedData);
-                    } else {
-                        // 使用 createReminderFromSessionWithoutPush，不推送 card_confirmed（超时自动确认场景）
-                        Reminder reminder = createReminderFromSessionWithoutPush(session);
+                    // 周期提醒或有冲突的会话：不自动确认，延长过期时间等待用户手动处理
+                    boolean isRecurring = Boolean.TRUE.equals(parsedData.get("isRecurring"));
+                    boolean hasConflict = Boolean.TRUE.equals(parsedData.get("hasConflict"));
 
-                        String autoMessage = buildAutoConfirmMessage(reminder);
-
-                        Map<String, Object> result = new HashMap<>();
-                        result.put("success", true);
-                        result.put("message", autoMessage);
-                        result.put("reminderId", reminder.getId());
-                        result.put("sessionId", session.getSessionId());
-                        result.put("title", reminder.getTitle());
-                        result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
-
-                        // 保留 timeout_auto_create 消息用于向后兼容
-                        pushUserMessage(session.getUserId(), "timeout_auto_create", result);
-
-                        // 超时自动确认后也让 LLM 生成一句 bot 回复（和用户手动确认/取消走同一条链路），
-                        // 避免"卡片确认成功了但没有文字回复"的打断感
-                        try {
-                            agentService.handleConfirmationResult(
-                                    session.getUserId(), session.getSessionId(), true);
-                        } catch (Exception e) {
-                            log.warn("超时自动确认后生成LLM回复失败，跳过: sessionId={}, error={}",
-                                    session.getSessionId(), e.getMessage());
-                        }
-
-                        log.info("阶段一超时自动确认: sessionId={}, userId={}, reminderId={}",
-                                session.getSessionId(), session.getUserId(), reminder.getId());
+                    if (isRecurring || hasConflict) {
+                        // 延长过期时间为30天，让用户可以随时回来确认
+                        session.setExpiresAt(LocalDateTime.now().plusDays(30));
+                        confirmationRepository.save(session);
+                        log.info("会话需要用户手动确认，延长过期时间: sessionId={}, isRecurring={}, hasConflict={}",
+                                session.getSessionId(), isRecurring, hasConflict);
+                        continue;
                     }
+
+                    // 无冲突的单次提醒：超时自动确认
+                    Reminder reminder = createReminderFromSessionWithoutPush(session);
+
+                    String autoMessage = buildAutoConfirmMessage(reminder);
+
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("success", true);
+                    result.put("message", autoMessage);
+                    result.put("reminderId", reminder.getId());
+                    result.put("sessionId", session.getSessionId());
+                    result.put("title", reminder.getTitle());
+                    result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+
+                    // 保留 timeout_auto_create 消息用于向后兼容
+                    pushUserMessage(session.getUserId(), "timeout_auto_create", result);
+
+                    // 超时自动确认后也让 LLM 生成一句 bot 回复（和用户手动确认/取消走同一条链路），
+                    // 避免"卡片确认成功了但没有文字回复"的打断感
+                    try {
+                        agentService.handleConfirmationResult(
+                                session.getUserId(), session.getSessionId(), true);
+                    } catch (Exception e) {
+                        log.warn("超时自动确认后生成LLM回复失败，跳过: sessionId={}, error={}",
+                                session.getSessionId(), e.getMessage());
+                    }
+
+                    log.info("阶段一超时自动确认: sessionId={}, userId={}, reminderId={}",
+                            session.getSessionId(), session.getUserId(), reminder.getId());
                 } catch (Exception e) {
                     log.warn("阶段一超时自动确认失败: sessionId={}, error={}",
                             session.getSessionId(), e.getMessage());
@@ -1311,6 +1331,14 @@ public class ConfirmationService {
                     data.put("endDate", parsedData.get("endDate"));
                     data.put("repeatType", parsedData.get("repeatType"));
                     data.put("recurringRemindTime", parsedData.get("recurringRemindTime"));
+                    // 补充超时时间和截止时间
+                    if (session.getExpiresAt() != null) {
+                        data.put("expiresAt", session.getExpiresAt().format(ISO_FORMATTER));
+                        data.put("timeout", (int) java.time.Duration.between(java.time.LocalDateTime.now(), session.getExpiresAt()).getSeconds());
+                    } else {
+                        data.put("expiresAt", null);
+                        data.put("timeout", TIMEOUT_SECONDS);
+                    }
                     return data;
                 })
                 .orElse(new HashMap<>());
