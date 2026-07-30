@@ -464,4 +464,101 @@ public class QwenRecognitionService {
         }
         return null;
     }
+
+    // 从图片识别课表：用 qwen-vl-plus 多模态模型 + 课表专用 PROMPT
+    // base64Image 图片的 Base64 data URI；返回课表结构化数据
+    public ScheduleTableDTO recognizeScheduleImage(String base64Image) {
+        if (base64Image == null || base64Image.isEmpty()) {
+            log.warn("图片 Base64 为空");
+            return ScheduleTableDTO.builder()
+                    .success(false)
+                    .confidence(0.0)
+                    .courses(Collections.emptyList())
+                    .build();
+        }
+
+        String apiKey = qwenConfig.getKey();
+        if (apiKey == null || apiKey.isEmpty()) {
+            log.error("通义千问 API Key 未配置");
+            return ScheduleTableDTO.builder()
+                    .success(false)
+                    .confidence(0.0)
+                    .courses(Collections.emptyList())
+                    .build();
+        }
+
+        try {
+            MultiModalConversation conv = new MultiModalConversation();
+
+            String schedulePrompt = """
+                    你是一个专业的课程表识别助手。请仔细识别图片中的课程表，返回严格的 JSON 格式。
+
+                    识别规则：
+                    1. 识别星期几（星期一~星期日，周一~周日均需支持）
+                    2. 识别节次（第1节、第2节...第10节）
+                    3. 提取课程名称、教师、上课地点
+                    4. 推断时间表（每节课的开始时间和结束时间），如果图片中有时间则使用，没有则按常规大学作息时间（第1节 08:00-08:45，第2节 08:55-09:40，以此类推）
+                    5. 推断学期开始日期
+
+                    合并规则（重要）：
+                    - 同一门课程如果出现在连续的多个节次，合并为一条课程，sectionIndices 为 [1, 2]
+                    - 同一门课程如果出现在同一列（同一天）的多个非连续节次，也合并为一条
+                    - 空单元格表示该时段无课，跳过
+                    - 每条课程应该唯一，不要为同一门课生成多条重复记录
+
+                    返回格式要求（严格按此 JSON 结构返回，不要添加任何额外文字）：
+                    {
+                      "success": true/false,
+                      "confidence": 0.0-1.0,
+                      "courses": [
+                        {
+                          "title": "课程名",
+                          "teacher": "教师名",
+                          "dayOfWeek": "星期一",
+                          "sectionIndices": [1, 2],
+                          "weeks": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                          "oddWeek": false,
+                          "evenWeek": false,
+                          "location": "教室名"
+                        }
+                      ],
+                      "timeSections": [
+                        {"index": 1, "startTime": "08:00", "endTime": "08:45"},
+                        {"index": 2, "startTime": "08:55", "endTime": "09:40"}
+                      ],
+                      "semesterStartDate": "2026-09-01",
+                      "suggestedWeeks": 16
+                    }
+
+                    如果无法识别课表，返回 {"success": false, "confidence": 0.0, "courses": [], "timeSections": [], "semesterStartDate": null, "suggestedWeeks": 16}
+                    """;
+
+            MultiModalConversationParam param = MultiModalConversationParam.builder()
+                    .apiKey(apiKey)
+                    .model("qwen-vl-plus")
+                    .message(MultiModalConversationMessage.builder()
+                            .role("user")
+                            .content(java.util.Arrays.asList(
+                                    new MultiModalMessageItemImage(base64Image),
+                                    new MultiModalMessageItemText(schedulePrompt)
+                            ))
+                            .build())
+                    .build();
+
+            MultiModalConversationResult result = conv.call(param);
+            String responseText = extractMultiModalText(result);
+
+            log.info("图片课表识别完成：responseLength={}", responseText.length());
+            log.info("AI 返回的原始 JSON：{}", responseText);
+
+            return parseScheduleTableResult(responseText);
+        } catch (Exception e) {
+            log.error("图片课表识别失败", e);
+            return ScheduleTableDTO.builder()
+                    .success(false)
+                    .confidence(0.0)
+                    .courses(Collections.emptyList())
+                    .build();
+        }
+    }
 }

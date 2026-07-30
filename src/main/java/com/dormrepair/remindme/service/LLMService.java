@@ -72,8 +72,9 @@ public class LLMService {
                     .remindTime(root.has("remindTime") ? parseDateTime(root.get("remindTime").asText()) : null)
                     .endTime(root.has("endTime") && !root.get("endTime").isNull() ? parseDateTime(root.get("endTime").asText()) : null)
                     .intentType(root.has("intentType") ? root.get("intentType").asText() : "UNKNOWN")
-                    .location(root.has("location") ? root.get("location").asText() : null)
+                    .location(root.has("location") && !root.get("location").isNull() ? root.get("location").asText() : null)
                     .priority(root.has("priority") ? root.get("priority").asText() : "NORMAL")
+                    .note(root.has("note") && !root.get("note").isNull() ? root.get("note").asText() : null)
                     .advanceMinutes(advanceMinutes)
                     .build();
 
@@ -910,7 +911,7 @@ public class LLMService {
             示例：
             对话历史：用户说"明天下午4点提醒我喝咖啡"，工具执行结果包含 remindTime: "2026-07-26 16:00:00"
             用户输入："再提醒我带伞"
-            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "带伞", "remindTime": "2026-07-26 16:00:00", "location": null, "priority": "NORMAL"}}}
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "带伞", "remindTime": "2026-07-26 16:00:00", "location": null, "note": null, "priority": "NORMAL"}}}
 
             对话历史：无任何提醒创建记录
             用户输入："再提醒我带伞"
@@ -953,19 +954,23 @@ public class LLMService {
             用户输入："明天下午3点提醒我还书"
             你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "还书", "remindTime": "2026-07-26 15:00:00"}}}
 
-            示例2（查询日程）：
+            示例2（带地点和备注的提醒）：
+            用户输入："周五上午10点在三教开会，记得带笔记本电脑"
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "开会", "remindTime": "2026-08-01 10:00:00", "location": "三教", "note": "记得带笔记本电脑", "priority": "NORMAL"}}}
+
+            示例3（查询日程）：
             用户输入："我今天有什么安排？"
             你的输出：{"tool_call": {"name": "query_reminders", "arguments": {"date": "2026-07-25"}}}
 
-            示例3（取消指定日期的提醒）：
+            示例4（取消指定日期的提醒）：
             用户输入："取消30号的看电影"
             你的输出：{"tool_call": {"name": "cancel_reminders_by_date", "arguments": {"date": "2026-07-30", "keyword": "看电影"}}}
 
-            示例4（取消某天所有提醒）：
+            示例5（取消某天所有提醒）：
             用户输入："取消明天的所有提醒"
             你的输出：{"tool_call": {"name": "cancel_reminders_by_date", "arguments": {"date": "2026-07-29"}}}
 
-            示例5（按关键词取消今天的提醒）：
+            示例6（按关键词取消今天的提醒）：
             用户输入："取消买可乐的提醒"
             你的输出：{"tool_call": {"name": "cancel_reminders_by_date", "arguments": {"date": "2026-07-28", "keyword": "买可乐"}}}
 
@@ -1430,6 +1435,7 @@ public class LLMService {
                - intentType: 意图类型（REMINDER/QUERY/DELETE/UPDATE/CONFIRM/CANCEL/WEATHER/UNKNOWN）
                - location: 地点（字符串，可选）
                - priority: 优先级（LOW/NORMAL/HIGH，默认NORMAL）
+               - note: 备注（字符串，可选，用户对提醒的补充说明，如"记得带学生证"、"带礼物"等）
                - advanceMinutes: 默认提前量（整数，可选。注意：对于"等会"/"等一下"等模糊时间不要设置此字段，后端会使用用户的默认提前量。只有明确说了X分钟/小时才设置）
             
             时间解析规则：
@@ -1453,15 +1459,25 @@ public class LLMService {
             - 关键词识别："到"、"至"、"-"、"~"、"之间"、"时间段" 等表示时间段
             - 如果用户只指定了开始时间，没有明确结束时间，则 endTime 设为 null
             - 如果用户说"X点到Y点"格式，需要同时提取开始和结束时间
-            
+
+            备注提取规则（note 字段）：
+            - 当用户输入中包含对提醒事项的补充说明、注意事项、需要准备的物品等信息时，提取为 note 字段
+            - 常见模式："记得..."、"别忘了..."、"要带..."、"注意..."等
+            - 例："明天下午3点提醒我还书，记得带借书证" → note="记得带借书证"
+            - 例："周五上午10点开会，地点会议室A，记得带笔记本电脑" → location="会议室A", note="记得带笔记本电脑"
+            - 如果用户没有提供备注信息，note 设为 null
+
             示例输入1（单点提醒）："明天下午3点还书"
-            示例输出1：{"title":"还书","remindTime":"%s","endTime":null,"intentType":"REMINDER","location":null,"priority":"NORMAL"}
-            
+            示例输出1：{"title":"还书","remindTime":"%s","endTime":null,"intentType":"REMINDER","location":null,"priority":"NORMAL","note":null}
+
             示例输入2（时间段提醒）："明天下午3点到5点开会"
-            示例输出2：{"title":"开会","remindTime":"2026-07-30 15:00:00","endTime":"2026-07-30 17:00:00","intentType":"REMINDER","location":null,"priority":"NORMAL"}
-            
+            示例输出2：{"title":"开会","remindTime":"2026-07-30 15:00:00","endTime":"2026-07-30 17:00:00","intentType":"REMINDER","location":null,"priority":"NORMAL","note":null}
+
+            示例输入3（带地点和备注）："周五上午10点在三教开会，记得带笔记本电脑"
+            示例输出3：{"title":"开会","remindTime":"2026-08-01 10:00:00","endTime":null,"intentType":"REMINDER","location":"三教","priority":"NORMAL","note":"记得带笔记本电脑"}
+
             用户输入: %s
-            """.formatted(currentDate, currentDate, userInput);
+            """.formatted(currentDate, currentDate, currentDate, userInput);
     }
 
     // 解析日期时间字符串，失败返回 null
@@ -1592,6 +1608,7 @@ public class LLMService {
             String intentType,
             String location,
             String priority,
+            String note,
             Integer advanceMinutes
     ) {
         public static Builder builder() {
@@ -1605,6 +1622,7 @@ public class LLMService {
             private String intentType;
             private String location;
             private String priority;
+            private String note;
             private Integer advanceMinutes;
 
             public Builder title(String title) {
@@ -1637,13 +1655,18 @@ public class LLMService {
                 return this;
             }
 
+            public Builder note(String note) {
+                this.note = note;
+                return this;
+            }
+
             public Builder advanceMinutes(Integer advanceMinutes) {
                 this.advanceMinutes = advanceMinutes;
                 return this;
             }
 
             public ParsedResult build() {
-                return new ParsedResult(title, remindTime, endTime, intentType, location, priority, advanceMinutes);
+                return new ParsedResult(title, remindTime, endTime, intentType, location, priority, note, advanceMinutes);
             }
         }
     }

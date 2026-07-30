@@ -3,6 +3,8 @@ package com.dormrepair.remindme.repository;
 import com.dormrepair.remindme.entity.ConfirmationSession;
 import com.dormrepair.remindme.entity.ConfirmationSession.SessionStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
@@ -32,4 +34,12 @@ public interface ConfirmationRepository extends JpaRepository<ConfirmationSessio
 
     // 按状态 + 过期时间批量删除会话，定时任务清 EXPIRED 会话用
     void deleteByStatusAndExpiresAtBefore(SessionStatus status, LocalDateTime dateTime);
+
+    // 查找指定提醒的待确认执行阶段会话，用于清理旧会话
+    List<ConfirmationSession> findByReminderIdAndStageAndStatus(Long reminderId, String stage, SessionStatus status);
+
+    // 批量过期指定提醒的旧执行会话
+    @Modifying
+    @Query("UPDATE ConfirmationSession s SET s.status = 'EXPIRED' WHERE s.reminderId = :reminderId AND s.stage = 'REMINDER_EXECUTE' AND s.status = 'PENDING'")
+    void expireOldExecuteSessions(Long reminderId);
 }

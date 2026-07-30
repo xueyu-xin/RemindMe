@@ -11,7 +11,7 @@
  Target Server Version : 80400 (8.4.0)
  File Encoding         : 65001
 
- Date: 30/07/2026 04:10:46
+ Date: 30/07/2026 22:28:43
 */
 
 SET NAMES utf8mb4;
@@ -141,6 +141,7 @@ CREATE TABLE `reminders`  (
   `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `execution_status` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT 'PENDING' COMMENT '执行状态：PENDING/CONFIRMED/CANCELLED/DEFAULTED，用于阶段二',
+  `note` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT NULL COMMENT '备注/附加信息（如：带袋子、带伞等）',
   PRIMARY KEY (`id`) USING BTREE,
   INDEX `idx_reminders_user_status_time`(`user_id` ASC, `status` ASC, `remind_time` ASC) USING BTREE,
   INDEX `idx_reminders_remind_time`(`remind_time` ASC) USING BTREE,
@@ -149,7 +150,7 @@ CREATE TABLE `reminders`  (
   INDEX `idx_reminders_execution_status`(`execution_status` ASC) USING BTREE,
   INDEX `idx_reminders_user_end_time`(`user_id` ASC, `end_time` ASC) USING BTREE,
   CONSTRAINT `fk_reminders_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 976 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '提醒表' ROW_FORMAT = DYNAMIC;
+) ENGINE = InnoDB AUTO_INCREMENT = 1472 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '提醒表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Table structure for schedule_import_items

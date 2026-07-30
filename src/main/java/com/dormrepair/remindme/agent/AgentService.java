@@ -705,6 +705,8 @@ public class AgentService {
             }
             if (isRecurring) {
                 confirmationData.put("isRecurring", true);
+                // 周期提醒卡片不超时
+                confirmationData.put("noTimeout", true);
             }
 
             // LLM 生成卡片前的引导语

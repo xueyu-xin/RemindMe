@@ -18,6 +18,8 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 // 聊天与 AI 解析接口控制器。统一前缀 /api/chat，承担用户自然语言输入→LLM 解析→确认会话创建的主流程、聊天历史查询、消息异步保存等能力；支持 agent.enabled 开关在「Agent 模式」和「传统确认卡片模式」之间切换
 @Slf4j
@@ -250,9 +252,22 @@ public class ChatController {
 
         Map<String, Object> parsedData = new HashMap<>();
         parsedData.put("title", result.title());
-        // 如果时间为null，使用默认时间（当前时间+默认提前量）
+        // 时间解析：优先使用 LLM 解析结果，其次使用相对时间兜底，最后使用默认提前量
         Integer advance = result.advanceMinutes() != null ? result.advanceMinutes() : getDefaultAdvance(userId);
-        LocalDateTime remindTime = result.remindTime() != null ? result.remindTime() : LocalDateTime.now().plusMinutes(advance);
+        LocalDateTime remindTime = result.remindTime();
+        if (remindTime == null) {
+            // LLM 未解析出时间，尝试相对时间兜底解析
+            remindTime = parseRelativeTime(text);
+            if (remindTime != null) {
+                log.info("LLM 解析时间为空，使用相对时间兜底：{} → {}", text, remindTime);
+                // 相对时间匹配成功时，更新 advance 为 0（已计算过时间）
+                advance = 0;
+            } else {
+                // 兜底也失败，使用当前时间
+                remindTime = LocalDateTime.now();
+                log.info("时间兜底解析失败，使用当前时间 → {}", remindTime);
+            }
+        }
         parsedData.put("remindTime", remindTime.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
         parsedData.put("intentType", result.intentType());
         parsedData.put("location", result.location());
@@ -294,6 +309,52 @@ public class ChatController {
         return userService.getUserById(userId)
                 .map(u -> u.getDefaultAdvanceMinutes())
                 .orElse(10);
+    }
+
+    // 相对时间兜底解析：当 LLM 无法解析"X分钟后"等相对时间表达时，使用正则表达式直接解析
+    // 支持 "X分钟后"、"X小时后"、"X天后" 等格式
+    private LocalDateTime parseRelativeTime(String input) {
+        if (input == null || input.isBlank()) {
+            return null;
+        }
+
+        // 匹配 "X分钟后"
+        Pattern minutePattern = Pattern.compile("(\\d+)\\s*分钟后");
+        Matcher minuteMatcher = minutePattern.matcher(input);
+        if (minuteMatcher.find()) {
+            int minutes = Integer.parseInt(minuteMatcher.group(1));
+            log.info("相对时间解析：匹配到 {}分钟后，计算结果为 {}", minutes, LocalDateTime.now().plusMinutes(minutes));
+            return LocalDateTime.now().plusMinutes(minutes);
+        }
+
+        // 匹配 "X小时后"
+        Pattern hourPattern = Pattern.compile("(\\d+)\\s*小时后");
+        Matcher hourMatcher = hourPattern.matcher(input);
+        if (hourMatcher.find()) {
+            int hours = Integer.parseInt(hourMatcher.group(1));
+            log.info("相对时间解析：匹配到 {}小时后，计算结果为 {}", hours, LocalDateTime.now().plusHours(hours));
+            return LocalDateTime.now().plusHours(hours);
+        }
+
+        // 匹配 "X天后"
+        Pattern dayPattern = Pattern.compile("(\\d+)\\s*天后");
+        Matcher dayMatcher = dayPattern.matcher(input);
+        if (dayMatcher.find()) {
+            int days = Integer.parseInt(dayMatcher.group(1));
+            log.info("相对时间解析：匹配到 {}天后，计算结果为 {}", days, LocalDateTime.now().plusDays(days));
+            return LocalDateTime.now().plusDays(days);
+        }
+
+        // 匹配 "X秒后"（用于"马上"、"立刻"等场景的精确表达）
+        Pattern secondPattern = Pattern.compile("(\\d+)\\s*秒后");
+        Matcher secondMatcher = secondPattern.matcher(input);
+        if (secondMatcher.find()) {
+            int seconds = Integer.parseInt(secondMatcher.group(1));
+            log.info("相对时间解析：匹配到 {}秒后，计算结果为 {}", seconds, LocalDateTime.now().plusSeconds(seconds));
+            return LocalDateTime.now().plusSeconds(seconds);
+        }
+
+        return null;
     }
 
     // 判断是否为「取消」语义

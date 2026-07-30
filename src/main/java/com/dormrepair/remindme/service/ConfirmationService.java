@@ -56,16 +56,28 @@ public class ConfirmationService {
     @org.springframework.context.annotation.Lazy
     private RecurringReminderService recurringReminderService;
 
-    // 统一时间格式与超时配置：确认会话默认 300 秒过期
+    // 统一时间格式与超时配置：确认会话默认 30 秒过期
     private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
-    private static final int TIMEOUT_SECONDS = 300;
+    private static final int TIMEOUT_SECONDS = 30;
 
     // 阶段一：创建信息确认会话，解析提醒字段后构建并推送确认卡片
     @Transactional
     public ConfirmationCardResponse createSession(Long userId, String originalInput, Map<String, Object> parsedData) {
         String sessionId = UUID.randomUUID().toString();
-        LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(TIMEOUT_SECONDS);
+
+        // 根据会话类型设置不同的过期时间
+        boolean isRecurring = Boolean.TRUE.equals(parsedData.get("isRecurring"));
+        boolean hasConflict = Boolean.TRUE.equals(parsedData.get("hasConflict"));
+
+        LocalDateTime expiresAt;
+        if (isRecurring || hasConflict) {
+            // 周期提醒或有冲突的会话：无超时，用户必须手动确认（与批量导入一致）
+            expiresAt = null;
+        } else {
+            // 无冲突的单次提醒：保持30秒超时自动确认
+            expiresAt = LocalDateTime.now().plusSeconds(TIMEOUT_SECONDS);
+        }
 
         String parsedDataJson;
         try {
@@ -779,51 +791,49 @@ public class ConfirmationService {
         return card;
     }
 
-    // 定时清理过期会话：每 15 秒扫描一次，阶段一超时自动确认（含周期提醒分支），其他阶段直接标记过期
+    // 定时清理过期会话：每 15 秒扫描一次，只处理有超时的会话（expiresAt 不为 null）
     @Scheduled(fixedRate = 15000)
     @Transactional
     public void cleanupExpiredSessions() {
         List<ConfirmationSession> expired = confirmationRepository.findByStatusAndExpiresAtBefore(
-                SessionStatus.PENDING, LocalDateTime.now());
+                SessionStatus.PENDING, LocalDateTime.now())
+                .stream()
+                .filter(s -> s.getExpiresAt() != null)  // 只处理有超时的会话
+                .toList();
 
         for (ConfirmationSession session : expired) {
             if ("INFO_CONFIRM".equals(session.getStage())) {
                 try {
                     Map<String, Object> parsedData = parseParsedData(session.getParsedData());
 
-                    // 周期提醒：走周期创建流程
-                    if (Boolean.TRUE.equals(parsedData.get("isRecurring"))) {
-                        handleExpiredRecurringSession(session, parsedData);
-                    } else {
-                        // 使用 createReminderFromSessionWithoutPush，不推送 card_confirmed（超时自动确认场景）
-                        Reminder reminder = createReminderFromSessionWithoutPush(session);
+                    // 无冲突的单次提醒：超时自动确认
+                    Reminder reminder = createReminderFromSessionWithoutPush(session);
 
-                        String autoMessage = buildAutoConfirmMessage(reminder);
+                    String autoMessage = buildAutoConfirmMessage(reminder);
 
-                        Map<String, Object> result = new HashMap<>();
-                        result.put("success", true);
-                        result.put("message", autoMessage);
-                        result.put("reminderId", reminder.getId());
-                        result.put("sessionId", session.getSessionId());
-                        result.put("title", reminder.getTitle());
-                        result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("success", true);
+                    result.put("message", autoMessage);
+                    result.put("reminderId", reminder.getId());
+                    result.put("sessionId", session.getSessionId());
+                    result.put("title", reminder.getTitle());
+                    result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
 
-                        // 保留 timeout_auto_create 消息用于向后兼容
-                        pushUserMessage(session.getUserId(), "timeout_auto_create", result);
+                    // 保留 timeout_auto_create 消息用于向后兼容
+                    pushUserMessage(session.getUserId(), "timeout_auto_create", result);
 
-                        // 超时自动确认后也让 LLM 生成一句 bot 回复（和用户手动确认/取消走同一条链路），
-                        // 避免"卡片确认成功了但没有文字回复"的打断感
-                        try {
-                            agentService.handleConfirmationResult(
-                                    session.getUserId(), session.getSessionId(), true);
-                        } catch (Exception e) {
-                            log.warn("超时自动确认后生成LLM回复失败，跳过: sessionId={}, error={}",
-                                    session.getSessionId(), e.getMessage());
-                        }
-
-                        log.info("阶段一超时自动确认: sessionId={}, userId={}, reminderId={}",
-                                session.getSessionId(), session.getUserId(), reminder.getId());
+                    // 超时自动确认后也让 LLM 生成一句 bot 回复（和用户手动确认/取消走同一条链路），
+                    // 避免"卡片确认成功了但没有文字回复"的打断感
+                    try {
+                        agentService.handleConfirmationResult(
+                                session.getUserId(), session.getSessionId(), true);
+                    } catch (Exception e) {
+                        log.warn("超时自动确认后生成LLM回复失败，跳过: sessionId={}, error={}",
+                                session.getSessionId(), e.getMessage());
                     }
+
+                    log.info("阶段一超时自动确认: sessionId={}, userId={}, reminderId={}",
+                            session.getSessionId(), session.getUserId(), reminder.getId());
                 } catch (Exception e) {
                     log.warn("阶段一超时自动确认失败: sessionId={}, error={}",
                             session.getSessionId(), e.getMessage());
@@ -836,6 +846,9 @@ public class ConfirmationService {
                     result.put("message", "⏰ 确认已超时，请重新输入");
                     pushUserMessage(session.getUserId(), "timeout", result);
                 }
+            } else if ("REMINDER_EXECUTE".equals(session.getStage())) {
+                // 阶段二会话不处理超时，跳过
+                log.info("跳过阶段二过期会话: sessionId={}, userId={}", session.getSessionId(), session.getUserId());
             } else {
                 session.setStatus(SessionStatus.EXPIRED);
                 confirmationRepository.save(session);
@@ -949,6 +962,7 @@ public class ConfirmationService {
         reminder.setPriority(Priority.valueOf(
                 ((String) parsedData.getOrDefault("priority", "NORMAL")).toUpperCase()));
         reminder.setLocation((String) parsedData.get("location"));
+        reminder.setNote((String) parsedData.get("note"));
         int defaultAdvance = userService.getUserById(userId)
                 .map(u -> u.getDefaultAdvanceMinutes())
                 .orElse(10);
@@ -979,6 +993,7 @@ public class ConfirmationService {
                 .endTime((String) parsedData.get("endTime"))
                 .priority((String) parsedData.getOrDefault("priority", "NORMAL"))
                 .location((String) parsedData.get("location"))
+                .note((String) parsedData.get("note"))
                 .advanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", defaultAdvance))
                 .confidence((Double) parsedData.getOrDefault("confidence", 0.95))
                 .hasConflict(hasConflict)
@@ -1060,7 +1075,7 @@ public class ConfirmationService {
                     repeatLabel,
                     totalDays != null ? String.format("（共%d天）", totalDays) : "");
             actions = Arrays.asList(
-                    Action.builder().id("confirm").label("✅ 确认创建").style("primary").build(),
+                    Action.builder().id("confirm").label("✅ 确认").style("primary").build(),
                     Action.builder().id("edit").label("✏️ 修改").style("warning").build(),
                     Action.builder().id("cancel").label("❌ 取消").style("danger").build()
             );
@@ -1068,27 +1083,31 @@ public class ConfirmationService {
             // 有冲突时：确认（主按钮）+ 覆盖 + 修改 + 取消
             message = "⚠️ " + parsedData.get("conflictMessage");
             actions = Arrays.asList(
-                    Action.builder().id("confirm").label("✅ 确认创建").style("primary").build(),
+                    Action.builder().id("confirm").label("✅ 确认").style("primary").build(),
                     Action.builder().id("overwrite").label("📝 覆盖").style("warning").build(),
-                    Action.builder().id("edit").label("✏️ 修改时间").style("warning").build(),
+                    Action.builder().id("edit").label("✏️ 修改").style("warning").build(),
                     Action.builder().id("cancel").label("❌ 取消").style("danger").build()
             );
         } else {
             message = "📋 我帮你解析了提醒信息，请确认：";
             actions = Arrays.asList(
-                    Action.builder().id("confirm").label("✅ 确认创建").style("primary").build(),
+                    Action.builder().id("confirm").label("✅ 确认").style("primary").build(),
                     Action.builder().id("edit").label("✏️ 修改").style("warning").build(),
                     Action.builder().id("cancel").label("❌ 取消").style("danger").build()
             );
         }
+
+        // 周期/冲突会话无超时，单次会话有30秒超时
+        Integer timeout = (session.getExpiresAt() != null) ? TIMEOUT_SECONDS : null;
+        String expiresAtStr = (session.getExpiresAt() != null) ? session.getExpiresAt().format(ISO_FORMATTER) : null;
 
         return ConfirmationCardResponse.builder()
                 .type("confirmation_card")
                 .message(message)
                 .data(data)
                 .actions(actions)
-                .timeout(TIMEOUT_SECONDS)
-                .expiresAt(session.getExpiresAt().format(ISO_FORMATTER))
+                .timeout(timeout)
+                .expiresAt(expiresAtStr)
                 .build();
     }
 
@@ -1128,6 +1147,9 @@ public class ConfirmationService {
     // 阶段二提醒执行卡片：创建执行会话并推送，可携带天气建议
     @Transactional
     public void pushExecuteCard(Reminder reminder, String weatherSuggestion) {
+        // 清理旧的 PENDING 执行会话，防止会话泄漏
+        confirmationRepository.expireOldExecuteSessions(reminder.getId());
+
         String sessionId = UUID.randomUUID().toString();
 
         ConfirmationSession session = ConfirmationSession.builder()
@@ -1152,6 +1174,7 @@ public class ConfirmationService {
         parsedData.put("title", reminder.getTitle());
         parsedData.put("remindTime", reminder.getRemindTime().format(FORMATTER));
         parsedData.put("location", reminder.getLocation());
+        parsedData.put("note", reminder.getNote());
         parsedData.put("priority", reminder.getPriority().name());
         parsedData.put("advanceMinutes", reminder.getAdvanceMinutes());
         parsedData.put("attempt", reminder.getConfirmAttempts());
@@ -1159,13 +1182,14 @@ public class ConfirmationService {
         parsedData.put("weatherSuggestion", weatherSuggestion);
 
         ConfirmationCardResponse card = buildExecuteCard(session, parsedData);
-        pushConfirmationCard(reminder.getUserId(), card);
+        // 执行提醒走消息通道（通知栏），而非确认通道（创建卡片）
+        webSocketPushService.pushToUser(reminder.getUserId(), "/queue/messages", card);
 
         log.info("推送阶段二提醒执行卡片: sessionId={}, reminderId={}, userId={}, weatherSuggestion={}", 
                 sessionId, reminder.getId(), reminder.getUserId(), weatherSuggestion);
     }
 
-    // 阶段二-稍后提醒：递增尝试次数，达到上限自动确认执行，否则按间隔分钟再次提醒
+    // 阶段二-稍后提醒：推迟指定时间后由调度器重新推送，不触发自动确认
     @Transactional
     public Map<String, Object> handleExecuteLater(String sessionId, Long userId) {
         ConfirmationSession session = findExecuteSession(sessionId, userId);
@@ -1173,29 +1197,19 @@ public class ConfirmationService {
         Reminder reminder = reminderRepository.findById(session.getReminderId())
                 .orElseThrow(() -> new IllegalArgumentException("提醒不存在"));
 
-        int newAttemptCount = session.getAttemptCount() + 1;
-        session.setAttemptCount(newAttemptCount);
-        session.setExpiresAt(LocalDateTime.now().plusMinutes(session.getIntervalMinutes()));
+        // 更新 reminder 的最后推送时间，确保调度器在间隔时间后重新推送
+        reminder.setLastConfirmRemindAt(LocalDateTime.now());
+        reminderRepository.save(reminder);
+
+        // 递增会话尝试次数用于日志追踪，不设置过期时间，不触发自动确认
+        session.setAttemptCount(session.getAttemptCount() + 1);
         confirmationRepository.save(session);
 
         Map<String, Object> result = new HashMap<>();
-
-        if (newAttemptCount >= session.getMaxAttempts()) {
-            reminder.setExecutionStatus(ExecutionStatus.DEFAULTED);
-            reminder.setStatus(ReminderStatus.SENT);
-            session.setStatus(SessionStatus.EXPIRED);
-            confirmationRepository.save(session);
-            reminderRepository.save(reminder);
-
-            result.put("success", true);
-            result.put("message", "⏰ 已自动确认执行（3次稍后未响应）");
-            log.info("阶段二自动确认执行(3次稍后): sessionId={}, reminderId={}", sessionId, reminder.getId());
-        } else {
-            result.put("success", true);
-            result.put("message", "⏰ 已推迟，" + session.getIntervalMinutes() + "分钟后再次提醒");
-            log.info("阶段二稍后: sessionId={}, reminderId={}, attempt={}/{}", 
-                    sessionId, reminder.getId(), newAttemptCount, session.getMaxAttempts());
-        }
+        result.put("success", true);
+        result.put("message", "⏰ 已推迟，" + session.getIntervalMinutes() + "分钟后再次提醒");
+        log.info("阶段二稍后: sessionId={}, reminderId={}, intervalMinutes={}",
+                sessionId, reminder.getId(), session.getIntervalMinutes());
 
         return result;
     }
@@ -1262,14 +1276,20 @@ public class ConfirmationService {
                 .remindTime((String) parsedData.get("remindTime"))
                 .priority((String) parsedData.get("priority"))
                 .location((String) parsedData.get("location"))
+                .note((String) parsedData.get("note"))
                 .advanceMinutes((Integer) parsedData.get("advanceMinutes"))
                 .weatherSuggestion((String) parsedData.get("weatherSuggestion"))
                 .build();
 
-        String message = "🔔 叮！该执行提醒了：";
+        String message = "";
         String weatherSuggestion = (String) parsedData.get("weatherSuggestion");
         if (weatherSuggestion != null && !weatherSuggestion.isBlank()) {
-            message = weatherSuggestion + "\n" + message;
+            message = weatherSuggestion;
+        } else {
+            String title = (String) parsedData.get("title");
+            if (title != null && !title.isBlank()) {
+                message = title;
+            }
         }
 
         List<Action> actions = Arrays.asList(
@@ -1301,6 +1321,7 @@ public class ConfirmationService {
                     data.put("advanceMinutes", session.getParsedAdvanceMinutes());
                     // 从 parsedData 中提取建议时间
                     Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+                    data.put("note", parsedData.get("note"));
                     data.put("suggestedTime", parsedData.get("suggestedTime"));
                     data.put("hasConflict", parsedData.get("hasConflict"));
                     data.put("conflictMessage", parsedData.get("conflictMessage"));
@@ -1311,6 +1332,14 @@ public class ConfirmationService {
                     data.put("endDate", parsedData.get("endDate"));
                     data.put("repeatType", parsedData.get("repeatType"));
                     data.put("recurringRemindTime", parsedData.get("recurringRemindTime"));
+                    // 补充超时时间和截止时间
+                    if (session.getExpiresAt() != null) {
+                        data.put("expiresAt", session.getExpiresAt().format(ISO_FORMATTER));
+                        data.put("timeout", (int) java.time.Duration.between(java.time.LocalDateTime.now(), session.getExpiresAt()).getSeconds());
+                    } else {
+                        data.put("expiresAt", null);
+                        data.put("timeout", TIMEOUT_SECONDS);
+                    }
                     return data;
                 })
                 .orElse(new HashMap<>());
@@ -1346,7 +1375,7 @@ public class ConfirmationService {
         return confirmationRepository.findByUserIdAndStatus(userId, SessionStatus.PENDING)
                 .stream()
                 .filter(s -> "INFO_CONFIRM".equals(s.getStage()))
-                .filter(s -> s.getExpiresAt() != null && s.getExpiresAt().isAfter(LocalDateTime.now()))
+                .filter(s -> s.getExpiresAt() == null || s.getExpiresAt().isAfter(LocalDateTime.now()))
                 .sorted((a, b) -> a.getCreatedAt().compareTo(b.getCreatedAt()))
                 .toList();
     }
@@ -1561,6 +1590,18 @@ public class ConfirmationService {
         }
         
         reminder.setLocation(session.getParsedLocation());
+        // 从 parsedData JSON 中提取 note 字段（ConfirmationSession 未单独建列）
+        try {
+            Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+            if (parsedData != null) {
+                Object noteObj = parsedData.get("note");
+                if (noteObj != null) {
+                    reminder.setNote(String.valueOf(noteObj));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("解析 parsedData 提取 note 失败: sessionId={}, error={}", session.getSessionId(), e.getMessage());
+        }
         reminder.setAdvanceMinutes(session.getParsedAdvanceMinutes() != null ? session.getParsedAdvanceMinutes() : 10);
         reminder.setStatus(ReminderStatus.PENDING);
         reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);

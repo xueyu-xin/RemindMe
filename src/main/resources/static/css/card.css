@@ -1,0 +1,756 @@
+/**
+ * 确认卡片样式 - Card System Stylesheet
+ * 对话流中的确认卡片系统
+ * 依赖 CSS 变量（定义在 main.css 的 :root 中）
+ */
+
+/* ===== 卡片消息容器 ===== */
+.card-message {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 12px;
+}
+
+/* ===== 确认卡片（在对话流中）===== */
+.confirmation-card {
+    background: var(--cream-card);
+    border: 2px solid var(--peach-pale);
+    border-left: 4px solid var(--peach);
+    border-radius: 18px;
+    padding: 20px;
+    margin-bottom: 14px;
+    box-shadow: var(--shadow-soft);
+    animation: cardSlideIn 0.35s ease-out;
+}
+
+@keyframes cardSlideIn {
+    from { opacity: 0; transform: translateX(-12px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+/* ===== 卡片标题 ===== */
+.confirmation-card .card-title {
+    font-family: 'MaoKenShiJinHei', sans-serif;
+    font-size: 16px;
+    color: var(--brown-deep);
+    margin-bottom: 14px;
+    letter-spacing: 0.5px;
+}
+
+/* ===== 卡片信息区 ===== */
+.confirmation-card .card-info {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+}
+
+/* ===== 信息项 ===== */
+.confirmation-card .info-item {
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    color: var(--brown-mid);
+}
+
+.confirmation-card .info-label {
+    width: 60px;
+    color: var(--brown-light);
+    flex-shrink: 0;
+}
+
+.confirmation-card .info-value {
+    color: var(--brown-deep);
+}
+
+/* ===== 卡片操作按钮 ===== */
+.confirmation-card .card-actions {
+    display: flex;
+    gap: 10px;
+}
+
+/* ===== 操作按钮 ===== */
+.confirmation-card .action-btn {
+    flex: 1;
+    padding: 8px 14px;
+    height: 38px;
+    border: 2px solid var(--peach-pale);
+    border-radius: 12px;
+    font-family: 'MaoKenShiJinHei', sans-serif;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.25s ease;
+    line-height: 1.5;
+    background: var(--cream-card);
+    color: var(--brown-deep) !important;
+    -webkit-text-fill-color: var(--brown-deep) !important;
+    letter-spacing: 0.5px;
+}
+
+/* 主按钮 */
+.confirmation-card .action-btn.primary {
+    background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    border-color: transparent;
+    box-shadow: 0 4px 12px rgba(255, 159, 122, 0.35);
+}
+
+.confirmation-card .action-btn.primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(255, 159, 122, 0.45);
+}
+
+/* 次要按钮 */
+.confirmation-card .action-btn.secondary {
+    background: var(--cream-bg) !important;
+    color: var(--brown-deep) !important;
+    -webkit-text-fill-color: var(--brown-deep) !important;
+    border-color: var(--peach-pale) !important;
+}
+
+.confirmation-card .action-btn.secondary:hover {
+    background: var(--peach-pale) !important;
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-soft);
+}
+
+/* 成功按钮 */
+.confirmation-card .action-btn.success {
+    background: linear-gradient(135deg, #4CAF50 0%, #66BB6A 100%);
+    color: #FFFFFF;
+    border-color: transparent;
+    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.35);
+}
+
+.confirmation-card .action-btn.success:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(76, 175, 80, 0.45);
+}
+
+/* 警告按钮 */
+.confirmation-card .action-btn.warning {
+    color: var(--brown-deep);
+    background: var(--cream-bg);
+}
+
+.confirmation-card .action-btn.warning:hover {
+    background: var(--peach-pale);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-soft);
+}
+
+/* 危险按钮 */
+.confirmation-card .action-btn.danger {
+    color: var(--danger);
+    border-color: #FFB3B3;
+    background: #FFF5F5;
+}
+
+.confirmation-card .action-btn.danger:hover {
+    background: var(--danger);
+    color: #FFFFFF;
+    border-color: transparent;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(255, 107, 107, 0.35);
+}
+
+/* 禁用状态 */
+.confirmation-card .action-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+/* ===== 卡片计时器 ===== */
+.confirmation-card .card-timer {
+    margin-top: 12px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--brown-mid);
+}
+
+.confirmation-card .card-timer.warning {
+    color: var(--danger);
+    font-weight: normal;
+    animation: timerBlink 1s ease-in-out infinite;
+}
+
+@keyframes timerBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* ===== 冲突模式卡片 ===== */
+.confirmation-card.conflict-mode {
+    border: 2px solid #FFE4B5;
+    border-left: 4px solid #FFA500;
+}
+
+.confirmation-card.conflict-mode .card-title {
+    color: #D2691E;
+}
+
+/* 冲突区块 */
+.conflict-section {
+    background: #FFF8E7;
+    border-radius: 12px;
+    padding: 12px;
+    margin-bottom: 14px;
+}
+
+.conflict-section-title {
+    font-size: 14px;
+    color: #8B4513;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
+.conflict-items {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.conflict-items::-webkit-scrollbar {
+    width: 4px;
+}
+
+.conflict-items::-webkit-scrollbar-thumb {
+    background: var(--peach-soft);
+    border-radius: 4px;
+}
+
+.conflict-select-all {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    background: var(--peach-pale);
+    border-radius: 8px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.conflict-select-all input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--peach);
+    cursor: pointer;
+}
+
+.conflict-select-all label {
+    font-size: 13px;
+    color: #8B4513;
+    cursor: pointer;
+}
+
+.conflict-item-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: #8B4513;
+    padding: 8px 10px;
+    margin: 4px 0;
+    background: #FFF9F0;
+    border-radius: 8px;
+    border: 1px solid var(--peach-pale);
+    transition: all 0.2s;
+    cursor: pointer;
+}
+
+.conflict-item-row.row-selected {
+    background: var(--peach-pale);
+    border-color: var(--peach-soft);
+}
+
+.conflict-checkbox-wrap {
+    flex-shrink: 0;
+}
+
+.conflict-checkbox {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--peach);
+    cursor: pointer;
+}
+
+.conflict-info {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.suggested-time-inline {
+    font-size: 13px;
+    color: #228B22;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed #FFE4B5;
+}
+
+/* ===== 课表确认卡片 ===== */
+.schedule-table-card .course-list,
+.time-config-card .time-slots-container {
+    max-height: 250px;
+    overflow-y: auto;
+    margin-bottom: 14px;
+}
+
+.schedule-table-card .course-list::-webkit-scrollbar,
+.time-config-card .time-slots-container::-webkit-scrollbar {
+    width: 5px;
+}
+
+.schedule-table-card .course-list::-webkit-scrollbar-thumb,
+.time-config-card .time-slots-container::-webkit-scrollbar-thumb {
+    background: var(--peach-pale);
+    border-radius: 3px;
+}
+
+.schedule-table-card .course-list-header {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--brown-deep);
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--peach-pale);
+}
+
+.schedule-table-card .course-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    background: var(--cream-bg);
+    border-radius: 8px;
+    font-size: 13px;
+}
+
+.schedule-table-card .course-index {
+    color: var(--brown-light);
+    flex-shrink: 0;
+    width: 24px;
+}
+
+.schedule-table-card .course-title {
+    color: var(--brown-deep);
+    font-weight: 500;
+    flex: 1;
+}
+
+.schedule-table-card .course-info {
+    color: var(--brown-mid);
+    font-size: 12px;
+}
+
+/* ===== 时间配置卡片 ===== */
+.time-config-card .info-item {
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.time-config-card .date-input {
+    padding: 6px 10px;
+    border: 2px solid var(--peach-pale);
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 14px;
+    background: var(--cream-bg);
+    color: var(--brown-deep);
+}
+
+.time-config-card .link-mode-group {
+    margin-bottom: 14px;
+}
+
+.time-config-card .link-mode-label {
+    font-size: 13px;
+    color: var(--brown-mid);
+    margin-bottom: 8px;
+}
+
+.time-config-card .link-mode-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.time-config-card .link-mode-btn {
+    padding: 6px 12px;
+    border: 2px solid var(--peach-pale);
+    border-radius: 8px;
+    background: var(--cream-card);
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: var(--brown-deep);
+}
+
+.time-config-card .link-mode-btn:hover {
+    background: var(--peach-pale);
+    color: var(--brown-deep);
+}
+
+.time-config-card .link-mode-btn.active {
+    background: var(--peach);
+    color: #FFFFFF;
+    border-color: var(--peach);
+}
+
+.time-config-card .time-slots-header {
+    display: flex;
+    align-items: center;
+    padding: 8px 10px;
+    background: var(--peach-pale);
+    border-radius: 8px 8px 0 0;
+    font-size: 12px;
+    color: var(--brown-deep);
+    font-weight: 600;
+}
+
+.time-config-card .time-slots-header span:first-child {
+    width: 60px;
+}
+
+.time-config-card .time-slots-header span {
+    flex: 1;
+    text-align: center;
+}
+
+.time-config-card .time-slot-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--peach-pale);
+    font-size: 13px;
+    color: var(--brown-deep);
+}
+
+.time-config-card .time-slot-row:last-child {
+    border-bottom: none;
+}
+
+.time-config-card .slot-index {
+    width: 60px;
+    color: var(--brown-mid);
+    font-size: 12px;
+}
+
+.time-config-card .slot-start,
+.time-config-card .slot-end {
+    flex: 1;
+    padding: 4px 8px;
+    border: 1px solid var(--peach-pale);
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13px;
+    text-align: center;
+    background: var(--cream-bg);
+    color: var(--brown-deep);
+    -webkit-text-fill-color: var(--brown-deep);
+}
+
+.time-config-card .slot-start::-webkit-calendar-picker-indicator,
+.time-config-card .slot-end::-webkit-calendar-picker-indicator {
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+.time-config-card .inference-result {
+    margin-top: 12px;
+    padding: 10px;
+    background: var(--cream-bg);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--brown-mid);
+}
+
+/* ===== 手动创建卡片 ===== */
+.manual-create-card .info-item {
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.manual-create-card .date-input {
+    padding: 6px 10px;
+    border: 2px solid var(--peach-pale);
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 14px;
+    background: var(--cream-bg);
+    color: var(--brown-deep);
+}
+
+.manual-course-list {
+    max-height: 300px;
+    overflow-y: auto;
+    margin-bottom: 12px;
+}
+
+.manual-course-list::-webkit-scrollbar {
+    width: 5px;
+}
+
+.manual-course-list::-webkit-scrollbar-thumb {
+    background: var(--peach-pale);
+    border-radius: 3px;
+}
+
+.manual-course-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px;
+    margin-bottom: 8px;
+    background: var(--cream-bg);
+    border-radius: 8px;
+    border: 1px solid var(--peach-pale);
+    align-items: center;
+}
+
+.manual-course-row input,
+.manual-course-row select {
+    padding: 4px 8px;
+    border: 1px solid var(--peach-pale);
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    background: white;
+    min-width: 0;
+}
+
+.manual-course-row .course-name-input {
+    width: 120px;
+}
+
+.manual-course-row .day-of-week-select {
+    width: 90px;
+}
+
+.manual-course-row .section-range-input {
+    width: 80px;
+}
+
+.manual-course-row .week-range-input {
+    width: 90px;
+}
+
+.manual-course-row .odd-even-select {
+    width: 80px;
+}
+
+.manual-course-row .location-input,
+.manual-course-row .teacher-input {
+    width: 100px;
+}
+
+.manual-course-row .remove-row-btn {
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--danger);
+    border-radius: 6px;
+    background: #FFF5F5;
+    color: var(--danger);
+    cursor: pointer;
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.manual-course-row .remove-row-btn:hover {
+    background: var(--danger);
+    color: white;
+}
+
+/* ===== 预览卡片 ===== */
+.preview-card .info-item {
+    justify-content: space-between;
+}
+
+/* ===== 卡片列表项（多确认卡片用）===== */
+.card-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.card-list-item {
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    background: var(--cream-bg);
+    border-radius: 10px;
+    border: 1px solid var(--peach-pale);
+    font-size: 14px;
+}
+
+.item-number {
+    color: var(--peach);
+    margin-right: 8px;
+    font-weight: normal;
+}
+
+.item-title {
+    flex: 1;
+    color: var(--brown-deep);
+}
+
+.item-time {
+    color: var(--brown-mid);
+    font-size: 13px;
+}
+
+.item-actions {
+    display: flex;
+    gap: 6px;
+    margin-left: 10px;
+}
+
+.mini-btn {
+    padding: 4px 10px;
+    height: 28px;
+    border-radius: 8px;
+    border: none;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    letter-spacing: 0;
+}
+
+.mini-btn.confirm {
+    background: linear-gradient(135deg, #6BCB77 0%, #8DD996 100%);
+    color: #FFFFFF;
+    box-shadow: 0 2px 6px rgba(107, 203, 119, 0.3);
+}
+
+.mini-btn.confirm:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(107, 203, 119, 0.4);
+}
+
+.mini-btn.cancel {
+    background: linear-gradient(135deg, #FF6B6B 0%, #FF8E8E 100%);
+    color: #FFFFFF;
+    box-shadow: 0 2px 6px rgba(255, 107, 107, 0.3);
+}
+
+.mini-btn.cancel:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(255, 107, 107, 0.4);
+}
+
+/* ===== 编辑表单 ===== */
+.confirmation-card .card-edit-form {
+    margin-top: 14px;
+    padding: 14px;
+    background: var(--cream-bg);
+    border-radius: 12px;
+    border: 1px solid var(--peach-pale);
+}
+
+.card-edit-form .form-group {
+    margin-bottom: 12px;
+}
+
+.card-edit-form .form-group:last-child {
+    margin-bottom: 0;
+}
+
+.card-edit-form label {
+    display: block;
+    margin-bottom: 6px;
+    color: var(--brown-deep);
+    font-size: 13px;
+    padding-left: 4px;
+}
+
+.card-edit-form input,
+.card-edit-form select {
+    width: 100%;
+    padding: 8px 12px;
+    background: #FFFFFF;
+    color: var(--brown-deep);
+    border: 2px solid var(--peach-pale);
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 14px;
+    height: 40px;
+    outline: none;
+    transition: all 0.25s ease;
+}
+
+.card-edit-form input:focus,
+.card-edit-form select:focus {
+    border-color: var(--peach);
+    box-shadow: 0 0 0 4px rgba(255, 159, 122, 0.12);
+}
+
+.card-edit-form .form-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.card-edit-form .form-actions button {
+    flex: 1;
+}
+
+/* ===== 响应式 ===== */
+@media (max-width: 600px) {
+    .confirmation-card {
+        padding: 14px;
+        border-radius: 16px;
+    }
+
+    .confirmation-card .card-title {
+        font-size: 15px;
+    }
+
+    .confirmation-card .info-item {
+        font-size: 13px;
+    }
+
+    .confirmation-card .info-label {
+        width: 50px;
+        font-size: 12px;
+    }
+
+    .confirmation-card .action-btn {
+        height: 34px;
+        font-size: 12px;
+        padding: 6px 10px;
+    }
+
+    .confirmation-card .card-timer {
+        font-size: 12px;
+    }
+
+    .conflict-item-row {
+        font-size: 12px;
+        padding: 6px 8px;
+    }
+
+    .manual-course-row {
+        padding: 6px;
+    }
+
+    .manual-course-row .course-name-input {
+        width: 100%;
+    }
+
+    .card-list-item {
+        padding: 8px 10px;
+    }
+}

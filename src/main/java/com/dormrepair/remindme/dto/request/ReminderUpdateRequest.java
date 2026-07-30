@@ -34,6 +34,9 @@ public class ReminderUpdateRequest {
     // 地点，可选
     private String location;
 
+    // 备注，可选，用户对提醒的补充说明
+    private String note;
+
     // 优先级，可选值：LOW/NORMAL/HIGH
     private String priority;
 }

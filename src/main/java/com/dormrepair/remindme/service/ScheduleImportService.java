@@ -77,40 +77,64 @@ public class ScheduleImportService {
         // 1. 解析文件
         String content = null;
         boolean isImage = isImage(fileName);
-        List<ScheduleItemDTO> recognizedItems = new ArrayList<>();
 
         if (isImage) {
             String base64 = FileParserUtil.parseImage(file);
-            recognizedItems = qwenRecognitionService.recognizeImage(base64);
+            // 图片直接走课表识别路径
+            log.info("图片上传，使用课表识别路径：fileName={}", fileName);
+            ScheduleTableDTO tableResult = qwenRecognitionService.recognizeScheduleImage(base64);
+            if (tableResult.getSuccess() != null && tableResult.getSuccess() && tableResult.getCourses() != null && !tableResult.getCourses().isEmpty()) {
+                return processScheduleTableFromDTO(tableResult, fileType, userId, fileName);
+            }
+            // 课表识别失败，回退到通用日程识别
+            log.warn("图片课表识别失败，回退到通用识别：fileName={}", fileName);
+            List<ScheduleItemDTO> recognizedItems = qwenRecognitionService.recognizeImage(base64);
+            if (recognizedItems.isEmpty()) {
+                log.warn("图片未识别到任何日程：fileName={}", fileName);
+                Map<String, Object> result = new HashMap<>();
+                result.put("success", false);
+                result.put("message", "未识别到任何日程信息，请检查文件内容");
+                return result;
+            }
+            return buildImportResult(userId, fileName, fileType, recognizedItems);
         } else {
             content = FileParserUtil.parseFile(file);
         }
 
-        // 2. 检测是否为课表格式
-        if (!isImage && content != null && isScheduleTable(content)) {
+        // 2. Excel / PDF：检测是否为课表格式
+        if (content != null && isScheduleTable(content)) {
             log.info("检测到课表格式：fileName={}", fileName);
             return processScheduleTable(content, fileType, userId, fileName);
         }
 
         // 3. 非课表走原有流程
-        if (!isImage && content != null) {
-            recognizedItems = qwenRecognitionService.recognize(content, fileType);
+        if (content != null) {
+            List<ScheduleItemDTO> recognizedItems = qwenRecognitionService.recognize(content, fileType);
+            if (recognizedItems.isEmpty()) {
+                log.warn("未识别到任何日程：fileName={}", fileName);
+                Map<String, Object> result = new HashMap<>();
+                result.put("success", false);
+                result.put("message", "未识别到任何日程信息，请检查文件内容");
+                result.put("items", Collections.emptyList());
+                result.put("totalCount", 0);
+                return result;
+            }
+            return buildImportResult(userId, fileName, fileType, recognizedItems);
         }
 
-        if (recognizedItems.isEmpty()) {
-            log.warn("未识别到任何日程：fileName={}", fileName);
-            Map<String, Object> result = new HashMap<>();
-            result.put("success", false);
-            result.put("message", "未识别到任何日程信息，请检查文件内容");
-            result.put("items", Collections.emptyList());
-            result.put("totalCount", 0);
-            return result;
-        }
+        // 兜底
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", false);
+        result.put("message", "文件解析失败");
+        return result;
+    }
 
-        // 4. 创建导入记录
+    // 构建导入结果（通用日程识别结果）
+    private Map<String, Object> buildImportResult(Long userId, String fileName, String fileType, List<ScheduleItemDTO> recognizedItems) {
+        // 1. 创建导入记录
         ScheduleImport importRecord = createImportRecord(userId, fileName, fileType, recognizedItems);
 
-        // 5. 创建明细记录
+        // 2. 创建明细记录
         List<ScheduleImportItem> itemEntities = new ArrayList<>();
         for (int i = 0; i < recognizedItems.size(); i++) {
             ScheduleItemDTO dto = recognizedItems.get(i);
@@ -126,7 +150,7 @@ public class ScheduleImportService {
         }
         importItemRepository.saveAll(itemEntities);
 
-        // 6. 构建识别结果（供前端展示）
+        // 3. 构建识别结果（供前端展示）
         List<Map<String, Object>> itemsList = new ArrayList<>();
         for (ScheduleItemDTO dto : recognizedItems) {
             Map<String, Object> map = new HashMap<>();
@@ -138,10 +162,10 @@ public class ScheduleImportService {
             itemsList.add(map);
         }
 
-        // 7. 推送确认卡片到前端
+        // 4. 推送确认卡片到前端
         pushConfirmCardToUser(userId, importRecord.getId(), importRecord.getFileName(), itemsList);
 
-        // 8. 返回结果
+        // 5. 返回结果
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
         result.put("importId", importRecord.getId());
@@ -154,11 +178,13 @@ public class ScheduleImportService {
         return result;
     }
 
-    // 处理课表文件：调用 AI 识别、保存学期开始日期、创建导入记录并推送课表确认卡片
-    private Map<String, Object> processScheduleTable(String content, String fileType, Long userId, String fileName) {
-        // 调用 AI 课表识别
-        ScheduleTableDTO tableResult = qwenRecognitionService.recognizeScheduleTable(content, fileType);
+    // 从图片/PDF 识别到的 ScheduleTableDTO 直接走课表后处理（复用 Excel 路径的全部后处理逻辑）
+    private Map<String, Object> processScheduleTableFromDTO(ScheduleTableDTO tableResult, String fileType, Long userId, String fileName) {
+        return handleScheduleTablePostProcess(tableResult, fileType, userId, fileName);
+    }
 
+    // 课表识别后的统一后处理：保存学期日期、创建导入记录、缓存结果、推送确认卡片
+    private Map<String, Object> handleScheduleTablePostProcess(ScheduleTableDTO tableResult, String fileType, Long userId, String fileName) {
         if (tableResult.getSuccess() == null || !tableResult.getSuccess()) {
             log.warn("课表识别失败：confidence={}", tableResult.getConfidence());
             Map<String, Object> result = new HashMap<>();
@@ -193,6 +219,10 @@ public class ScheduleImportService {
         importRecord.setSuccessCount(0);
         importRecord.setFailedCount(0);
         importRecord.setStatus("PENDING");
+        importRecord.setTotalWeeks(tableResult.getSuggestedWeeks() != null ? tableResult.getSuggestedWeeks() : 16);
+        if (tableResult.getSemesterStartDate() != null) {
+            importRecord.setSemesterStartDate(LocalDate.parse(tableResult.getSemesterStartDate(), DATE_FMT));
+        }
         importRecord = importRepository.save(importRecord);
         Long importId = importRecord.getId();
         log.info("课表导入记录已创建：importId={}, courseCount={}", importId, courseCount);
@@ -212,7 +242,17 @@ public class ScheduleImportService {
         result.put("timeSections", tableResult.getTimeSections());
         result.put("semesterStartDate", tableResult.getSemesterStartDate());
         result.put("needTimeConfig", true);
+        result.put("isScheduleTable", true);
+
+        log.info("课表上传处理完成：importId={}, courseCount={}", importId, courseCount);
         return result;
+    }
+
+    // 处理课表文件：调用 AI 识别后统一走课表后处理
+    private Map<String, Object> processScheduleTable(String content, String fileType, Long userId, String fileName) {
+        // 调用 AI 课表识别
+        ScheduleTableDTO tableResult = qwenRecognitionService.recognizeScheduleTable(content, fileType);
+        return handleScheduleTablePostProcess(tableResult, fileType, userId, fileName);
     }
 
     // 检测文本是否为课表格式：通过关键词命中数判断

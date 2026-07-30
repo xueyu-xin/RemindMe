@@ -33,6 +33,8 @@ public class ReminderResponse {
     private String cronExpression;
     // 地点
     private String location;
+    // 备注，用户对提醒的补充说明
+    private String note;
     // 优先级：LOW/NORMAL/HIGH，影响通知样式和权重
     private String priority;
     // 提醒状态：PENDING（待处理）/DONE（已完成）/CANCELLED（已取消）

@@ -51,6 +51,8 @@ public class ConfirmationCardResponse {
         private String priority;
         // 解析出的地点
         private String location;
+        // 解析出的备注（用户对提醒的补充说明）
+        private String note;
         // 解析出的提前提醒分钟数
         private Integer advanceMinutes;
         // LLM 对本次解析结果的置信度，0~1，低于阈值时需要用户特别注意核实
