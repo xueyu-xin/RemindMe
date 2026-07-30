@@ -67,7 +67,8 @@ public class ReminderService {
                 endTimeStr,
                 location,
                 note,
-                priority
+                priority,
+                null
         );
     }
 
@@ -183,10 +184,12 @@ public class ReminderService {
     // 触发阶段一确认流程；标题命中周期关键词时路由到周期提醒
     // userId 用户ID；title 标题；remindTime 提醒时间（yyyy-MM-dd HH:mm:ss）
     // endTime 结束时间（可选）；location 地点（可选）；note 备注（可选）；priority 优先级（LOW/NORMAL/HIGH，默认 NORMAL）
-    @AgentTool(name = "create_reminder", description = "创建提醒，用户要求设置提醒时调用")
+    // advanceMinutes 提前提醒分钟数（可选）。当用户说'X分钟后'时传入X，说'等会/马上'时传入0，明确时间（如'明天下午3点'）时不传。
+    @AgentTool(name = "create_reminder", description = "创建提醒，用户要求设置提醒时调用。"
+            + "advanceMinutes: 提前提醒分钟数（可选）。当用户说'X分钟后'时传入X，说'等会/马上'时传入0，明确时间（如'明天下午3点'）时不传。")
     @Transactional
     public Map<String, Object> createReminderForAgent(Long userId, String title, String remindTime,
-            String endTime, String location, String note, String priority) {
+            String endTime, String location, String note, String priority, Integer advanceMinutes) {
         
         log.info("Agent调用创建提醒: userId={}, title={}, remindTime={}, endTime={}", userId, title, remindTime, endTime);
         
@@ -227,12 +230,22 @@ public class ReminderService {
                 LocalDateTime now = LocalDateTime.now();
                 long diffMinutes = java.time.Duration.between(now, parsedTime).toMinutes();
 
-                if(diffMinutes == 0 || (diffMinutes > -1 && diffMinutes < 0)) {
-                    // 用户说"等会"/"等一下" → 使用用户默认提前量
+                if (advanceMinutes != null && advanceMinutes > 0) {
+                    // LLM 明确传入 advanceMinutes > 0 → 保留 parsedTime 原值，直接使用
+                    finalAdvance = advanceMinutes;
+                    log.info("使用LLM传入的advanceMinutes={}, parsedTime保持不变={}", advanceMinutes, parsedTime);
+                } else if (advanceMinutes != null && advanceMinutes == 0) {
+                    // LLM 传入 0 → "等会/马上"，走原有逻辑
                     parsedTime = now.plusMinutes(defaultAdvance);
                     remindTime = parsedTime.format(FORMATTER);
                     finalAdvance = defaultAdvance;
-                } else if(diffMinutes > 1 && diffMinutes <= 1440) {
+                    log.info("LLM传入advanceMinutes=0(等会/马上), 使用默认提前量={}", defaultAdvance);
+                } else if (diffMinutes == 0 || (diffMinutes > -1 && diffMinutes < 0)) {
+                    // 未传 advanceMinutes，用户说"等会"/"等一下" → 使用默认提前量
+                    parsedTime = now.plusMinutes(defaultAdvance);
+                    remindTime = parsedTime.format(FORMATTER);
+                    finalAdvance = defaultAdvance;
+                } else if (diffMinutes >= 1 && diffMinutes <= 1440) {
                     // 用户说"X分钟后" → 使用实际差值作为提前量
                     finalAdvance = (int) diffMinutes;
                 } else {

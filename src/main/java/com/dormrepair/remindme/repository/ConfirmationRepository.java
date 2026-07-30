@@ -5,6 +5,7 @@ import com.dormrepair.remindme.entity.ConfirmationSession.SessionStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
@@ -42,4 +43,15 @@ public interface ConfirmationRepository extends JpaRepository<ConfirmationSessio
     @Modifying
     @Query("UPDATE ConfirmationSession s SET s.status = 'EXPIRED' WHERE s.reminderId = :reminderId AND s.stage = 'REMINDER_EXECUTE' AND s.status = 'PENDING'")
     void expireOldExecuteSessions(Long reminderId);
+
+    // 原子标记会话为 CONFIRMED（幂等性保障：只有 PENDING 才能更新）
+    // 返回 1 表示成功，0 表示该会话已被处理过
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE ConfirmationSession s SET s.status = 'CONFIRMED', s.updatedAt = :now WHERE s.sessionId = :sessionId AND s.userId = :userId AND s.status = 'PENDING'")
+    int markConfirmed(@Param("sessionId") String sessionId, @Param("userId") Long userId, @Param("now") LocalDateTime now);
+
+    // 原子标记会话为 CANCELLED（幂等性保障）
+    @Modifying(clearAutomatically = true)
+    @Query("UPDATE ConfirmationSession s SET s.status = 'CANCELLED', s.updatedAt = :now WHERE s.sessionId = :sessionId AND s.userId = :userId AND s.status = 'PENDING'")
+    int markCancelled(@Param("sessionId") String sessionId, @Param("userId") Long userId, @Param("now") LocalDateTime now);
 }
