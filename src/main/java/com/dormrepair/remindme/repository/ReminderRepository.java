@@ -48,14 +48,15 @@ public interface ReminderRepository extends JpaRepository<Reminder, Long> {
             ReminderStatus status, ConfirmStatus confirmStatus, ExecutionStatus executionStatus, Integer minAttempts);
 
     // 自定义 JPQL：查某用户在 [startTime, endTime] 时间段内有时间重叠的已确认提醒，
-    // 排除取消的；必须状态=CONFIRMED；提醒日期=startTime 当天；remindTime<endTime 且 (endTime 为空或 endTime>startTime)
-    // 新建提醒时防重、或冲突检测用
+    // 排除取消的；必须状态=CONFIRMED；remindTime<endTime 且 COALESCE(endTime, remindTime) > startTime
+    // 单点提醒（endTime 为 NULL）使用 remindTime 作为结束时间判断重叠
+    // 时间段提醒（有 endTime）使用 endTime 判断重叠
     @Query("SELECT r FROM Reminder r WHERE r.userId = :userId " +
            "AND r.status != 'CANCELLED' " +
            "AND r.confirmStatus = 'CONFIRMED' " +
            "AND DATE(r.remindTime) = DATE(:startTime) " +
            "AND r.remindTime < :endTime " +
-           "AND (r.endTime IS NULL OR r.endTime > :startTime)")
+           "AND COALESCE(r.endTime, r.remindTime) > :startTime")
     List<Reminder> findOverlappingReminders(
             @Param("userId") Long userId,
             @Param("startTime") LocalDateTime startTime,

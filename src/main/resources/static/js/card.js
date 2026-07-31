@@ -85,7 +85,15 @@ var CardSystem = (function() {
         html += '<div class="card-title">' + escapeHtml(card.message) + '</div>';
         html += '<div class="card-info">';
         html += '<div class="info-item"><span class="info-label">标题</span><span class="info-value">' + escapeHtml(card.data.title || '') + '</span></div>';
-        html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + escapeHtml(card.data.remindTime || '') + '</span></div>';
+        var timeDisplay = '';
+        if (card.data.endTime) {
+            var startTimeShort = (card.data.remindTime || '').slice(11, 16);
+            var endTimeShort = (card.data.endTime || '').slice(11, 16);
+            timeDisplay = startTimeShort + ' → ' + endTimeShort;
+        } else {
+            timeDisplay = card.data.remindTime || '';
+        }
+        html += '<div class="info-item"><span class="info-label">时间</span><span class="info-value">' + escapeHtml(timeDisplay) + '</span></div>';
 
         if (card.data.location) {
             html += '<div class="info-item"><span class="info-label">地点</span><span class="info-value">' + escapeHtml(card.data.location) + '</span></div>';
