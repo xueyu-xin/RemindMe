@@ -540,8 +540,14 @@ var CardSystem = (function() {
         }).then(function(res) { return res.json(); })
         .then(function(result) {
             if (result.success) {
-                if (actionId === 'confirm' || actionId === 'cancel') {
-                    // 清理引导语
+                // 所有"终结类"操作（创建/覆盖/取消等）都清理引导语、显示回复、移除卡片
+                // 不再调用 fetchCardData（会话已处理，/data 接口会返回空或报错）
+                var terminalActions = ['confirm', 'cancel', 'overwrite', 'overwrite_all',
+                    'confirm_direct', 'confirm_skip', 'schedule_direct', 'schedule_skip', 'schedule_overwrite'];
+                var isTerminal = terminalActions.indexOf(actionId) !== -1
+                    || (result.message && !result.data);
+
+                if (isTerminal) {
                     if (typeof window.removeMessagesByGroup === 'function') {
                         window.removeMessagesByGroup('card-' + sessionId);
                     } else if (typeof window.removeTempMessages === 'function') {

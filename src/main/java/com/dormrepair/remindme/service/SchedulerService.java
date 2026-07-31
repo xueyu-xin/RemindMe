@@ -54,16 +54,31 @@ public class SchedulerService {
         log.debug("扫描到期提醒...");
 
         // 扫描逻辑说明：
-        // - 单点提醒（endTime 为 null）：在 remindTime 时推送通知
-        // - 时间段提醒（endTime 不为 null）：也在 remindTime（开始时间）时推送通知
-        // - 两种提醒推送时机一致，都基于 remindTime 触发
+        // - 使用 advanceMinutes 字段计算实际触发时间：(remindTime - advanceMinutes) <= now
+        // - 单点提醒（endTime 为 null）和时间段提醒（endTime 不为 null）推送时机一致
+        // - advanceMinutes 默认 10 分钟，可由用户设置
 
-        List<Reminder> pendingReminders = reminderRepository
+        LocalDateTime now = LocalDateTime.now();
+        // 使用宽泛时间窗口查询（now + 1天），覆盖最大可能的 advanceMinutes
+        LocalDateTime upperBound = now.plusDays(1);
+
+        List<Reminder> candidates = reminderRepository
                 .findByStatusAndConfirmStatusAndExecutionStatusAndRemindTimeBefore(
                         ReminderStatus.PENDING,
                         ConfirmStatus.CONFIRMED,
                         ExecutionStatus.PENDING,
-                        LocalDateTime.now());
+                        upperBound);
+
+        // 按 advanceMinutes 精确过滤：实际触发时间 = remindTime - advanceMinutes
+        List<Reminder> pendingReminders = candidates.stream()
+                .filter(reminder -> {
+                    int advance = reminder.getAdvanceMinutes() != null ? reminder.getAdvanceMinutes() : 10;
+                    // 防止 advanceMinutes 为 0 或负数时 NPE 或逻辑错误
+                    if (advance <= 0) advance = 0;
+                    LocalDateTime triggerTime = reminder.getRemindTime().minusMinutes(advance);
+                    return !triggerTime.isAfter(now); // triggerTime <= now
+                })
+                .toList();
 
         // 过滤需要推送的提醒（排除重复推送）
         List<Reminder> remindersToPush = pendingReminders.stream()
@@ -83,7 +98,7 @@ public class SchedulerService {
 
         // 按城市分组，批量查询天气
         Map<String, List<Reminder>> remindersByCity = groupRemindersByCity(remindersToPush);
-        log.info("到期提醒按城市分组: {} 个城市, {} 个提醒", remindersByCity.size(), remindersToPush.size());
+        log.info("到期提醒扫描: 候选{}个, 符合触发条件{}个, 按城市分组{}个", candidates.size(), remindersToPush.size(), remindersByCity.size());
 
         // 批量查询天气并生成建议
         Map<String, WeatherSuggestionCache> weatherCache = new HashMap<>();
@@ -115,8 +130,9 @@ public class SchedulerService {
                     reminder.setLastConfirmRemindAt(LocalDateTime.now());
                     reminderRepository.save(reminder);
 
-                    log.info("阶段二提醒已推送: id={}, title={}, weatherSuggestion={}",
-                            reminder.getId(), reminder.getTitle(), weatherSuggestion);
+                    log.info("阶段二提醒已推送: id={}, title={}, remindTime={}, advanceMinutes={}, weatherSuggestion={}",
+                            reminder.getId(), reminder.getTitle(), reminder.getRemindTime(),
+                            reminder.getAdvanceMinutes(), weatherSuggestion);
 
                 } catch (Exception e) {
                     log.error("推送阶段二提醒失败: id={}", reminder.getId(), e);

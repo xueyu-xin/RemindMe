@@ -516,6 +516,12 @@ public class ConfirmationService {
             if (reminder.getEndTime() != null) {
                 r.put("endTime", reminder.getEndTime().format(FORMATTER));
             }
+            if (reminder.getLocation() != null) {
+                r.put("location", reminder.getLocation());
+            }
+            if (reminder.getPriority() != null) {
+                r.put("priority", reminder.getPriority().name());
+            }
             if (!overwrittenTitles.isEmpty()) r.put("overwrittenTitle", overwrittenTitle);
             log.info("全量覆盖成功(事务内): sessionId={}, reminderId={}", sessionId, reminder.getId());
             return r;
@@ -558,6 +564,12 @@ public class ConfirmationService {
             r.put("remindTime", reminder.getRemindTime().format(FORMATTER));
             if (reminder.getEndTime() != null) {
                 r.put("endTime", reminder.getEndTime().format(FORMATTER));
+            }
+            if (reminder.getLocation() != null) {
+                r.put("location", reminder.getLocation());
+            }
+            if (reminder.getPriority() != null) {
+                r.put("priority", reminder.getPriority().name());
             }
             if (!overwrittenTitles.isEmpty()) r.put("overwrittenTitle", overwrittenTitle);
             log.info("指定ID覆盖成功(事务内): sessionId={}, reminderId={}", sessionId, reminder.getId());

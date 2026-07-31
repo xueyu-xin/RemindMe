@@ -245,11 +245,9 @@ public class ReminderService {
                     parsedTime = now.plusMinutes(defaultAdvance);
                     remindTime = parsedTime.format(FORMATTER);
                     finalAdvance = defaultAdvance;
-                } else if (diffMinutes >= 1 && diffMinutes <= 1440) {
-                    // 用户说"X分钟后" → 使用实际差值作为提前量
-                    finalAdvance = (int) diffMinutes;
                 } else {
-                    // 其他明确时间（如明天下午3点）→ 使用默认提前量
+                    // 明确指定的时间（如 18:30、明天下午3点）→ 使用默认提前量
+                    // 注意：不再用 diffMinutes 推算 advanceMinutes，因为具体时间的差值不等于提前量
                     finalAdvance = defaultAdvance;
                 }
             }

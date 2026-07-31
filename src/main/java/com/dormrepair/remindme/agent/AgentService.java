@@ -720,28 +720,19 @@ public class AgentService {
     }
 
     // 生成确认卡片前的自然语言引导语（纯文本、不允许再出工具调用）；
-    // LLM 不可用时走默认文案兜底
+    // LLM 不可用时走模板兜底文案
     private String buildConfirmationLead(Long userId, String title, String remindTime,
                                          String location, boolean isRecurring) {
-        // 兜底文案：根据提醒类型使用不同风格
-        String defaultText;
-        if (isRecurring) {
-            defaultText = "好啦，周期提醒已准备好，帮你设为" + (title != null ? "「" + title + "」" : "") +
-                    (remindTime != null ? "，时间" + remindTime : "") + "，在下方卡片确认一下吧～";
-        } else {
-            defaultText = "好啦，" + (title != null ? "「" + title + "」" : "提醒") +
-                    (remindTime != null ? "已设为" + remindTime : "") + "，在下方卡片确认一下吧～";
-        }
+        String defaultText = buildDefaultLead(title, remindTime, location, isRecurring);
 
         try {
             StringBuilder sb = new StringBuilder();
             sb.append("请根据以下提醒信息，生成一句自然、口语化的引导语，引导用户在确认卡片上确认或取消。\n\n");
-            sb.append("要求：\n");
-            sb.append("- 直接用朋友的语气告诉用户你创建了什么提醒，包含标题和时间\n");
-            sb.append("- 不要输出任何JSON、工具调用、演戏格式\n");
-            sb.append("- 不要使用'正在生成'、'请稍候'等过程性语言\n");
-            sb.append("- 50字以内，自然友好\n");
-            sb.append("- 日常提醒轻松随意，重要/周期提醒更认真清晰\n\n");
+            sb.append("严格规则：\n");
+            sb.append("- 只输出自然语言句子，绝对禁止输出 JSON、tool_call、代码或任何结构化格式\n");
+            sb.append("- 用朋友的语气，包含提醒标题和时间\n");
+            sb.append("- 50字以内，自然友好，适当使用 emoji\n");
+            sb.append("- 日常提醒轻松随意，周期提醒更认真清晰\n\n");
 
             sb.append("提醒标题：").append(title == null ? "(未命名)" : title).append("\n");
             sb.append("提醒时间：").append(remindTime == null ? "(未设置)" : remindTime).append("\n");
@@ -753,17 +744,42 @@ public class AgentService {
             }
 
             String hint = sb.toString();
-            List<ToolDefinition> noTools = List.of();
             List<Message> history = conversationMemory.getHistory(userId);
-            String reply = llmService.chatWithTools(hint, noTools, history);
+
+            // 使用纯文本对话（不带工具定义），防止 LLM 误判为需要调用工具
+            String reply = llmService.chatWithoutTools(hint, history);
+
+            // 检测 LLM 是否返回了 JSON/工具调用，若是则重试一次
+            if (reply != null && reply.contains("tool_call")) {
+                log.warn("引导语生成返回工具调用JSON，重试一次");
+                String retryHint = "严格禁止输出JSON或工具调用。请用一句话自然地告诉用户：已创建提醒「"
+                        + (title != null ? title : "提醒") + "」，"
+                        + (remindTime != null ? remindTime : "") + "，请在卡片上确认。";
+                reply = llmService.chatWithoutTools(retryHint, history);
+            }
+
             reply = sanitizeLlmOutput(reply);
-            if (reply == null || reply.isBlank()) {
+            if (reply == null || reply.isBlank() || reply.contains("tool_call")) {
+                log.warn("引导语LLM输出无效，使用兜底文案");
                 return defaultText;
             }
             return reply;
         } catch (Exception e) {
             log.warn("生成确认卡片引导语失败，使用兜底文案: {}", e.getMessage());
             return defaultText;
+        }
+    }
+
+    // 构建兜底引导语模板，确保 LLM 完全失败时仍有有意义的文案
+    private String buildDefaultLead(String title, String remindTime, String location, boolean isRecurring) {
+        String titlePart = title != null ? "「" + title + "」" : "提醒";
+        String timePart = remindTime != null ? remindTime : "";
+        String locPart = (location != null && !location.isBlank()) ? "，地点" + location : "";
+
+        if (isRecurring) {
+            return "📅 已为你设置周期提醒" + titlePart + timePart + locPart + "，请在下方卡片确认～";
+        } else {
+            return "✨ 好的，已为你创建提醒" + titlePart + "，" + timePart + locPart + "会提醒你哦～";
         }
     }
 
@@ -877,19 +893,29 @@ public class AgentService {
             return AgentResponse.text(confirmed ? "已确认" : "已取消");
         }
 
-        String fallback = confirmed ? "✅ 已确认提醒创建。" : "❌ 已取消提醒创建。";
+        String fallback;
+        if (confirmed) {
+            fallback = "好的，提醒已为你创建 ✨";
+        } else {
+            fallback = "好的，已为你取消啦～";
+        }
 
         try {
-            String resultText = confirmed ? "用户已确认提醒创建" : "用户已取消提醒创建";
+            String resultText = confirmed
+                    ? "用户已确认提醒创建，请回复一句自然友好的确认话术，50字内，适当使用emoji。"
+                    : "用户已取消提醒创建，请回复一句自然友好的取消话术，30字内，语气轻松。";
 
             conversationMemory.addToolResult(userId, "create_reminder", resultText, confirmed);
 
-            List<ToolDefinition> noTools = List.of();
             List<Message> history = conversationMemory.getHistory(userId);
 
-            String llmResponse = llmService.chatWithTools(resultText, noTools, history);
+            // 使用 chatWithoutTools（纯文本对话，不注入工具定义），防止 LLM 误判为需要调用工具
+            String llmResponse = llmService.chatWithoutTools(resultText, history);
             String finalReply = sanitizeLlmOutput(llmResponse);
-            if (finalReply == null || finalReply.isBlank()) {
+
+            // 检测是否仍返回了 JSON/tool_call，若是则使用兜底文案
+            if (finalReply == null || finalReply.isBlank() || finalReply.contains("tool_call")) {
+                log.warn("确认结果LLM输出无效，使用兜底文案: confirmed={}", confirmed);
                 finalReply = fallback;
             }
 

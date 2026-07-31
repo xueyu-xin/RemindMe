@@ -112,6 +112,43 @@ public class LLMService {
         return content;
     }
 
+    // 纯文本对话：不携带任何工具定义，用于引导语、总结等不需要工具调用的场景
+    // 使用最小化的系统提示词，避免 LLM 误判为需要调用工具
+    public String chatWithoutTools(String userInput, List<Message> history) {
+        log.info("开始纯文本对话: userInputLength={}, historySize={}", userInput.length(), history == null ? 0 : history.size());
+
+        List<org.springframework.ai.chat.messages.Message> messages = new ArrayList<>();
+
+        String systemPrompt = """
+                你是一个友好的提醒助手。请直接回复自然语言，不要输出任何JSON、工具调用或代码。
+                保持口语化、温暖、简洁。""";
+        messages.add(new SystemMessage(systemPrompt));
+
+        if (history != null && !history.isEmpty()) {
+            for (Message msg : history) {
+                if ("user".equals(msg.getRole())) {
+                    messages.add(new UserMessage(msg.getContent()));
+                } else if ("assistant".equals(msg.getRole())) {
+                    messages.add(new AssistantMessage(msg.getContent()));
+                }
+            }
+        }
+
+        messages.add(new UserMessage(userInput));
+
+        Prompt prompt = new Prompt(messages);
+        ChatResponse response = chatModel.call(prompt);
+
+        String content = response.getResult().getOutput().getText();
+        log.info("纯文本对话响应: {}", content);
+
+        if (content == null || content.isBlank()) {
+            log.warn("纯文本对话返回空响应");
+        }
+
+        return content;
+    }
+
     // 兜底总结：不挂任何工具，基于"本次对话"的消息切片让 LLM 生成最终自然语言总结
     // 触发场景：Agent 达到最大迭代仍未结束循环、或检测到重复工具调用需强制收尾
     // 调用方只能传本次对话切片，不能传全量历史；要求 LLM 分已完成/未完成/需询问三类回复
