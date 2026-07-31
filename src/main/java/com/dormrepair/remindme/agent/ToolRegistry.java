@@ -49,7 +49,7 @@ public class ToolRegistry implements SmartInitializingSingleton {
 
     // SmartInitializingSingleton 回调：在所有单例 Bean 均创建完成后再扫描，
     // 规避 @PostConstruct 过早触发 getBean(agentService) 形成的循环依赖，
-    // 确保 7 个核心提醒工具（create/cancel/update 等）能完整注册
+
     @Override
     public void afterSingletonsInstantiated() {
         init();
@@ -78,7 +78,7 @@ public class ToolRegistry implements SmartInitializingSingleton {
         }
         log.info("工具注册完成，共注册 {} 个工具: {}", toolRegistry.size(), listToolNames());
 
-        // 启动自检：8 个核心提醒工具必须齐全，缺失时 ERROR 日志直接标明
+        // 启动自检：核心提醒工具必须齐全，缺失时 ERROR 日志直接标明
         List<String> mustHave = List.of(
                 "create_reminder",
                 "create_recurring_reminder",
@@ -95,7 +95,7 @@ public class ToolRegistry implements SmartInitializingSingleton {
         if (!missing.isEmpty()) {
             log.error("❌ 核心提醒工具缺失: {}，请检查 ReminderService bean 扫描/代理/初始化顺序！", missing);
         } else {
-            log.info("✅ 8 个核心提醒工具全部注册成功: {}", mustHave);
+            log.info("✅ 核心提醒工具全部注册成功: {}", mustHave);
         }
     }
 

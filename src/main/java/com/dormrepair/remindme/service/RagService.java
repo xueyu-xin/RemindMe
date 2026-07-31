@@ -332,9 +332,29 @@ public class RagService {
             name = "retrieve_private_knowledge",
             description = "从用户私有知识库中检索记忆，用于回答关于用户个人信息、偏好、计划等个性化问题。"
     )
-    public List<KnowledgeResult> retrievePrivateKnowledgeForAgent(Long userId, String query, Integer topK) {
+    public Map<String, Object> retrievePrivateKnowledgeForAgent(Long userId, String query, Integer topK) {
         log.info("Agent调用检索私有记忆: userId={}, query={}, topK={}", userId, query, topK);
-        return retrievePrivateKnowledge(userId, query, topK);
+
+        try {
+            List<KnowledgeResult> results = retrievePrivateKnowledge(userId, query, topK);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("message", results.isEmpty() ? "未找到相关记忆" : "检索成功，共找到 " + results.size() + " 条记忆");
+            result.put("count", results.size());
+            result.put("memories", results);
+
+            log.info("Agent检索私有记忆成功: userId={}, count={}", userId, results.size());
+            return result;
+        } catch (Exception e) {
+            log.error("Agent检索私有记忆失败: userId={}, error={}", userId, e.getMessage(), e);
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("message", "检索失败：" + e.getMessage());
+            errorResult.put("count", 0);
+            errorResult.put("memories", Collections.emptyList());
+            return errorResult;
+        }
     }
 
     // Agent 工具：新增用户私有记忆
@@ -352,9 +372,33 @@ public class RagService {
 
                     注意：只要用户提供了关于自己的事实信息，都应该调用此工具存储。"""
     )
-    public String addPrivateMemoryForAgent(Long userId, String content, MemoryCategory category) {
+    public Map<String, Object> addPrivateMemoryForAgent(Long userId, String content, MemoryCategory category) {
         log.info("Agent调用添加私有记忆: userId={}, category={}", userId, category);
-        return addPrivateMemory(userId, content, category);
+
+        try {
+            String memoryId = addPrivateMemory(userId, content, category);
+
+            Map<String, Object> result = new HashMap<>();
+            if (memoryId != null && !memoryId.isEmpty()) {
+                result.put("success", true);
+                result.put("message", "记忆已成功存储");
+                result.put("memoryId", memoryId);
+                result.put("content", content);
+                result.put("category", category.name());
+                log.info("Agent添加私有记忆成功: userId={}, memoryId={}", userId, memoryId);
+            } else {
+                result.put("success", false);
+                result.put("message", "记忆存储失败，返回的memoryId为空");
+            }
+
+            return result;
+        } catch (Exception e) {
+            log.error("Agent添加私有记忆失败: userId={}, error={}", userId, e.getMessage(), e);
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("message", "记忆存储失败：" + e.getMessage());
+            return errorResult;
+        }
     }
 
     // Agent 工具：更新用户私有记忆
@@ -362,9 +406,31 @@ public class RagService {
             name = "update_private_memory",
             description = "更新用户私有知识库中的某条记忆内容。"
     )
-    public boolean updatePrivateMemoryForAgent(Long userId, String memoryId, String newContent) {
+    public Map<String, Object> updatePrivateMemoryForAgent(Long userId, String memoryId, String newContent) {
         log.info("Agent调用更新私有记忆: userId={}, memoryId={}", userId, memoryId);
-        return updatePrivateMemory(memoryId, userId, newContent);
+
+        try {
+            boolean updated = updatePrivateMemory(memoryId, userId, newContent);
+
+            Map<String, Object> result = new HashMap<>();
+            if (updated) {
+                result.put("success", true);
+                result.put("message", "记忆已成功更新");
+                result.put("memoryId", memoryId);
+                log.info("Agent更新私有记忆成功: userId={}, memoryId={}", userId, memoryId);
+            } else {
+                result.put("success", false);
+                result.put("message", "记忆更新失败，可能是memoryId不存在或参数非法");
+            }
+
+            return result;
+        } catch (Exception e) {
+            log.error("Agent更新私有记忆失败: userId={}, error={}", userId, e.getMessage(), e);
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("message", "记忆更新失败：" + e.getMessage());
+            return errorResult;
+        }
     }
 
     // Agent 工具：删除用户私有记忆
@@ -372,9 +438,31 @@ public class RagService {
             name = "delete_private_memory",
             description = "删除用户私有知识库中的某条记忆。"
     )
-    public boolean deletePrivateMemoryForAgent(Long userId, String memoryId) {
+    public Map<String, Object> deletePrivateMemoryForAgent(Long userId, String memoryId) {
         log.info("Agent调用删除私有记忆: userId={}, memoryId={}", userId, memoryId);
-        return deletePrivateMemory(memoryId, userId);
+
+        try {
+            boolean deleted = deletePrivateMemory(memoryId, userId);
+
+            Map<String, Object> result = new HashMap<>();
+            if (deleted) {
+                result.put("success", true);
+                result.put("message", "记忆已成功删除");
+                result.put("memoryId", memoryId);
+                log.info("Agent删除私有记忆成功: userId={}, memoryId={}", userId, memoryId);
+            } else {
+                result.put("success", false);
+                result.put("message", "记忆删除失败，可能是memoryId不存在或参数非法");
+            }
+
+            return result;
+        } catch (Exception e) {
+            log.error("Agent删除私有记忆失败: userId={}, error={}", userId, e.getMessage(), e);
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("message", "记忆删除失败：" + e.getMessage());
+            return errorResult;
+        }
     }
 
     // Agent 工具：列出用户全部私有记忆
@@ -382,9 +470,29 @@ public class RagService {
             name = "get_all_private_memories",
             description = "获取用户私有知识库中的所有记忆。"
     )
-    public List<KnowledgeResult> getAllPrivateMemoriesForAgent(Long userId) {
+    public Map<String, Object> getAllPrivateMemoriesForAgent(Long userId) {
         log.info("Agent调用获取所有私有记忆: userId={}", userId);
-        return getAllPrivateMemories(userId);
+
+        try {
+            List<KnowledgeResult> results = getAllPrivateMemories(userId);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("message", results.isEmpty() ? "私有记忆库为空" : "检索成功，共找到 " + results.size() + " 条记忆");
+            result.put("count", results.size());
+            result.put("memories", results);
+
+            log.info("Agent获取所有私有记忆成功: userId={}, count={}", userId, results.size());
+            return result;
+        } catch (Exception e) {
+            log.error("Agent获取所有私有记忆失败: userId={}, error={}", userId, e.getMessage(), e);
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("message", "获取记忆失败：" + e.getMessage());
+            errorResult.put("count", 0);
+            errorResult.put("memories", Collections.emptyList());
+            return errorResult;
+        }
     }
 
     // Agent 工具：检索公共知识库（系统使用手册）
@@ -392,9 +500,29 @@ public class RagService {
             name = "retrieve_public_knowledge",
             description = "从公共知识库中检索系统使用手册（提醒管理、天气查询、个人记忆、经期管理、用户设置、位置与时间等功能说明）。注意：公共知识库仅承载使用手册，不再记录生活小常识/科普内容。"
     )
-    public List<KnowledgeResult> retrievePublicKnowledgeForAgent(Long userId, String query, Integer topK) {
+    public Map<String, Object> retrievePublicKnowledgeForAgent(Long userId, String query, Integer topK) {
         log.info("Agent调用检索公共知识: userId={}, query={}, topK={}", userId, query, topK);
-        return retrievePublicKnowledge(query, topK);
+
+        try {
+            List<KnowledgeResult> results = retrievePublicKnowledge(query, topK);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("message", results.isEmpty() ? "未找到相关公共知识" : "检索成功，共找到 " + results.size() + " 条知识");
+            result.put("count", results.size());
+            result.put("knowledge", results);
+
+            log.info("Agent检索公共知识成功: userId={}, count={}", userId, results.size());
+            return result;
+        } catch (Exception e) {
+            log.error("Agent检索公共知识失败: userId={}, error={}", userId, e.getMessage(), e);
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("message", "检索失败：" + e.getMessage());
+            errorResult.put("count", 0);
+            errorResult.put("knowledge", Collections.emptyList());
+            return errorResult;
+        }
     }
 
     // ==================== 动态topK ====================

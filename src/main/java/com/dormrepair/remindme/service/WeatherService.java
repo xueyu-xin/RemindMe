@@ -12,6 +12,7 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.zip.GZIPInputStream;
 
@@ -162,31 +163,196 @@ public class WeatherService {
     // ==================== Agent工具 ====================
 
     @AgentTool(name = "query_weather_now", description = "查询实时天气，用户询问当前天气时调用。优先使用经纬度查询，其次使用城市名，最后使用用户默认城市")
-    public WeatherNowResponse queryWeatherNowForAgent(Long userId, String location, Double latitude, Double longitude) {
+    public Map<String, Object> queryWeatherNowForAgent(Long userId, String location, Double latitude, Double longitude) {
         log.info("Agent调用查询实时天气: userId={}, location={}, latitude={}, longitude={}", userId, location, latitude, longitude);
-        String resolvedLocation = resolveLocation(userId, latitude, longitude, location);
-        return getWeatherNow(resolvedLocation);
+
+        try {
+            String resolvedLocation = resolveLocation(userId, latitude, longitude, location);
+            WeatherNowResponse response = getWeatherNow(resolvedLocation);
+
+            Map<String, Object> result = new HashMap<>();
+            if (response != null && "200".equals(response.getCode())) {
+                result.put("success", true);
+                result.put("message", "实时天气查询成功");
+
+                Map<String, Object> weatherData = new HashMap<>();
+                WeatherNowResponse.NowData now = response.getNow();
+                if (now != null) {
+                    weatherData.put("temperature", now.getTemp());
+                    weatherData.put("feelsLike", now.getFeelsLike());
+                    weatherData.put("weather", now.getText());
+                    weatherData.put("windDirection", now.getWindDir());
+                    weatherData.put("windScale", now.getWindScale());
+                    weatherData.put("humidity", now.getHumidity());
+                    weatherData.put("precipitation", now.getPrecip());
+                    weatherData.put("visibility", now.getVis());
+                }
+                result.put("weather", weatherData);
+                log.info("Agent查询实时天气成功: userId={}, temp={}", userId, now != null ? now.getTemp() : "null");
+            } else {
+                result.put("success", false);
+                result.put("message", "实时天气查询失败：API返回码 " + (response != null ? response.getCode() : "null"));
+            }
+
+            return result;
+        } catch (Exception e) {
+            log.error("Agent查询实时天气失败: userId={}, error={}", userId, e.getMessage(), e);
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("message", "实时天气查询失败：" + e.getMessage());
+            return errorResult;
+        }
     }
 
     @AgentTool(name = "query_weather_forecast", description = "查询天气预报，用户询问未来天气时调用。优先使用经纬度查询，其次使用城市名，最后使用用户默认城市")
-    public WeatherForecastResponse queryWeatherForecastForAgent(Long userId, String location, Integer days, Double latitude, Double longitude) {
+    public Map<String, Object> queryWeatherForecastForAgent(Long userId, String location, Integer days, Double latitude, Double longitude) {
         log.info("Agent调用查询天气预报: userId={}, location={}, days={}, latitude={}, longitude={}", userId, location, days, latitude, longitude);
-        String resolvedLocation = resolveLocation(userId, latitude, longitude, location);
-        return getWeatherForecast(resolvedLocation, days);
+
+        try {
+            String resolvedLocation = resolveLocation(userId, latitude, longitude, location);
+            WeatherForecastResponse response = getWeatherForecast(resolvedLocation, days);
+
+            Map<String, Object> result = new HashMap<>();
+            if (response != null && "200".equals(response.getCode())) {
+                result.put("success", true);
+                result.put("message", "天气预报查询成功");
+
+                Map<String, Object> forecastData = new HashMap<>();
+                forecastData.put("days", days != null ? days : 7);
+
+                java.util.List<Map<String, Object>> dailyList = new java.util.ArrayList<>();
+                if (response.getDaily() != null) {
+                    for (WeatherForecastResponse.DailyForecast daily : response.getDaily()) {
+                        Map<String, Object> dayMap = new HashMap<>();
+                        dayMap.put("date", daily.getFxDate());
+                        dayMap.put("tempMax", daily.getTempMax());
+                        dayMap.put("tempMin", daily.getTempMin());
+                        dayMap.put("weatherDay", daily.getTextDay());
+                        dayMap.put("weatherNight", daily.getTextNight());
+                        dayMap.put("windDirDay", daily.getWindDirDay());
+                        dayMap.put("windScaleDay", daily.getWindScaleDay());
+                        dayMap.put("humidity", daily.getHumidity());
+                        dayMap.put("precipitation", daily.getPrecip());
+                        dayMap.put("uvIndex", daily.getUvIndex());
+                        dailyList.add(dayMap);
+                    }
+                }
+                forecastData.put("daily", dailyList);
+                result.put("forecast", forecastData);
+                log.info("Agent查询天气预报成功: userId={}, days={}, count={}", userId, days, dailyList.size());
+            } else {
+                result.put("success", false);
+                result.put("message", "天气预报查询失败：API返回码 " + (response != null ? response.getCode() : "null"));
+            }
+
+            return result;
+        } catch (Exception e) {
+            log.error("Agent查询天气预报失败: userId={}, error={}", userId, e.getMessage(), e);
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("message", "天气预报查询失败：" + e.getMessage());
+            return errorResult;
+        }
     }
 
     @AgentTool(name = "query_air_quality", description = "查询空气质量，用户询问空气质量时调用。优先使用经纬度（必须真实查询得到），其次使用location城市名，最后兜底使用用户默认城市。禁止自己猜坐标。")
-    public AirQualityResponse queryAirQualityForAgent(Long userId, String location, Double latitude, Double longitude) {
+    public Map<String, Object> queryAirQualityForAgent(Long userId, String location, Double latitude, Double longitude) {
         log.info("Agent调用查询空气质量: userId={}, location={}, lat={}, lon={}", userId, location, latitude, longitude);
-        double[] coords = resolveLatLon(userId, latitude, longitude, location);
-        return getAirQuality(coords[0], coords[1]);
+
+        try {
+            double[] coords = resolveLatLon(userId, latitude, longitude, location);
+            AirQualityResponse response = getAirQuality(coords[0], coords[1]);
+
+            Map<String, Object> result = new HashMap<>();
+            if (response != null && response.getIndexes() != null && !response.getIndexes().isEmpty()) {
+                result.put("success", true);
+                result.put("message", "空气质量查询成功");
+
+                Map<String, Object> aqiData = new HashMap<>();
+                AirQualityResponse.AirIndex index = response.getIndexes().get(0);
+                aqiData.put("aqi", index.getAqi());
+                aqiData.put("aqiDisplay", index.getAqiDisplay());
+                aqiData.put("level", index.getLevel());
+                aqiData.put("category", index.getCategory());
+
+                if (index.getPrimaryPollutant() != null) {
+                    aqiData.put("primaryPollutant", index.getPrimaryPollutant().getName());
+                }
+                if (index.getHealth() != null) {
+                    aqiData.put("healthEffect", index.getHealth().getEffect());
+                    if (index.getHealth().getAdvice() != null) {
+                        aqiData.put("adviceGeneral", index.getHealth().getAdvice().getGeneralPopulation());
+                        aqiData.put("adviceSensitive", index.getHealth().getAdvice().getSensitivePopulation());
+                    }
+                }
+                result.put("airQuality", aqiData);
+                log.info("Agent查询空气质量成功: userId={}, aqi={}", userId, index.getAqi());
+            } else {
+                result.put("success", false);
+                result.put("message", "空气质量查询失败：无有效数据");
+            }
+
+            return result;
+        } catch (Exception e) {
+            log.error("Agent查询空气质量失败: userId={}, error={}", userId, e.getMessage(), e);
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("message", "空气质量查询失败：" + e.getMessage());
+            return errorResult;
+        }
     }
 
     @AgentTool(name = "query_weather_alert", description = "查询天气预警，用户询问是否有天气预警时调用。优先使用经纬度，其次使用location城市名，最后兜底用户默认城市。禁止自己猜坐标。")
-    public WeatherAlertResponse queryWeatherAlertForAgent(Long userId, String location, Double latitude, Double longitude) {
+    public Map<String, Object> queryWeatherAlertForAgent(Long userId, String location, Double latitude, Double longitude) {
         log.info("Agent调用查询天气预警: userId={}, location={}, lat={}, lon={}", userId, location, latitude, longitude);
-        double[] coords = resolveLatLon(userId, latitude, longitude, location);
-        return getWeatherAlert(coords[0], coords[1]);
+
+        try {
+            double[] coords = resolveLatLon(userId, latitude, longitude, location);
+            WeatherAlertResponse response = getWeatherAlert(coords[0], coords[1]);
+
+            Map<String, Object> result = new HashMap<>();
+            if (response != null) {
+                result.put("success", true);
+
+                java.util.List<Map<String, Object>> alertList = new java.util.ArrayList<>();
+                if (response.getAlerts() != null) {
+                    for (WeatherAlertResponse.Alert alert : response.getAlerts()) {
+                        Map<String, Object> alertMap = new HashMap<>();
+                        alertMap.put("headline", alert.getHeadline());
+                        alertMap.put("severity", alert.getSeverity());
+                        alertMap.put("urgency", alert.getUrgency());
+                        alertMap.put("description", alert.getDescription());
+                        alertMap.put("instruction", alert.getInstruction());
+                        alertMap.put("effectiveTime", alert.getEffectiveTime());
+                        alertMap.put("expireTime", alert.getExpireTime());
+                        if (alert.getEventType() != null) {
+                            alertMap.put("eventType", alert.getEventType().getName());
+                        }
+                        if (alert.getColor() != null) {
+                            alertMap.put("color", alert.getColor().getCode());
+                        }
+                        alertList.add(alertMap);
+                    }
+                }
+
+                boolean hasAlerts = alertList.size() > 0;
+                result.put("message", hasAlerts ? "查询到 " + alertList.size() + " 条天气预警" : "当前无天气预警");
+                result.put("hasAlerts", hasAlerts);
+                result.put("alerts", alertList);
+                log.info("Agent查询天气预警成功: userId={}, alerts={}", userId, alertList.size());
+            } else {
+                result.put("success", false);
+                result.put("message", "天气预警查询失败：API返回null");
+            }
+
+            return result;
+        } catch (Exception e) {
+            log.error("Agent查询天气预警失败: userId={}, error={}", userId, e.getMessage(), e);
+            Map<String, Object> errorResult = new HashMap<>();
+            errorResult.put("success", false);
+            errorResult.put("message", "天气预警查询失败：" + e.getMessage());
+            return errorResult;
+        }
     }
 
     // 从（latitude, longitude, location, 用户默认城市）按优先级算出最终经纬度，

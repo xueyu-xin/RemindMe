@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.service;
 
+import com.dormrepair.remindme.agent.ConversationMemory;
 import com.dormrepair.remindme.agent.ConversationMemory.Message;
 import com.dormrepair.remindme.agent.ToolCall;
 import com.dormrepair.remindme.agent.ToolDefinition;
@@ -156,30 +157,61 @@ public class LLMService {
         log.info("开始生成兜底总结回复: currentTurnHistorySize={}", history == null ? 0 : history.size());
 
         String summaryPrompt = """
-                你是智能提醒助手的收尾总结模块。当前对话已达到执行上限或检测到重复调用，需要你根据【本次对话】的消息生成最终自然语言回复。
+                你是智能提醒助手的收尾总结模块。当前对话已达到执行上限，需要你根据【本次对话】的全部消息生成最终自然语言回复。
 
-                ⚠️ 你看到的对话历史只包含【本次对话】的内容（用户当前这一轮请求及其触发的工具调用/结果），
-                不包含之前的对话轮次。你只能基于这部分内容总结，绝对禁止提及本次对话之外的任务。
+                ⚠️ 你看到的对话历史包含【本次对话】的完整内容：
+                1. 用户的原始发言（可能是一个新任务、也可能是对上一轮对话的补充/追问）；
+                2. 用户发言后触发的所有工具调用及其执行结果；
+                3. 系统注入的提示信息。
+                你必须先理解用户【真实意图】（从 user 消息中还原），再结合工具执行结果进行总结。
+                绝对禁止只机械地罗列"调了哪些工具"，而忽略用户到底要做什么。
 
                 请严格遵守以下规则：
                 1. 严禁再次输出任何 {"tool_call": ...} 格式的 JSON，只能输出自然语言回复。
-                2. 【反幻觉铁律】严禁编造、严禁脑补、严禁推测：
+
+                2. 【理解用户意图优先铁律】
+                   你必须先阅读并吃透所有 user 消息的内容，搞清楚用户真正想要什么：
+                   a) 用户是让你"设置提醒/查询天气/修改记忆/推荐餐厅…"，还是"补充上一轮的信息"，或"追问某件事"？
+                   b) 如果用户是连续对话（例如上一轮你问了一个问题，这一轮用户回答你），请结合上下文理解意图，
+                      不要把它当成一个全新的孤立任务。
+                   c) 后面总结时，必须用"人话"对应用户的真实需求，不能只说工具名。
+
+                3. 【反幻觉铁律】严禁编造、严禁脑补、严禁推测：
                    a) 不能把"没调用过工具"说成"已完成"；
-                   b) 不能把"工具返回 success=false"说成"已成功"；
-                   c) 不能把"工具返回的结果"以外的内容当成事实陈述给用户；
+                   b) 工具结果里的 success 字段是判断成功与否的唯一标准：
+                      - success=true 才算成功；
+                      - success=false 就是失败；
+                   c) 对于【查询类工具】（retrieve_private_knowledge、get_all_private_memories、
+                      retrieve_public_knowledge、query_weather_now、query_weather_forecast、
+                      query_air_quality、query_weather_alert、query_reminders、get_reminder_detail、
+                      get_user_preferences、get_location、get_period_status、get_current_time、
+                      calculate_date、get_all_period_records 等），
+                      如果 success=true，你【必须把查到的具体内容转述给用户】，而不能只说"已完成检索"或"查询成功"！
+                      ❌ 错误做法：get_all_private_memories 返回 success=true count=22，你却说"没能读取到内容"
+                      ✅ 正确做法："已为你检索到22条个人记忆，包括饮食偏好（喜欢肉类、不吃辣）、
+                                    健康状况（花生过敏、轻微鼻炎）……"（根据查到的内容转述）
                    d) 工具返回 message 里写了什么，你才能说什么；message 没写的，绝对不能自己补充。
-                   ❌ 错误示例（幻觉）：本次只调用了 update_period_settings，没调用 update_period_start，
-                      但你回复"上次经期开始日期已记录为 6-29"——这是编造！
-                   ✅ 正确做法：只说 update_period_settings 实际返回的内容（如"经期周期已更新为31天"），
-                      对于未调用的部分，归到"❌ 未完成的"里说明"上次经期开始日期未设置"。
-                3. 必须按三类清晰回复：
-                   ✅ 已完成的：仅根据对话中工具返回 success=true 的内容，逐条说明完成了什么；
-                   ❌ 未完成的：用户要求但工具未成功执行、或根本没调用对应工具的部分，说明原因；
-                   ❓ 需要询问的：用户表述缺失关键参数的部分，明确向用户提问。
-                4. 三类都要覆盖，没有某类就省略；至少要有"已完成的"或"未完成的"其中之一。
+                   e) result 字段中包含的具体数据（如 memories、forecast、weather 等字段里的内容）就是事实，
+                      你可以也应当直接引用这些内容来回答用户问题。
+
+                4. 必须按三类清晰回复：
+                   ✅ 已完成的：
+                      - 对应用户意图逐条说明做了什么（不要只写工具名，要写"帮你设置了…提醒""查到天气是…""记录了…记忆"等）；
+                      - 查询类工具必须把查到的具体关键信息罗列出来（不要罗列原始JSON，用自然语言总结）；
+                      - 至少要点明条数、核心内容摘要（用户最关心的部分）。
+                   ❌ 未完成的：
+                      - 用户要求但工具未成功执行（success=false）、或根本没调用对应工具的部分；
+                      - 说明清楚原因（例如"缺少时间参数"、"工具调用失败：XX原因"）。
+                   ❓ 需要询问的：
+                      - 用户表述缺失关键参数，导致任务无法完成的部分；
+                      - 明确向用户提问缺什么，给用户下一轮回复提供指引。
+                三类都要覆盖，没有某类就省略；至少要有"✅ 已完成的"或"❌ 未完成的"其中之一。
+
                 5. 回复语气要自然、温暖，像朋友聊天，可适当使用 emoji。
                 6. 不要再提及"系统提示""达到上限""重复调用"等内部细节。
                 7. 严禁出现"已经记录过啦/之前已经完成/你已经说过啦"等冗余话术（除非工具结果明确返回"已存在相同日程"）。
+                8. 如果任务本身就是"查询信息"且 success=true，用户最想看到的是"查到的内容"，
+                   而不是"我帮你查了"这种过程话，所以把查到的内容前置、说清楚。
                 """;
 
         try {
@@ -187,12 +219,25 @@ public class LLMService {
             messages.add(new SystemMessage(summaryPrompt));
 
             if (history != null) {
+                // 先把所有 user 消息内容汇总到最前面，方便 LLM 先理解用户整体意图
+                StringBuilder userIntents = new StringBuilder();
+                int userSeq = 1;
+                for (Message msg : history) {
+                    if ("user".equals(msg.getRole()) && msg.getContent() != null && !msg.getContent().isBlank()) {
+                        userIntents.append("【用户意图").append(userSeq++).append("】").append(msg.getContent()).append("\n");
+                    }
+                }
+                if (userIntents.length() > 0) {
+                    messages.add(new UserMessage("以下是本次对话中用户的所有发言（按顺序），请先理解用户真实意图再看工具执行结果：\n" + userIntents));
+                }
+
+                // 再按原始顺序处理所有非user消息，并对查询类工具结果做摘要展开
                 for (Message msg : history) {
                     if ("user".equals(msg.getRole())) {
-                        messages.add(new UserMessage(msg.getContent()));
-                    } else if ("assistant".equals(msg.getRole())) {
+                        continue; // user 消息已在上面汇总，避免重复
+                    } else if ("assistant".equals(msg.getRole()) && msg.getContent() != null && !msg.getContent().isBlank()) {
                         messages.add(new AssistantMessage(msg.getContent()));
-                    } else if ("system".equals(msg.getRole())) {
+                    } else if ("system".equals(msg.getRole()) && msg.getContent() != null && !msg.getContent().isBlank()) {
                         messages.add(new SystemMessage(msg.getContent()));
                     } else if ("tool".equals(msg.getRole())) {
                         StringBuilder toolContent = new StringBuilder();
@@ -203,6 +248,24 @@ public class LLMService {
                         if (msg.getContent() != null && !msg.getContent().isBlank()) {
                             if (toolContent.length() > 0) toolContent.append("\n");
                             toolContent.append("工具执行结果: ").append(msg.getContent());
+                        }
+                        if (msg.getToolResult() != null) {
+                            if (toolContent.length() > 0) toolContent.append("\n");
+                            ConversationMemory.ToolResult tr = msg.getToolResult();
+                            toolContent.append("工具执行结果: ")
+                                    .append("{success=").append(tr.isSuccess())
+                                    .append(", tool=").append(tr.getToolName());
+                            if (tr.getResult() != null) {
+                                toolContent.append(", result=").append(tr.getResult());
+                            }
+                            toolContent.append("}");
+                            // 查询类工具结果附加：把 result 里的关键信息展开成摘要，方便 LLM 转述
+                            if (tr.isSuccess() && tr.getResult() != null) {
+                                String summary = summarizeQueryToolResult(tr.getToolName(), String.valueOf(tr.getResult()));
+                                if (summary != null && !summary.isBlank()) {
+                                    toolContent.append("\n【结果摘要（请用于对用户回复）】").append(summary);
+                                }
+                            }
                         }
                         if (toolContent.length() > 0) {
                             messages.add(new UserMessage(toolContent.toString()));
@@ -220,6 +283,187 @@ public class LLMService {
             return content;
         } catch (Exception e) {
             log.error("生成兜底总结回复失败: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    // 把查询类工具的 JSON 结果提取成自然语言摘要，供兜底总结 LLM 直接引用，避免转述出错
+    @SuppressWarnings("unchecked")
+    private String summarizeQueryToolResult(String toolName, String resultJson) {
+        try {
+            Map<String, Object> map = objectMapper.readValue(resultJson, Map.class);
+            StringBuilder sb = new StringBuilder();
+
+            switch (toolName) {
+                case "get_all_private_memories":
+                case "retrieve_private_knowledge": {
+                    Object count = map.get("count");
+                    Object memories = map.get("memories");
+                    if (count != null) sb.append("共").append(count).append("条记忆；");
+                    if (memories instanceof java.util.List) {
+                        java.util.List<Map<String, Object>> list = (java.util.List<Map<String, Object>>) memories;
+                        java.util.Map<String, java.util.List<String>> byCategory = new java.util.LinkedHashMap<>();
+                        for (Map<String, Object> m : list) {
+                            String cat = m.get("category") != null ? m.get("category").toString() : "其他";
+                            String content = m.get("content") != null ? m.get("content").toString() : "";
+                            byCategory.computeIfAbsent(cat, k -> new java.util.ArrayList<>()).add(content);
+                        }
+                        for (java.util.Map.Entry<String, java.util.List<String>> e : byCategory.entrySet()) {
+                            sb.append("\n  · ").append(e.getKey()).append("(").append(e.getValue().size()).append("条): ");
+                            int max = Math.min(3, e.getValue().size());
+                            for (int i = 0; i < max; i++) {
+                                if (i > 0) sb.append("；");
+                                sb.append(e.getValue().get(i));
+                            }
+                            if (e.getValue().size() > max) sb.append(" 等");
+                        }
+                    }
+                    break;
+                }
+                case "retrieve_public_knowledge": {
+                    Object count = map.get("count");
+                    Object knowledge = map.get("knowledge");
+                    if (count != null) sb.append("共").append(count).append("条手册内容；");
+                    if (knowledge instanceof java.util.List) {
+                        java.util.List<Map<String, Object>> list = (java.util.List<Map<String, Object>>) knowledge;
+                        for (int i = 0; i < Math.min(3, list.size()); i++) {
+                            Map<String, Object> m = list.get(i);
+                            Object content = m.get("content");
+                            if (content != null) sb.append("\n  · ").append(content.toString().length() > 80 ? content.toString().substring(0, 80) + "..." : content);
+                        }
+                    }
+                    break;
+                }
+                case "query_weather_now": {
+                    Object w = map.get("weather");
+                    if (w instanceof Map) {
+                        Map<String, Object> weather = (Map<String, Object>) w;
+                        sb.append("当前天气：温度 ").append(weather.get("temperature")).append("℃，体感 ")
+                                .append(weather.get("feelsLike")).append("℃，天气: ").append(weather.get("weather"));
+                        if (weather.get("windDirection") != null) sb.append("，风向: ").append(weather.get("windDirection"));
+                        if (weather.get("windScale") != null) sb.append(weather.get("windScale")).append("级");
+                        if (weather.get("humidity") != null) sb.append("，湿度: ").append(weather.get("humidity")).append("%");
+                    }
+                    break;
+                }
+                case "query_weather_forecast": {
+                    Object f = map.get("forecast");
+                    if (f instanceof Map) {
+                        Map<String, Object> forecast = (Map<String, Object>) f;
+                        Object daily = forecast.get("daily");
+                        Object days = forecast.get("days");
+                        if (days != null) sb.append("未来").append(days).append("天预报：");
+                        if (daily instanceof java.util.List) {
+                            java.util.List<Map<String, Object>> list = (java.util.List<Map<String, Object>>) daily;
+                            for (Map<String, Object> d : list) {
+                                sb.append("\n  · ").append(d.get("date")).append(": ")
+                                        .append(d.get("weatherDay") != null ? d.get("weatherDay") : "")
+                                        .append("/").append(d.get("weatherNight") != null ? d.get("weatherNight") : "")
+                                        .append("，气温 ").append(d.get("tempMin") != null ? d.get("tempMin") : "?")
+                                        .append("~").append(d.get("tempMax") != null ? d.get("tempMax") : "?").append("℃");
+                            }
+                        }
+                    }
+                    break;
+                }
+                case "query_air_quality": {
+                    Object aq = map.get("airQuality");
+                    if (aq instanceof Map) {
+                        Map<String, Object> air = (Map<String, Object>) aq;
+                        sb.append("AQI: ").append(air.get("aqi")).append(" (").append(air.get("aqiDisplay")).append(")")
+                                .append("，等级: ").append(air.get("level")).append(" ").append(air.get("category"));
+                        if (air.get("primaryPollutant") != null) sb.append("，首要污染物: ").append(air.get("primaryPollutant"));
+                        if (air.get("adviceGeneral") != null) sb.append("\n  建议: ").append(air.get("adviceGeneral"));
+                    }
+                    break;
+                }
+                case "query_weather_alert": {
+                    Object hasAlerts = map.get("hasAlerts");
+                    Object alerts = map.get("alerts");
+                    sb.append(Boolean.TRUE.equals(hasAlerts) ? "有天气预警：" : "当前无天气预警。");
+                    if (alerts instanceof java.util.List) {
+                        java.util.List<Map<String, Object>> list = (java.util.List<Map<String, Object>>) alerts;
+                        for (Map<String, Object> a : list) {
+                            sb.append("\n  · ").append(a.get("severity") != null ? a.get("severity") : "")
+                                    .append(" ").append(a.get("headline") != null ? a.get("headline") : "");
+                        }
+                    }
+                    break;
+                }
+                case "query_reminders":
+                case "get_reminder_detail": {
+                    Object msg = map.get("message");
+                    Object data = map.get("data");
+                    if (msg != null) sb.append(msg);
+                    if (data instanceof java.util.List) {
+                        java.util.List<Map<String, Object>> list = (java.util.List<Map<String, Object>>) data;
+                        sb.append(" 共").append(list.size()).append("条提醒：");
+                        for (Map<String, Object> r : list) {
+                            sb.append("\n  · 时间: ").append(r.get("reminderTime")).append("，内容: ").append(r.get("title"));
+                        }
+                    } else if (data instanceof Map) {
+                        Map<String, Object> r = (Map<String, Object>) data;
+                        sb.append("\n  · 时间: ").append(r.get("reminderTime")).append("，内容: ").append(r.get("title"))
+                                .append("，状态: ").append(r.get("status"));
+                    }
+                    break;
+                }
+                case "get_user_preferences": {
+                    Object prefs = map.get("preferences");
+                    if (prefs instanceof Map) {
+                        Map<String, Object> p = (Map<String, Object>) prefs;
+                        sb.append("用户偏好：");
+                        if (p.get("defaultCity") != null) sb.append("默认城市: ").append(p.get("defaultCity")).append("；");
+                        if (p.get("defaultReminderAdvance") != null) sb.append("提前提醒: ").append(p.get("defaultReminderAdvance")).append("分钟；");
+                        if (p.get("nickname") != null) sb.append("昵称: ").append(p.get("nickname"));
+                    }
+                    break;
+                }
+                case "get_location": {
+                    Object loc = map.get("location");
+                    if (loc instanceof Map) {
+                        Map<String, Object> l = (Map<String, Object>) loc;
+                        sb.append("位置信息：");
+                        if (l.get("city") != null) sb.append("城市: ").append(l.get("city")).append("；");
+                        if (l.get("address") != null) sb.append("地址: ").append(l.get("address")).append("；");
+                        if (l.get("latitude") != null) sb.append("经纬度: ").append(l.get("latitude")).append(",").append(l.get("longitude"));
+                    } else {
+                        Object msg = map.get("message");
+                        if (msg != null) sb.append(msg);
+                    }
+                    break;
+                }
+                case "get_period_status": {
+                    Object status = map.get("status");
+                    Object msg = map.get("message");
+                    if (status instanceof Map) {
+                        Map<String, Object> s = (Map<String, Object>) status;
+                        sb.append("经期状态：");
+                        if (s.get("phase") != null) sb.append("阶段: ").append(s.get("phase")).append("；");
+                        if (s.get("daysSinceStart") != null) sb.append("距上次开始: ").append(s.get("daysSinceStart")).append("天；");
+                        if (s.get("nextStartIn") != null) sb.append("距离下次预计: ").append(s.get("nextStartIn")).append("天");
+                    } else if (msg != null) {
+                        sb.append(msg);
+                    }
+                    break;
+                }
+                case "get_current_time":
+                case "calculate_date": {
+                    Object result = map.get("result");
+                    Object msg = map.get("message");
+                    if (result != null) sb.append(result);
+                    else if (msg != null) sb.append(msg);
+                    break;
+                }
+                default:
+                    // 对于存储/修改/删除类工具，直接取 message
+                    Object msg = map.get("message");
+                    if (msg != null) sb.append(msg);
+            }
+
+            return sb.toString().trim();
+        } catch (Exception e) {
+            log.warn("摘要查询工具结果失败 (tool={}): {}", toolName, e.getMessage());
             return null;
         }
     }
@@ -808,6 +1052,24 @@ public class LLMService {
               · 必须调用 RAG 工具去查/存
               · 禁止直接用对话历史里的信息回答
               · 禁止跳过 RAG 工具
+
+            【隐含场景主动检索铁律 —— 最高优先级】
+            以下场景，即使用户没有直接问"我有什么XX喜好/我是什么专业/我对什么过敏"，
+            也必须先调用 retrieve_private_knowledge 检索用户记忆，再结合记忆回答/决策：
+              a) 饮食相关：推荐餐厅、推荐吃什么、问能不能吃某东西、做饮食计划、
+                          点外卖、聚餐推荐、问某菜品合不合口味 等。
+                 检索关键词示例：饮食、忌口、过敏、口味、喜欢、不喜欢
+              b) 健康相关：做运动计划、推荐运动、提醒吃药、问身体注意事项、
+                          经期相关（疼痛、注意事项、饮食）、换季/天气变化注意事项 等。
+                 检索关键词示例：健康、过敏、病史、经期、体质、生活习惯
+              c) 兴趣/习惯相关：推荐电影、推荐书籍、推荐礼物、周末计划推荐、
+                              学习计划、时间安排建议、规划行程 等。
+                 检索关键词示例：兴趣、爱好、习惯、作息、计划、考试、目标
+              d) 个性化决策场景：任何需要"知道用户偏好/情况才能给出个性化建议"的场景。
+            ❌ 错误做法：用户问"帮我推荐一家餐厅"，你直接说"去吃川菜吧"，
+                        没有调用 retrieve_private_knowledge 查用户饮食偏好 → 严重错误！
+            ✅ 正确做法：先调用 retrieve_private_knowledge(query="饮食偏好 忌口 过敏 口味", ...)，
+                        查到用户喜欢吃肉、不吃辣、对花生过敏后，再给出个性化推荐。
 
             【分析后回复铁律】当用户提到自身（如"我是..."、"我喜欢..."、"我的..."、"我叫..."、"我有什么..."等），
             或询问关于自己的任何问题（专业、考试、习惯、喜好、安排、计划等）时：

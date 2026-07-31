@@ -186,7 +186,8 @@ public class AgentService {
                         // 注入提示让 LLM 直接出最终回复或处理尚未完成的子任务
                         String dupMsg = "【系统提示】工具 " + llmToolCall.getToolName() +
                                 " 已用相同参数执行过，不要重复调用。\n" +
-                                "请直接生成最终回复给用户（说明已完成的内容），或处理其他尚未完成的任务。";
+                                "请立刻切换到其他尚未完成的任务继续执行（例如天气查询、其他子任务），" +
+                                "或如果所有任务都已执行完毕，直接生成最终回复给用户（按已完成/未完成/需询问分类说明）。";
                         history.add(ConversationMemory.Message.builder()
                                 .role("system")
                                 .content(dupMsg)
@@ -720,19 +721,28 @@ public class AgentService {
     }
 
     // 生成确认卡片前的自然语言引导语（纯文本、不允许再出工具调用）；
-    // LLM 不可用时走模板兜底文案
+    // LLM 不可用时走默认文案兜底
     private String buildConfirmationLead(Long userId, String title, String remindTime,
                                          String location, boolean isRecurring) {
-        String defaultText = buildDefaultLead(title, remindTime, location, isRecurring);
+        // 兜底文案：根据提醒类型使用不同风格
+        String defaultText;
+        if (isRecurring) {
+            defaultText = "好啦，周期提醒已准备好，帮你设为" + (title != null ? "「" + title + "」" : "") +
+                    (remindTime != null ? "，时间" + remindTime : "") + "，在下方卡片确认一下吧～";
+        } else {
+            defaultText = "好啦，" + (title != null ? "「" + title + "」" : "提醒") +
+                    (remindTime != null ? "已设为" + remindTime : "") + "，在下方卡片确认一下吧～";
+        }
 
         try {
             StringBuilder sb = new StringBuilder();
             sb.append("请根据以下提醒信息，生成一句自然、口语化的引导语，引导用户在确认卡片上确认或取消。\n\n");
-            sb.append("严格规则：\n");
-            sb.append("- 只输出自然语言句子，绝对禁止输出 JSON、tool_call、代码或任何结构化格式\n");
-            sb.append("- 用朋友的语气，包含提醒标题和时间\n");
-            sb.append("- 50字以内，自然友好，适当使用 emoji\n");
-            sb.append("- 日常提醒轻松随意，周期提醒更认真清晰\n\n");
+            sb.append("要求：\n");
+            sb.append("- 直接用朋友的语气告诉用户你创建了什么提醒，包含标题和时间\n");
+            sb.append("- 不要输出任何JSON、工具调用、演戏格式\n");
+            sb.append("- 不要使用'正在生成'、'请稍候'等过程性语言\n");
+            sb.append("- 50字以内，自然友好\n");
+            sb.append("- 日常提醒轻松随意，重要/周期提醒更认真清晰\n\n");
 
             sb.append("提醒标题：").append(title == null ? "(未命名)" : title).append("\n");
             sb.append("提醒时间：").append(remindTime == null ? "(未设置)" : remindTime).append("\n");
@@ -744,6 +754,7 @@ public class AgentService {
             }
 
             String hint = sb.toString();
+            List<ToolDefinition> noTools = List.of();
             List<Message> history = conversationMemory.getHistory(userId);
 
             // 使用纯文本对话（不带工具定义），防止 LLM 误判为需要调用工具
@@ -907,6 +918,7 @@ public class AgentService {
 
             conversationMemory.addToolResult(userId, "create_reminder", resultText, confirmed);
 
+            List<ToolDefinition> noTools = List.of();
             List<Message> history = conversationMemory.getHistory(userId);
 
             // 使用 chatWithoutTools（纯文本对话，不注入工具定义），防止 LLM 误判为需要调用工具
