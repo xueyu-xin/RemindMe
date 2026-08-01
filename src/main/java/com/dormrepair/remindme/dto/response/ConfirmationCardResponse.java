@@ -65,8 +65,8 @@ public class ConfirmationCardResponse {
         private String conflictMessage;
         // 第一个冲突的提醒 id，用于定位冲突来源
         private Long conflictId;
-        // 完整冲突列表（JSON 字符串形式）
-        private String conflictList;
+        // 完整冲突列表
+        private List<ConflictResponse.ConflictItem> conflictList;
         // 系统建议的空闲时间
         private String suggestedTime;
 

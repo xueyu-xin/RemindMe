@@ -113,15 +113,24 @@ public class PeriodService {
                 .anyMatch(r -> r.getSource() == ReminderSource.PERIOD_REMINDER);
 
         if (!exists) {
+            // 提醒时间 = 下次经期前一天 + 用户设置的提醒时间（默认 20:30）
+            String timeStr = user.getPeriodRemindTime() != null ? user.getPeriodRemindTime() : "20:30";
+            String[] parts = timeStr.split(":");
+            int hour = Integer.parseInt(parts[0]);
+            int minute = Integer.parseInt(parts[1]);
+            LocalDateTime remindTime = status.getNextPeriodDate().minusDays(1).atTime(hour, minute);
+
             Reminder reminder = new Reminder();
             reminder.setUserId(user.getId());
             reminder.setTitle("经期提醒");
-            reminder.setRemindTime(status.getNextPeriodDate().atStartOfDay());
+            reminder.setRemindTime(remindTime);
+            reminder.setAdvanceMinutes(0);  // 准时提醒，无需提前
             reminder.setSource(ReminderSource.PERIOD_REMINDER);
             reminder.setStatus(ReminderStatus.PENDING);
-            
+            // 系统自动创建，跳过信息确认阶段，直接进入执行阶段，否则调度器扫描不到
+            reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
             reminderRepository.save(reminder);
-            log.info("创建经期提醒: userId={}, date={}", user.getId(), status.getNextPeriodDate());
+            log.info("创建经期提醒: userId={}, remindTime={}, nextPeriod={}", user.getId(), remindTime, status.getNextPeriodDate());
         }
     }
 

@@ -100,6 +100,7 @@ public class UserService {
         result.put("timezone", "Asia/Shanghai");
         result.put("remindInterval", user.getRemindInterval());
         result.put("enablePeriodReminder", user.getEnablePeriodReminder());
+        result.put("periodRemindTime", user.getPeriodRemindTime());
 
         return result;
     }
@@ -178,9 +179,20 @@ public class UserService {
                 fieldDisplayName = "昵称";
                 break;
 
+            case "periodRemindTime":
+                // 经期提醒时间格式：HH:mm（如 20:30）
+                if (value == null || !value.trim().matches("^([01]?\\d|2[0-3]):[0-5]\\d$")) {
+                    result.put("success", false);
+                    result.put("error", "时间格式不正确，请使用 HH:mm（如 20:30）");
+                    return result;
+                }
+                user.setPeriodRemindTime(value.trim());
+                fieldDisplayName = "经期提醒时间";
+                break;
+
             default:
                 result.put("success", false);
-                result.put("error", "不支持的偏好项: " + preference + "，支持：city、defaultAdvanceMinutes、nickname");
+                result.put("error", "不支持的偏好项: " + preference + "，支持：city、defaultAdvanceMinutes、nickname、periodRemindTime");
                 return result;
         }
 

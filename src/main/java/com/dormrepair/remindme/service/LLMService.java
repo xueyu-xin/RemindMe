@@ -1028,6 +1028,18 @@ public class LLMService {
             5. 只有用户的意图不是创建提醒时（如闲聊、问天气），才允许直接文本回复
 
             ================================================
+            地点提取规则（调用 create_reminder 时严格遵守）：
+            ================================================
+            1. 识别"去XX"、"到XX"、"在XX"、"回XX"等介词后的场所名词作为 location 参数
+            2. 常见校园场所：食堂、图书馆、教室、操场、宿舍、超市、快递站、教学楼、体育馆、实验室、自习室、打印店等
+            3. "去食堂吃饭" → location="食堂", title="吃饭"
+            4. "去图书馆看书" → location="图书馆", title="看书"
+            5. "到操场跑步" → location="操场", title="跑步"
+            6. "去拿快递" → location="快递站", title="拿快递"
+            7. 地点词应从标题中排除，title 只保留动作/事项
+            8. 如果没有明确地点，location 传 null
+
+            ================================================
             禁止自行判断"已存在"规则：
             ================================================
             1. 用户要求"提醒我xxx"时，必须调用工具（create_reminder 或 create_recurring_reminder）
@@ -1669,7 +1681,7 @@ public class LLMService {
                - 确认成功：✅ 或 😊
                - 提醒创建：📌 或 ⏰
                - 查询结果：📋 或 📍
-               - 错误提示：⚠️ 或 😅
+               - 错误提示：⚠️
 
             4. 省略冗余信息：不要重复用户已经知道的信息
                - 错误："您的默认城市是广东省-广州市-荔湾区，您可以在个人设置中修改默认城市。"
@@ -1772,6 +1784,17 @@ public class LLMService {
             - 例："周五上午10点开会，地点会议室A，记得带笔记本电脑" → location="会议室A", note="记得带笔记本电脑"
             - 如果用户没有提供备注信息，note 设为 null
 
+            地点提取规则（location 字段）：
+            - 识别"去XX"、"到XX"、"在XX"、"回XX"等介词后的场所名词作为地点
+            - 常见校园场所：食堂、图书馆、教室、操场、宿舍、超市、快递站、教学楼、体育馆、实验室、自习室、打印店等
+            - "去食堂吃饭" → location="食堂", title="吃饭"
+            - "去图书馆看书" → location="图书馆", title="看书"
+            - "到操场跑步" → location="操场", title="跑步"
+            - "在三教开会" → location="三教", title="开会"
+            - "回宿舍" → location="宿舍", title="回宿舍"
+            - 地点词应从标题中排除，标题只保留动作/事项
+            - 如果没有明确地点，location 设为 null
+
             示例输入1（单点提醒）："明天下午3点还书"
             示例输出1：{"title":"还书","remindTime":"%s","endTime":null,"intentType":"REMINDER","location":null,"priority":"NORMAL","note":null}
 
@@ -1780,6 +1803,9 @@ public class LLMService {
 
             示例输入3（带地点和备注）："周五上午10点在三教开会，记得带笔记本电脑"
             示例输出3：{"title":"开会","remindTime":"2026-08-01 10:00:00","endTime":null,"intentType":"REMINDER","location":"三教","priority":"NORMAL","note":"记得带笔记本电脑"}
+
+            示例输入4（隐式地点）："明天中午去食堂吃饭"
+            示例输出4：{"title":"吃饭","remindTime":"2026-07-31 12:00:00","endTime":null,"intentType":"REMINDER","location":"食堂","priority":"NORMAL","note":null}
 
             用户输入: %s
             """.formatted(currentDate, currentDate, currentDate, userInput);

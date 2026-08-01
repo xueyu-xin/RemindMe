@@ -581,6 +581,47 @@ public class ConfirmationService {
         return result;
     }
 
+    // 将 parsedData 中的 conflictList 转换为 List<ConflictResponse.ConflictItem>
+    // 支持三种输入格式：JSON 字符串、List<Map>、List<ConflictItem>
+    private List<ConflictResponse.ConflictItem> parseConflictList(Object conflictListObj) {
+        if (conflictListObj == null) {
+            return List.of();
+        }
+        try {
+            List<?> conflicts;
+            if (conflictListObj instanceof String) {
+                conflicts = objectMapper.readValue((String) conflictListObj, List.class);
+            } else if (conflictListObj instanceof List) {
+                conflicts = (List<?>) conflictListObj;
+            } else {
+                return List.of();
+            }
+            List<ConflictResponse.ConflictItem> result = new java.util.ArrayList<>();
+            for (Object c : conflicts) {
+                if (c instanceof ConflictResponse.ConflictItem) {
+                    result.add((ConflictResponse.ConflictItem) c);
+                } else if (c instanceof Map) {
+                    Map<?, ?> m = (Map<?, ?>) c;
+                    ConflictResponse.ConflictItem item = new ConflictResponse.ConflictItem();
+                    if (m.get("id") != null) item.setId(Long.valueOf(String.valueOf(m.get("id"))));
+                    if (m.get("title") != null) item.setTitle(String.valueOf(m.get("title")));
+                    if (m.get("remindTime") != null) {
+                        item.setRemindTime(parseTimeFlexible(String.valueOf(m.get("remindTime"))));
+                    }
+                    if (m.get("endTime") != null) {
+                        item.setEndTime(parseTimeFlexible(String.valueOf(m.get("endTime"))));
+                    }
+                    if (m.get("location") != null) item.setLocation(String.valueOf(m.get("location")));
+                    result.add(item);
+                }
+            }
+            return result;
+        } catch (Exception e) {
+            log.warn("解析冲突列表失败: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
     // 从 parsedData 中汇总所有冲突提醒 ID：含单个 conflictId 与 conflictList 列表，去重返回
     private List<Long> getAllConflictIds(Map<String, Object> parsedData) {
         List<Long> ids = new java.util.ArrayList<>();
@@ -998,11 +1039,11 @@ public class ConfirmationService {
         );
     }
 
-    // 查找有效会话：状态须为 PENDING 且未过期
+    // 查找有效会话：状态须为 PENDING 且未过期（expiresAt 为 null 表示无超时，如周期提醒/冲突会话）
     private ConfirmationSession findValidSession(String sessionId, Long userId) {
         return confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                 .filter(s -> s.getStatus() == SessionStatus.PENDING)
-                .filter(s -> s.getExpiresAt().isAfter(LocalDateTime.now()))
+                .filter(s -> s.getExpiresAt() == null || s.getExpiresAt().isAfter(LocalDateTime.now()))
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在或已过期"));
     }
 
@@ -1056,6 +1097,11 @@ public class ConfirmationService {
                 .suggestedTime((String) parsedData.get("suggestedTime"))
                 .build();
 
+        // 将 parsedData 中的 conflictList 转换为 List<ConflictResponse.ConflictItem>
+        if (hasConflict) {
+            data.setConflictList(parseConflictList(parsedData.get("conflictList")));
+        }
+
         // 周期提醒：显示日期范围和总天数
         if (isRecurring) {
             StringBuilder titleBuilder = new StringBuilder();
@@ -1095,14 +1141,7 @@ public class ConfirmationService {
             data.setRemindTime(timeBuilder.toString());
         }
 
-        // 冲突列表转为 JSON 字符串
-        if (parsedData.get("conflictList") != null) {
-            try {
-                data.setConflictList(objectMapper.writeValueAsString(parsedData.get("conflictList")));
-            } catch (JsonProcessingException e) {
-                data.setConflictList("[]");
-            }
-        }
+        // 冲突列表已在上文通过 parseConflictList 设置为 List<ConflictItem>，此处无需重复处理
 
         List<Action> actions;
         String message;
@@ -1251,8 +1290,9 @@ public class ConfirmationService {
         Reminder reminder = reminderRepository.findById(session.getReminderId())
                 .orElseThrow(() -> new IllegalArgumentException("提醒不存在"));
 
-        // 更新 reminder 的最后推送时间，确保调度器在间隔时间后重新推送
+        // 更新 reminder：status 重置为 PENDING 让调度器重新扫描，lastConfirmRemindAt 记录推迟时间用于间隔控制
         reminder.setLastConfirmRemindAt(LocalDateTime.now());
+        reminder.setStatus(ReminderStatus.PENDING);
         reminderRepository.save(reminder);
 
         // 递增会话尝试次数用于日志追踪，不设置过期时间，不触发自动确认

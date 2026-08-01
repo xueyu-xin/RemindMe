@@ -172,6 +172,7 @@ public class ReminderService {
         response.setPriority(reminder.getPriority().name());
         response.setStatus(reminder.getStatus().name());
         response.setConfirmStatus(reminder.getConfirmStatus().name());
+        response.setExecutionStatus(reminder.getExecutionStatus().name());
         response.setConfirmAttempts(reminder.getConfirmAttempts());
         response.setLastConfirmRemindAt(reminder.getLastConfirmRemindAt());
         response.setSource(reminder.getSource().name());
@@ -247,7 +248,6 @@ public class ReminderService {
                     finalAdvance = defaultAdvance;
                 } else {
                     // 明确指定的时间（如 18:30、明天下午3点）→ 使用默认提前量
-                    // 注意：不再用 diffMinutes 推算 advanceMinutes，因为具体时间的差值不等于提前量
                     finalAdvance = defaultAdvance;
                 }
             }

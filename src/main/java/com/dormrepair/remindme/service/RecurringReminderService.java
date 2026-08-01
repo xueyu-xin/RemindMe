@@ -5,6 +5,7 @@ import com.dormrepair.remindme.dto.response.ConflictResponse;
 import com.dormrepair.remindme.entity.RecurringInstance;
 import com.dormrepair.remindme.entity.RecurringReminder;
 import com.dormrepair.remindme.entity.Reminder;
+import com.dormrepair.remindme.enums.ConfirmStatus;
 import com.dormrepair.remindme.enums.RepeatType;
 import com.dormrepair.remindme.enums.ReminderSource;
 import com.dormrepair.remindme.enums.ReminderStatus;
@@ -367,6 +368,8 @@ public class RecurringReminderService {
         reminder.setLocation(template.getLocation());
         reminder.setPriority(com.dormrepair.remindme.enums.Priority.valueOf(template.getPriority()));
         reminder.setStatus(ReminderStatus.PENDING);
+        // 系统自动创建，跳过信息确认阶段，直接进入执行阶段，否则调度器扫描不到
+        reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
         reminder.setSource(ReminderSource.USER_INPUT);
         return reminderRepository.save(reminder);
     }
@@ -555,6 +558,8 @@ public class RecurringReminderService {
             reminder.setLocation(template.getLocation());
             reminder.setPriority(com.dormrepair.remindme.enums.Priority.valueOf(template.getPriority()));
             reminder.setStatus(ReminderStatus.PENDING);
+            // 系统自动创建，跳过信息确认阶段，直接进入执行阶段，否则调度器扫描不到
+            reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
             reminder.setSource(ReminderSource.USER_INPUT);
 
             Reminder savedReminder = reminderRepository.save(reminder);

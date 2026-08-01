@@ -243,7 +243,8 @@ public class CalendarController {
                             r.getLocation(),
                             isRecurring,
                             recurringRange,
-                            repeatType
+                            repeatType,
+                            r.getSource() != null ? r.getSource().name() : null
                     );
                 })
                 .collect(Collectors.toList());

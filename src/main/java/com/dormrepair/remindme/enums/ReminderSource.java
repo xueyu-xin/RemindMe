@@ -7,8 +7,10 @@ public enum ReminderSource {
     USER_INPUT("用户手动输入"),
     // 天气联动：检测到雨雪/高温等恶劣天气时自动创建的出行建议提醒
     WEATHER_LINK("天气联动"),
-    // Excel 导入：通过课程表 Excel 解析批量创建的上课提醒
+    // Excel 导入：通过普通 Excel 批量导入的日程提醒
     EXCEL_IMPORT("Excel导入"),
+    // 课程提醒：通过课程表 Excel 解析批量创建的上课提醒
+    COURSE("课程提醒"),
     // 月经周期：按女性周期设置自动生成的经期、安全期、排卵日提醒
     PERIOD_REMINDER("月经周期");
 

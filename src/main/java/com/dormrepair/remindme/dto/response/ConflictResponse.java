@@ -37,5 +37,7 @@ public class ConflictResponse {
         // 冲突提醒的结束时间
         @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
         private LocalDateTime endTime;
+        // 冲突提醒的地点（可选）
+        private String location;
     }
 }

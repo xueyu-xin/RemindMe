@@ -6,6 +6,7 @@ import com.dormrepair.remindme.enums.ExecutionStatus;
 import com.dormrepair.remindme.enums.ReminderStatus;
 import com.dormrepair.remindme.repository.RecurringReminderRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
+import com.dormrepair.remindme.repository.UserRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +44,8 @@ public class SchedulerService {
     private final com.dormrepair.remindme.repository.RecurringInstanceRepository recurringInstanceRepository;
     private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
+    private final PeriodService periodService;
+    private final UserRepository userRepository;
 
     // 高德地理编码 API Key，未配置时降级走默认城市
     @Value("${amap.api.key:}")
@@ -128,6 +131,8 @@ public class SchedulerService {
                     confirmationService.pushExecuteCard(reminder, weatherSuggestion);
 
                     reminder.setLastConfirmRemindAt(LocalDateTime.now());
+                    // 推送后状态改为 REMINDED，避免被调度器重复扫描推送
+                    reminder.setStatus(ReminderStatus.REMINDED);
                     reminderRepository.save(reminder);
 
                     log.info("阶段二提醒已推送: id={}, title={}, remindTime={}, advanceMinutes={}, weatherSuggestion={}",
@@ -416,6 +421,25 @@ public class SchedulerService {
             log.info("每日周期实例生成完成: 生成 {} 条，跳过 {} 条", generated, skipped);
         } catch (Exception e) {
             log.error("每日周期实例生成失败: {}", e.getMessage(), e);
+        }
+    }
+
+    // 每天凌晨 0:30 执行：遍历所有开启经期提醒的女性用户，检查是否需要创建经期提醒
+    @Scheduled(cron = "0 30 0 * * ?")
+    @Transactional
+    public void checkPeriodReminders() {
+        log.info("开始检查经期提醒...");
+        try {
+            userRepository.findAll().forEach(user -> {
+                try {
+                    periodService.checkPeriodReminder(user);
+                } catch (Exception e) {
+                    log.error("经期提醒检查失败: userId={}, error={}", user.getId(), e.getMessage());
+                }
+            });
+            log.info("经期提醒检查完成");
+        } catch (Exception e) {
+            log.error("经期提醒检查失败: {}", e.getMessage(), e);
         }
     }
 }

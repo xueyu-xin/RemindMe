@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 主脚本 - Main JavaScript
  * 集成卡片系统(CardSystem)、通知系统(NotificationSystem)、音效系统(SoundSystem)
  * 本文件必须在 sound.js、notification.js、card.js 之后加载
@@ -117,6 +117,23 @@ function handleWebSocketMessageV2(msg) {
         return true;
     }
 
+    if (msg.type === 'execute_card') {
+        // 阶段二执行提醒走通知栏（NotificationSystem），而不是当作普通文本消息显示
+        if (window.NotificationSystem && msg.data) {
+            NotificationSystem.add({
+                title: msg.data.title || msg.message || '提醒',
+                time: msg.data.remindTime || '',
+                location: msg.data.location || '',
+                remark: msg.data.weatherSuggestion || msg.data.note || '',
+                priority: msg.data.priority || 'NORMAL',
+                sessionId: msg.data.sessionId || null,
+                attempt: msg.data.attempt || 1
+            });
+            return true;
+        }
+        return false;
+    }
+
     if (msg.type === 'timeout_auto_create') {
         var timeoutSessionId = msg.data ? msg.data.sessionId : msg.sessionId;
         
@@ -150,27 +167,6 @@ function handleWebSocketMessageV2(msg) {
         return true;
     }
 
-    // [已废弃] execute_auto_confirm 不再触发，阶段二不自动确认
-    if (msg.type === 'execute_card' || msg.type === 'execute_auto_confirm') {
-        if (window.NotificationSystem) {
-            NotificationSystem.add({
-                id: msg.data ? msg.data.sessionId : null,
-                title: (msg.data && msg.data.title) || msg.message || '提醒',
-                time: msg.data ? msg.data.remindTime : '',
-                location: msg.data ? msg.data.location : '',
-                remark: (msg.data && msg.data.note) ? msg.data.note : (msg.message || ''),
-                priority: msg.data ? msg.data.priority : 'NORMAL',
-                reminderId: msg.data ? msg.data.reminderId : null,
-                sessionId: msg.data ? msg.data.sessionId : null,
-                attempt: msg.data ? msg.data.attempt : 1
-            });
-        }
-        if (msg.type === 'execute_auto_confirm') {
-            if (typeof addMessage === 'function') { addMessage('bot', msg.message || '✅ 提醒已自动确认'); }
-            if (typeof renderCalendar === 'function') { renderCalendar(); }
-        }
-        return true;
-    }
     return false;
 }
 
@@ -203,7 +199,6 @@ function handleConfirmationActionV2(actionId, sessionId) {
 
 // ===== 导出全局接口 =====
 window.initApp = initApp;
-// 注意：switchTab 由内联代码定义（更完整的实现），此处不覆盖
 window.handleWebSocketMessageV2 = handleWebSocketMessageV2;
 window.handleConfirmationActionV2 = handleConfirmationActionV2;
 window.removeTempMessages = removeTempMessages;
@@ -402,11 +397,9 @@ window.saveMessageToBackend = saveMessageToBackend;
                 currentConflictList = [];
                 
                 if (hasConflict && card.data.conflictList) {
-                    try {
-                        currentConflictList = JSON.parse(card.data.conflictList);
-                        if (!Array.isArray(currentConflictList)) currentConflictList = [];
-                    } catch(e) { currentConflictList = []; }
-                    
+                    // conflictList 现在是数组对象（后端改为 List<ConflictItem>），无需 JSON.parse
+                    currentConflictList = Array.isArray(card.data.conflictList) ? card.data.conflictList : [];
+
                     currentConflictList.forEach(function(c) {
                         conflictStates[c.id] = 'pending';
                     });
@@ -869,7 +862,13 @@ window.saveMessageToBackend = saveMessageToBackend;
                     continue;
                 }
 
+                // 后续节次 startTime 为空时，基于前一节课 endTime + 课间休息自动推断
                 if (!target.startTime || target.startTime.length === 0) {
+                    if (prev && prev.endTime && prev.endTime.length > 0) {
+                        var autoBreak = getDefaultBreakTime(slots, i);
+                        target.startTime = addMinutes(prev.endTime, autoBreak);
+                        target.endTime = addMinutes(target.startTime, classDuration);
+                    }
                     continue;
                 }
 
@@ -1268,9 +1267,6 @@ window.saveMessageToBackend = saveMessageToBackend;
                 addMessage('bot', msg.message);
             } else if (msg.type === 'timeout_auto_create') {
                 handleTimeoutAutoCreate(msg);
-            // [已废弃] execute_auto_confirm 不再触发，保留仅为向后兼容
-            } else if (msg.type === 'execute_auto_confirm') {
-                handleExecuteAutoConfirm(msg);
             } else if (msg.type === 'batch_confirm_result') {
                 handleBatchResult(msg);
             } else if (msg.type === 'batch_cancel_result') {
@@ -1299,41 +1295,6 @@ window.saveMessageToBackend = saveMessageToBackend;
             // 立即清空卡片
             var container = document.getElementById('confirmationContainer');
             if (container) container.innerHTML = '';
-        }
-
-        // [已废弃] 阶段二不再自动确认，此函数仅为向后兼容保留
-        function handleExecuteAutoConfirm(msg) {
-            // 使用 NotificationSystem 显示通知
-            if (window.NotificationSystem && msg.data) {
-                NotificationSystem.add({
-                    id: msg.data.sessionId,
-                    title: msg.data.title || '提醒已触发',
-                    time: msg.data.remindTime || '',
-                    location: msg.data.location || '',
-                    remark: msg.data.note ? msg.data.note : (msg.message || ''),
-                    priority: msg.data.priority || 'NORMAL',
-                    reminderId: msg.data.reminderId,
-                    sessionId: msg.data.sessionId,
-                    attempt: msg.data.attempt || 1
-                });
-            }
-
-            // 清理 CardSystem 中的卡片
-            if (window.CardSystem) {
-                CardSystem.clear();
-            }
-
-            var card = document.getElementById('confirmationCard');
-            if (card) {
-                card.innerHTML = '<div class="card-title">✅ 提醒已自动确认（3次稍后未响应）</div>';
-            }
-            addMessage('bot', msg.message || '✅ 提醒已自动确认');
-            renderCalendar();
-            
-            setTimeout(function() {
-                var container = document.getElementById('confirmationContainer');
-                if (container) container.innerHTML = '';
-            }, 2000);
         }
 
         function handleBatchResult(msg) {
@@ -1803,8 +1764,14 @@ window.saveMessageToBackend = saveMessageToBackend;
         async function handleConfirmationAction(action, sessionId) {
             console.log('📝 handleConfirmationAction 被调用:', action, sessionId, 'type:', typeof action);
             
-            // 会话级去重：同一个 sessionId 不重复处理
-            if (sessionId && processedSessionIds[sessionId]) {
+            // 修改(edit)是非终结操作，不应触发会话级去重，否则修改后新卡片无法确认
+            var isTerminalAction = (action === 'confirm' || action === 'cancel' || action === 'overwrite'
+                || action === 'confirm_direct' || action === 'confirm_skip' || action === 'overwrite_all'
+                || action === 'confirm_import' || action === 'cancel_import'
+                || action === 'schedule_direct' || action === 'schedule_skip' || action === 'schedule_overwrite');
+            
+            // 会话级去重：同一个 sessionId 的终结操作不重复处理
+            if (isTerminalAction && sessionId && processedSessionIds[sessionId]) {
                 console.warn('会话已处理，忽略重复请求: sessionId=' + sessionId);
                 return;
             }
@@ -1812,8 +1779,8 @@ window.saveMessageToBackend = saveMessageToBackend;
             if (isProcessing) return;
             isProcessing = true;
             
-            // 标记该会话为处理中
-            if (sessionId) processedSessionIds[sessionId] = true;
+            // 仅终结操作标记会话为已处理，修改(edit)不标记
+            if (isTerminalAction && sessionId) processedSessionIds[sessionId] = true;
             
             // 立即禁用所有操作按钮（包括卡片内的）
             var allButtons = document.querySelectorAll('.action-btn, .mini-btn, .confirmation-card button, .card-action-btn');
@@ -1828,6 +1795,8 @@ window.saveMessageToBackend = saveMessageToBackend;
             }
             
             try {
+                // 复用 allButtons 作为 buttons，供各分支使用
+                var buttons = allButtons;
                 if (action === 'confirm') {
                     var idsToOverwrite = getSelectedConflictIds();
                     var confirmBody = idsToOverwrite.length > 0
@@ -2015,15 +1984,25 @@ window.saveMessageToBackend = saveMessageToBackend;
                         method: 'POST',
                         headers: headers
                     });
-                    const scheduleResult = await scheduleResponse.json();
-                    if (scheduleResult.success) {
-                        handleConfirmFinalResponse(scheduleResult, true, sessionId);
-                        conflictStates = {};
-                        currentConflictList = [];
-                    } else {
-                        addMessage('bot', '❌ ' + (scheduleResult.message || '操作失败'));
+                    // 先检查 HTTP 状态，避免非 JSON 响应导致 json() 解析失败
+                    if (!scheduleResponse.ok) {
+                        const errorText = await scheduleResponse.text();
+                        console.error('课表确认请求失败:', scheduleResponse.status, errorText);
+                        addMessage('bot', '❌ 创建失败（HTTP ' + scheduleResponse.status + '）：' + (errorText.substring(0, 150) || '服务器内部错误'));
                         if (scheduleBtn) {
                             scheduleBtn.textContent = action === 'schedule_overwrite' ? '📝 全部覆盖' : '✅ 直接创建';
+                        }
+                    } else {
+                        const scheduleResult = await scheduleResponse.json();
+                        if (scheduleResult.success) {
+                            handleConfirmFinalResponse(scheduleResult, true, sessionId);
+                            conflictStates = {};
+                            currentConflictList = [];
+                        } else {
+                            addMessage('bot', '❌ ' + (scheduleResult.message || '操作失败'));
+                            if (scheduleBtn) {
+                                scheduleBtn.textContent = action === 'schedule_overwrite' ? '📝 全部覆盖' : '✅ 直接创建';
+                            }
                         }
                     }
                 }
@@ -2268,21 +2247,30 @@ window.saveMessageToBackend = saveMessageToBackend;
             }
 
             try {
+                // 调试日志：确认 body 构建正确
+                var recurringBody = JSON.stringify({
+                    title: title,
+                    remindTime: fullDateTime,
+                    location: null,
+                    priority: 'NORMAL',
+                    advanceMinutes:10,
+                    isRecurring: true,
+                    startDate: startDate,
+                    endDate: endDate,
+                    repeatType: repeatType,
+                    recurringRemindTime: timeStr
+                });
+                console.log('📝 submitRecurringEdit 提交修改: sessionId=', sessionId, 'bodyStr=', recurringBody);
+                if (!recurringBody || recurringBody === '{}') {
+                    console.error('❌ recurringBody 为空，中止提交');
+                    addMessage('bot', '❌ 提交数据异常，请重试');
+                    return;
+                }
+
                 const response = await fetch('/api/confirmations/' + sessionId + '/reparse?userId=' + currentUserId, {
                     method: 'POST',
                     headers: headers,
-                    body: JSON.stringify({
-                        title: title,
-                        remindTime: fullDateTime,
-                        location: null,
-                        priority: 'NORMAL',
-                        advanceMinutes:10,
-                        isRecurring: true,
-                        startDate: startDate,
-                        endDate: endDate,
-                        repeatType: repeatType,
-                        recurringRemindTime: timeStr
-                    })
+                    body: recurringBody
                 });
                 const result = await response.json();
 
@@ -2353,11 +2341,20 @@ window.saveMessageToBackend = saveMessageToBackend;
                 requestBody.endTime = endTimeStr.replace('T', ' ') + ':00';
             }
             
+            // 调试日志：确认 requestBody 构建正确，body 不为空
+            var bodyStr = JSON.stringify(requestBody);
+            console.log('📝 submitEditForm 提交修改: sessionId=', sessionId, 'requestBody=', requestBody, 'bodyStr=', bodyStr);
+            if (!bodyStr || bodyStr === '{}') {
+                console.error('❌ requestBody 为空，中止提交');
+                addMessage('bot', '❌ 提交数据异常，请重试');
+                return;
+            }
+            
             try {
                 const response = await fetch('/api/confirmations/' + sessionId + '/reparse?userId=' + currentUserId, {
                     method: 'POST',
                     headers: headers,
-                    body: JSON.stringify(requestBody)
+                    body: bodyStr
                 });
                 const result = await response.json();
                 
@@ -3016,7 +3013,7 @@ window.saveMessageToBackend = saveMessageToBackend;
         }
 
         // ============ 会话状态持久化与恢复 ============
-        var PENDING_SESSION_KEY = 'remindme_pending_sessions'; // 注意：key 改为复数
+        var PENDING_SESSION_KEY = 'remindme_pending_sessions';
         var PENDING_SESSION_TTL = 5 * 60 * 1000; // 5分钟有效期
 
         // 保存/更新单个待确认会话（支持多卡片）
@@ -3160,6 +3157,10 @@ window.saveMessageToBackend = saveMessageToBackend;
             // 清理对应的卡片
             if (sid) {
                 var cardEl = document.querySelector('.confirmation-card[data-session-id="' + sid + '"]');
+                // 课表预览卡片使用 data-import-id 而非 data-session-id，兜底查找
+                if (!cardEl) {
+                    cardEl = document.querySelector('.confirmation-card[data-import-id="' + sid + '"]');
+                }
                 if (cardEl) cardEl.remove();
                 clearPendingSession(sid);
             } else {
@@ -3683,11 +3684,11 @@ window.saveMessageToBackend = saveMessageToBackend;
                     });
                 }
                 allScheduleData = allReminders;
-                renderMonthScheduleList(allReminders);
+                renderDayScheduleList(allReminders);
             })
             .catch(function() {
                 allScheduleData = [];
-                renderMonthScheduleList([]);
+                renderDayScheduleList([]);
             });
         }
 
@@ -3848,6 +3849,91 @@ window.saveMessageToBackend = saveMessageToBackend;
             var timeline = document.createElement('div');
             timeline.className = 'schedule-timeline';
 
+            // 记录已显示过日期前缀的天，每天只在第一个事件前展示日期
+            var shownDates = {};
+
+            sorted.forEach(function(r) {
+                var row = document.createElement('div');
+                row.className = 'schedule-row';
+
+                var timeLabel = document.createElement('div');
+                timeLabel.className = 'schedule-time-label with-date';
+                if (r.remindTime) {
+                    var datePart = r.remindTime.slice(5, 10); // MM-dd
+                    var timePart = r.remindTime.slice(11, 16); // HH:mm
+                    var isFirstOfDay = !shownDates[datePart];
+                    if (isFirstOfDay) shownDates[datePart] = true;
+
+                    if (r.endTime) {
+                        // 每天第一个事件：显示 MM-dd HH:mm-HH:mm；同日后续事件：只显示 HH:mm-HH:mm，日期位留空对齐
+                        timeLabel.textContent = isFirstOfDay
+                            ? datePart + ' ' + timePart + '-' + r.endTime.slice(11, 16)
+                            : '       ' + timePart + '-' + r.endTime.slice(11, 16);
+                    } else {
+                        timeLabel.textContent = isFirstOfDay
+                            ? datePart + ' ' + timePart
+                            : '       ' + timePart;
+                    }
+                } else {
+                    timeLabel.textContent = '';
+                }
+                row.appendChild(timeLabel);
+
+                var blocks = document.createElement('div');
+                blocks.className = 'schedule-blocks';
+
+                var block = document.createElement('div');
+                var type = determineBlockType(r);
+                block.className = 'schedule-block ' + type + ' single';
+
+                if (r.status === 'CANCELLED') {
+                    block.classList.add('cancelled');
+                }
+
+                var blockText = '';
+                if (r.isRecurring) {
+                    var repeatLabel = '每天';
+                    if (r.repeatType === 'WEEKLY') repeatLabel = '每周';
+                    else if (r.repeatType === 'MONTHLY') repeatLabel = '每月';
+                    blockText += '<span class="recurring-tag" title="' + (r.recurringRange || '') + '">⟳' + repeatLabel + '</span> ';
+                }
+                if (type === 'course') {
+                    blockText += '📖 ';
+                }
+                blockText += r.title;
+                if (r.isRecurring && r.recurringRange) {
+                    blockText += '<div class="recurring-range" title="' + r.recurringRange + '">' + r.recurringRange + '</div>';
+                }
+                block.innerHTML = blockText;
+
+                block.title = r.title + (r.location ? ' @ ' + r.location : '')
+                    + (r.isRecurring && r.recurringRange ? ' · 周期提醒：' + r.recurringRange : '');
+                blocks.appendChild(block);
+
+                row.appendChild(blocks);
+                timeline.appendChild(row);
+            });
+
+            items.appendChild(timeline);
+        }
+
+        // 选中具体日期时的日程展示：单行单列，时间标签纯 HH:mm，不带日期前缀
+        function renderDayScheduleList(reminders) {
+            var items = document.getElementById('scheduleItems');
+            items.innerHTML = '';
+
+            if (!reminders || reminders.length === 0) {
+                items.innerHTML = '<div class="empty-schedule">该时段暂无日程安排</div>';
+                return;
+            }
+
+            var sorted = reminders.slice().sort(function(a, b) {
+                return (a.remindTime || '').localeCompare(b.remindTime || '');
+            });
+
+            var timeline = document.createElement('div');
+            timeline.className = 'schedule-timeline';
+
             sorted.forEach(function(r) {
                 var row = document.createElement('div');
                 row.className = 'schedule-row';
@@ -3855,7 +3941,12 @@ window.saveMessageToBackend = saveMessageToBackend;
                 var timeLabel = document.createElement('div');
                 timeLabel.className = 'schedule-time-label';
                 if (r.remindTime) {
-                    timeLabel.textContent = r.endTime ? r.remindTime.slice(11, 16) + ' - ' + r.endTime.slice(11, 16) : r.remindTime.slice(11, 16);
+                    var timePart = r.remindTime.slice(11, 16);
+                    if (r.endTime) {
+                        timeLabel.textContent = timePart + '-' + r.endTime.slice(11, 16);
+                    } else {
+                        timeLabel.textContent = timePart;
+                    }
                 } else {
                     timeLabel.textContent = '';
                 }
@@ -3932,16 +4023,8 @@ window.saveMessageToBackend = saveMessageToBackend;
                 // 时间标签
                 var timeLabel = document.createElement('div');
                 timeLabel.className = 'schedule-time-label';
-                // 检查该时间段是否有跨天的提醒，显示时间段范围
-                var hasEndTime = false;
-                for (var d in timeGroups[time]) {
-                    var items = timeGroups[time][d];
-                    if (items && items.some(function(r) { return r.endTime; })) {
-                        hasEndTime = true;
-                        break;
-                    }
-                }
-                timeLabel.textContent = hasEndTime ? time + '+' : time;
+                // 时间段由每个 block 内部的 .time-range 精确展示，时间标签只显示起始时间
+                timeLabel.textContent = time;
                 row.appendChild(timeLabel);
 
                 // 7 列对应 7 天

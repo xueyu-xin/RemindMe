@@ -54,19 +54,19 @@ public class ConflictDetectionService {
                     .filter(r -> excludeReminderId == null || !r.getId().equals(excludeReminderId))
                     .collect(Collectors.toList());
         } else {
-            // 单点提醒：以 ±30 分钟为窗口查询
+            // 单点提醒：以 ±5 分钟为窗口构建查询范围，统一用 findOverlappingReminders 检测
+            // 这样能正确检测已有时间段提醒（endTime 不为空）与单点提醒的重叠
             LocalDateTime start = remindTime.minusMinutes(CONFLICT_WINDOW_MINUTES);
             LocalDateTime end = remindTime.plusMinutes(CONFLICT_WINDOW_MINUTES);
 
             log.debug("检测单点冲突: userId={}, remindTime={}, 范围={} ~ {}, excludeId={}",
                     userId, remindTime, start, end, excludeReminderId);
 
-            List<Reminder> reminders = reminderRepository.findByUserIdAndRemindTimeBetween(userId, start, end);
+            // findOverlappingReminders 已包含 status != CANCELLED 和 confirmStatus = CONFIRMED 过滤
+            List<Reminder> reminders = reminderRepository.findOverlappingReminders(userId, start, end);
 
-            // 仅保留未取消且已确认的提醒，并排除自身
+            // 排除自身
             conflicts = reminders.stream()
-                    .filter(r -> r.getStatus() != ReminderStatus.CANCELLED)
-                    .filter(r -> r.getConfirmStatus() == ConfirmStatus.CONFIRMED)
                     .filter(r -> excludeReminderId == null || !r.getId().equals(excludeReminderId))
                     .collect(Collectors.toList());
         }
@@ -80,7 +80,7 @@ public class ConflictDetectionService {
 
         // 映射为响应项，携带 endTime 以区分时间段提醒
         List<ConflictResponse.ConflictItem> items = conflicts.stream()
-                .map(r -> new ConflictResponse.ConflictItem(r.getId(), r.getTitle(), r.getRemindTime(), r.getEndTime()))
+                .map(r -> new ConflictResponse.ConflictItem(r.getId(), r.getTitle(), r.getRemindTime(), r.getEndTime(), r.getLocation()))
                 .collect(Collectors.toList());
 
         // 向后找一个空闲窗口作为建议时间

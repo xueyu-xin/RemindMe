@@ -37,10 +37,12 @@ public class ReminderResponse {
     private String note;
     // 优先级：LOW/NORMAL/HIGH，影响通知样式和权重
     private String priority;
-    // 提醒状态：PENDING（待处理）/DONE（已完成）/CANCELLED（已取消）
+    // 提醒状态：PENDING（待推送）/SENT（已推送）/COMPLETED（已完成）/CANCELLED（已取消）/EXPIRED（已过期）
     private String status;
-    // 二次确认状态：NONE（未开启）/WAITING（待确认）/CONFIRMED（已确认）/TIMEOUT（超时未确认）
+    // 信息确认阶段状态：PENDING（待确认）/CONFIRMED（已确认）/CANCELLED（已取消）/DEFAULTED（超时默认确认）
     private String confirmStatus;
+    // 到点执行确认阶段状态：PENDING（待执行确认）/CONFIRMED（已点已执行）/CANCELLED（已点取消）/DEFAULTED（超时默认）
+    private String executionStatus;
     // 已尝试确认次数，超过阈值后自动标记超时
     private Integer confirmAttempts;
     // 上次发送确认提醒的时间，用于控制确认轮询的发送频率

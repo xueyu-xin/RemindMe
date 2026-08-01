@@ -97,7 +97,11 @@ public class AgentService {
                 // 空响应降级：连续两次为空则返回友好错误，避免卡死
                 if (llmResponse == null || llmResponse.isBlank()) {
                     log.warn("LLM返回空响应，尝试简化重试 (iteration={})", iteration);
-                    String retryInput = "用户请求：" + userInput + "\n请调用合适的工具来处理。如果是创建提醒，调用 create_reminder 或 create_recurring_reminder。";
+                    // 重试提示需覆盖常见工具场景，并引导 LLM 基于历史工具结果继续，避免只引导创建提醒导致天气查询等场景卡死
+                    String retryInput = "用户请求：" + userInput + "\n请根据对话历史中的工具调用结果继续处理："
+                            + "如需创建提醒，调用 create_reminder 或 create_recurring_reminder；"
+                            + "如已通过 geocode_city 获取坐标，请调用 query_weather_now 查询实时天气或 query_weather_forecast 查询预报；"
+                            + "如所有必要工具已调用完毕，请基于结果直接生成最终自然语言回复。";
                     llmResponse = llmService.chatWithTools(retryInput, tools, history);
                     if (llmResponse == null || llmResponse.isBlank()) {
                         log.error("LLM两次返回空响应，返回降级错误");

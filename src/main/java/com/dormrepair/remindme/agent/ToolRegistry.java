@@ -225,8 +225,8 @@ public class ToolRegistry implements SmartInitializingSingleton {
         ));
         paramDescriptions.put("setUserPreferences", Map.of(
                 "userId", "用户ID（系统自动填充）",
-                "preference", "偏好项名称（必填），可选值：city、defaultAdvanceMinutes、nickname",
-                "value", "新值（必填），defaultAdvanceMinutes需为整数"
+                "preference", "偏好项名称（必填），可选值：city、defaultAdvanceMinutes、nickname、periodRemindTime",
+                "value", "新值（必填），defaultAdvanceMinutes需为整数，periodRemindTime格式为HH:mm（如20:30）"
         ));
         paramDescriptions.put("getReminderDetail", Map.of(
                 "userId", "用户ID（系统自动填充）",

@@ -423,7 +423,7 @@ public class ScheduleImportService {
                     reminder.setStatus(ReminderStatus.PENDING);
                     reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
                     reminder.setExecutionStatus(ExecutionStatus.PENDING);
-                    reminder.setSource(ReminderSource.USER_INPUT);
+                    reminder.setSource(ReminderSource.COURSE);
                     reminder.setTimezone("Asia/Shanghai");
                     reminderRepository.save(reminder);
 
@@ -536,7 +536,7 @@ public class ScheduleImportService {
                 reminder.setStatus(ReminderStatus.PENDING);
                 reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
                 reminder.setExecutionStatus(ExecutionStatus.PENDING);
-                reminder.setSource(ReminderSource.EXCEL_IMPORT);
+                reminder.setSource(ReminderSource.COURSE);
                 reminder.setTimezone("Asia/Shanghai");
 
                 reminderRepository.save(reminder);
@@ -647,6 +647,16 @@ public class ScheduleImportService {
             List<Map<String, Object>> timeSectionList = new ArrayList<>();
             if (cached.getTimeSections() != null) {
                 for (ScheduleTableDTO.TimeSection ts : cached.getTimeSections()) {
+                    Map<String, Object> map = new HashMap<>();
+                    map.put("index", ts.getIndex());
+                    map.put("startTime", ts.getStartTime());
+                    map.put("endTime", ts.getEndTime());
+                    timeSectionList.add(map);
+                }
+            }
+            // timeSections 为空时用默认值兜底，避免前端只显示表头没有行
+            if (timeSectionList.isEmpty()) {
+                for (ScheduleTableDTO.TimeSection ts : getDefaultTimeSections()) {
                     Map<String, Object> map = new HashMap<>();
                     map.put("index", ts.getIndex());
                     map.put("startTime", ts.getStartTime());
@@ -1128,7 +1138,7 @@ public class ScheduleImportService {
                 reminder.setStatus(ReminderStatus.PENDING);
                 reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
                 reminder.setExecutionStatus(ExecutionStatus.PENDING);
-                reminder.setSource(ReminderSource.USER_INPUT);
+                reminder.setSource(ReminderSource.COURSE);
                 reminder.setTimezone("Asia/Shanghai");
                 reminderRepository.save(reminder);
 

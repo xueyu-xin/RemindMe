@@ -87,6 +87,10 @@ public class User {
     @Column(name = "enable_period_reminder", nullable = false)
     private Boolean enablePeriodReminder = true;
 
+    // 经期提醒时间（HH:mm），默认 20:30，在下次经期前一天该时间推送提醒
+    @Column(name = "period_remind_time", nullable = false)
+    private String periodRemindTime = "20:30";
+
     // 当前周期经期信息确认卡片的状态：PENDING-待确认/CONFIRMED-已确认/CANCELLED-已取消/DEFAULTED-超时默认
     @Column(name = "period_confirm_status", nullable = false)
     @Enumerated(EnumType.STRING)

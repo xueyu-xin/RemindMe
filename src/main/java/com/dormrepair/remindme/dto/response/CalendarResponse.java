@@ -74,5 +74,7 @@ public class CalendarResponse {
         private String recurringRange;
         // 重复类型：ONCE/DAILY/WEEKLY 等
         private String repeatType;
+        // 提醒来源：USER_INPUT/COURSE/EXCEL_IMPORT/WEATHER_LINK/PERIOD_REMINDER，前端据此渲染紫色课程标签
+        private String source;
     }
 }

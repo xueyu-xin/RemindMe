@@ -148,6 +148,9 @@ var CardSystem = (function() {
                 cancel(sessionId, userId);
                 break;
             case 'modify':
+            case 'edit':
+                // 'edit' 和 'modify' 都进入编辑模式，不能走 default 分支直接发请求
+                // 否则会向 /api/confirmations/{sessionId}/edit 发送无 body 的 POST，导致后端报 Required request body is missing
                 toggleEditMode(sessionId);
                 break;
             default:
@@ -381,13 +384,16 @@ var CardSystem = (function() {
      * 获取最新卡片数据并刷新
      */
     function fetchCardData(sessionId, userId) {
-        fetch('/api/confirmations/' + sessionId + '/data?userId=' + userId)
+        fetch('/api/confirmations/' + sessionId + '/data?userId=' + userId, {
+            headers: getHeaders()
+        })
             .then(function(res) { return res.json(); })
             .then(function(result) {
-                if (result.success && result.data) {
+                // 后端 getSessionData 返回扁平结构（直接含 sessionId/title/remindTime 等），没有 success/data 包装
+                if (result && result.sessionId) {
                     var cardEntry = cards[sessionId];
                     if (cardEntry) {
-                        cardEntry.card.data = result.data;
+                        cardEntry.card.data = result;
                         refreshCard(sessionId);
                     }
                 } else {
@@ -541,7 +547,6 @@ var CardSystem = (function() {
         .then(function(result) {
             if (result.success) {
                 // 所有"终结类"操作（创建/覆盖/取消等）都清理引导语、显示回复、移除卡片
-                // 不再调用 fetchCardData（会话已处理，/data 接口会返回空或报错）
                 var terminalActions = ['confirm', 'cancel', 'overwrite', 'overwrite_all',
                     'confirm_direct', 'confirm_skip', 'schedule_direct', 'schedule_skip', 'schedule_overwrite'];
                 var isTerminal = terminalActions.indexOf(actionId) !== -1
