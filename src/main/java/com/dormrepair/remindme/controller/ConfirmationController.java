@@ -2,6 +2,7 @@ package com.dormrepair.remindme.controller;
 
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse;
 import com.dormrepair.remindme.entity.Reminder;
+import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.service.ConfirmationService;
 import com.dormrepair.remindme.service.LLMService;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,19 @@ public class ConfirmationController {
     private final ConfirmationService confirmationService;
     // 大模型服务：智能修改接口中用于解析用户「改成XXX」式的自然语言编辑意图
     private final LLMService llmService;
+
+    // 获取当前用户有效的待确认会话列表（刷新时前端校验 sessionStorage 用）
+    // 只返回 status=PENDING 且未超时的会话 sessionId 列表
+    @GetMapping("/pending")
+    public ResponseEntity<Map<String, Object>> getPendingSessions(@RequestParam Long userId) {
+        List<String> sessionIds = confirmationService.getPendingSessions(userId).stream()
+                .map(s -> s.getSessionId())
+                .toList();
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("sessionIds", sessionIds);
+        return ResponseEntity.ok(result);
+    }
 
     // 单条确认会话的「确认创建」接口。可选 body.conflictIds 指定需要同时覆盖的冲突提醒 ID 列表；未传时若存在冲突则返回冲突卡片
     // sessionId - 确认会话唯一标识（创建时生成）
@@ -286,7 +300,8 @@ public class ConfirmationController {
             parsedData.put("title", title);
             parsedData.put("remindTime", remindTime);
             parsedData.put("location", location);
-            parsedData.put("priority", priority != null ? priority : "NORMAL");
+            parsedData.put("note", body.get("note"));
+            parsedData.put("priority", priority != null ? priority : Priority.NORMAL.name());
             parsedData.put("advanceMinutes", advanceMinutes != null ? advanceMinutes : 10);
             parsedData.put("intentType", "REMINDER");
             parsedData.put("confidence", 0.95);
@@ -388,7 +403,7 @@ public class ConfirmationController {
             }
 
             // 补齐业务需要但可能缺失的默认字段：优先级/提前分钟/意图类型/置信度
-            updatedData.putIfAbsent("priority", "NORMAL");
+            updatedData.putIfAbsent("priority", Priority.NORMAL.name());
             updatedData.putIfAbsent("advanceMinutes", 10);
             updatedData.putIfAbsent("intentType", "REMINDER");
             updatedData.put("confidence", 0.95);

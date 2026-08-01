@@ -6,7 +6,10 @@ import com.dormrepair.remindme.entity.RecurringInstance;
 import com.dormrepair.remindme.entity.RecurringReminder;
 import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.entity.User;
+import com.dormrepair.remindme.enums.ConfirmStatus;
 import com.dormrepair.remindme.enums.ExecutionStatus;
+import com.dormrepair.remindme.enums.Gender;
+import com.dormrepair.remindme.enums.ReminderStatus;
 import com.dormrepair.remindme.repository.RecurringInstanceRepository;
 import com.dormrepair.remindme.repository.RecurringReminderRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
@@ -46,6 +49,8 @@ public class CalendarController {
     private final RecurringReminderRepository recurringReminderRepository;
     // 周期提醒实例数据访问层：对应具体某一天的周期提醒实例（与实际生成的 Reminder 关联）
     private final RecurringInstanceRepository recurringInstanceRepository;
+    // 周期提醒服务：用 shouldGenerateForDate 判断某天是否被周期模板覆盖（按 repeatType/repeatDays 过滤）
+    private final com.dormrepair.remindme.service.RecurringReminderService recurringReminderService;
 
     // 月视图数据接口：按年/月返回该月每一天的聚合信息（提醒、周期、经期、农历）
     // userId - 当前登录用户 ID，用于按用户维度过滤数据
@@ -154,38 +159,36 @@ public class CalendarController {
                 .filter(r -> r.getRemindTime().isAfter(dayStart) && r.getRemindTime().isBefore(dayEnd))
                 .collect(Collectors.toList());
 
-        // 周期提醒检测：检查 RecurringInstance 表中是否存在该天的记录，或 RecurringReminder 模板中该天是否在范围
+        // 周期提醒检测：只在「该天确有已生成实例」时才标记 ⟳/红点，避免模板覆盖但无实际日程的日期被误标
+        // （例如 repeatDays 为空的旧 WEEKLY 模板会兜底为每天都覆盖，若按模板覆盖标记会把整个范围都标上）
         List<RecurringReminder> userRecurringTemplates = recurringReminderRepository
                 .findByUserIdAndStatus(userId, "ACTIVE");
-        boolean hasRecurringTemplateOnDate = userRecurringTemplates.stream()
-                .anyMatch(t -> !date.isBefore(t.getStartDate()) && !date.isAfter(t.getEndDate()));
-        // 检查每个模板该天是否有实例
-        boolean hasRecurring = false;
+        boolean hasRecurringInstance = false;
         java.util.Map<Long, RecurringReminder> recurringMap = new java.util.HashMap<>();
         java.util.Set<Long> recurringReminderIds = new java.util.HashSet<>();
         for (RecurringReminder t : userRecurringTemplates) {
-            if (!date.isBefore(t.getStartDate()) && !date.isAfter(t.getEndDate())) {
-                hasRecurring = true;
+            if (recurringReminderService.shouldGenerateForDate(t, date)) {
                 RecurringInstance inst = recurringInstanceRepository
                         .findByRecurringIdAndRemindDate(t.getId(), date).orElse(null);
                 if (inst != null && inst.getReminderId() != null) {
+                    hasRecurringInstance = true;
                     recurringReminderIds.add(inst.getReminderId());
                     recurringMap.put(inst.getReminderId(), t);
                 }
             }
         }
-        final boolean finalHasRecurring = hasRecurring || hasRecurringTemplateOnDate;
+        final boolean finalHasRecurring = hasRecurringInstance;
         final java.util.Map<Long, RecurringReminder> finalRecurringMap = recurringMap;
         final java.util.Set<Long> finalRecurringReminderIds = recurringReminderIds;
 
         boolean hasPendingReminder = dayReminders.stream()
-                .anyMatch(r -> r.getStatus().name().equals("PENDING") 
-                           && r.getConfirmStatus().name().equals("CONFIRMED")
+                .anyMatch(r -> r.getStatus() == ReminderStatus.PENDING
+                           && r.getConfirmStatus() == ConfirmStatus.CONFIRMED
                            && r.getExecutionStatus() == ExecutionStatus.PENDING);
 
         // 经期状态判断（按具体日期）
         String periodStatus = null;
-        if (user != null && user.getGender() != null && user.getGender().name().equals("FEMALE")) {
+        if (user != null && user.getGender() != null && user.getGender() == Gender.FEMALE) {
             if (periodService.isMenstruating(user, date)) {
                 periodStatus = "经期";
             } else if (periodService.isOvulating(user, date)) {
@@ -249,9 +252,12 @@ public class CalendarController {
                 })
                 .collect(Collectors.toList());
 
+        // 红点(hasReminder)：当日有待执行的一次性提醒，或存在已生成的周期实例
+        boolean hasReminder = hasPendingReminder || finalHasRecurring;
+
         return new CalendarResponse.DayItem(
                 date,
-                hasPendingReminder,
+                hasReminder,
                 finalHasRecurring,
                 dayReminders.size(),
                 periodStatus,

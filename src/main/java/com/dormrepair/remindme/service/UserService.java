@@ -102,6 +102,11 @@ public class UserService {
         result.put("enablePeriodReminder", user.getEnablePeriodReminder());
         result.put("periodRemindTime", user.getPeriodRemindTime());
 
+        // 工具链引导：提示 LLM 拿到城市后下一步该调用什么
+        if (user.getCity() != null && !user.getCity().isBlank()) {
+            result.put("_hint", "已获取默认城市「" + user.getCity() + "」。如果用户在查询天气，请立即用此城市调用 query_weather_now(location=\"" + user.getCity() + "\")，不要重复调用 get_user_preferences。");
+        }
+
         return result;
     }
 

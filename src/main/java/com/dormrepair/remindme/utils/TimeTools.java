@@ -7,7 +7,6 @@ import org.springframework.stereotype.Service;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.regex.Matcher;
@@ -19,11 +18,6 @@ import java.util.regex.Pattern;
 @Slf4j
 @Service
 public class TimeTools {
-
-    // 完整日期时间格式，与 TimeUtils.FORMATTER 保持一致
-    private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-    // 纯日期格式
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     // ISO 星期值 → 中文名的固定映射数组，下标 0=星期一…6=星期日，dayOfWeek(1..7) 取下标需 -1
     private static final String[] WEEK_DAYS_CN = {"星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"};
@@ -37,8 +31,8 @@ public class TimeTools {
         LocalDateTime now = TimeUtils.now();
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
-        result.put("currentTime", now.format(FORMATTER));
-        result.put("currentDate", now.format(DATE_FORMATTER));
+        result.put("currentTime", TimeUtils.format(now));
+        result.put("currentDate", now.format(TimeUtils.DATE_FORMATTER));
         result.put("weekDay", getWeekDayChinese(now.getDayOfWeek().getValue()));
         result.put("timestamp", TimeUtils.toTimestamp(now));
 
@@ -138,8 +132,8 @@ public class TimeTools {
         }
 
         result.put("success", true);
-        result.put("calculatedDate", calculatedDate.format(DATE_FORMATTER));
-        result.put("calculatedDateTime", calculatedDateTime.format(FORMATTER));
+        result.put("calculatedDate", calculatedDate.format(TimeUtils.DATE_FORMATTER));
+        result.put("calculatedDateTime", TimeUtils.format(calculatedDateTime));
         result.put("weekDay", getWeekDayChinese(calculatedDate.getDayOfWeek().getValue()));
         result.put("description", description);
 

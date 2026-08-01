@@ -15,8 +15,10 @@ import com.dormrepair.remindme.enums.ExecutionStatus;
 import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.enums.ReminderSource;
 import com.dormrepair.remindme.enums.ReminderStatus;
+import com.dormrepair.remindme.enums.RepeatType;
 import com.dormrepair.remindme.repository.ConfirmationRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
+import com.dormrepair.remindme.utils.TimeUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -60,7 +62,6 @@ public class ConfirmationService {
     private RecurringReminderService recurringReminderService;
 
     // 统一时间格式与超时配置：确认会话默认 30 秒过期
-    private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final DateTimeFormatter ISO_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE_TIME;
     private static final int TIMEOUT_SECONDS = 30;
 
@@ -113,7 +114,7 @@ public class ConfirmationService {
                 .parsedTime(parsedTime)
                 .parsedEndTime(parsedEndTime)
                 .parsedLocation((String) parsedData.get("location"))
-                .parsedPriority((String) parsedData.getOrDefault("priority", "NORMAL"))
+                .parsedPriority((String) parsedData.getOrDefault("priority", Priority.NORMAL.name()))
                 .parsedAdvanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", defaultAdvance))
                 .stage("INFO_CONFIRM")
                 .status(SessionStatus.PENDING)
@@ -172,7 +173,7 @@ public class ConfirmationService {
             basicResult.put("success", true);
             basicResult.put("reminderId", reminder.getId());
             basicResult.put("title", reminder.getTitle());
-            basicResult.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+            basicResult.put("remindTime", reminder.getRemindTime().format(TimeUtils.FORMATTER));
             if (!overwrittenTitles.isEmpty()) {
                 basicResult.put("overwrittenTitle", overwrittenTitle);
             }
@@ -217,7 +218,7 @@ public class ConfirmationService {
                 if (reminder != null) {
                     result.put("title", reminder.getTitle());
                     result.put("remindTime", reminder.getRemindTime() != null
-                            ? reminder.getRemindTime().format(FORMATTER) : "");
+                            ? reminder.getRemindTime().format(TimeUtils.FORMATTER) : "");
                 }
             }
             result.put("message", "该提醒已确认，无需重复操作～");
@@ -241,11 +242,12 @@ public class ConfirmationService {
         String startDate = (String) parsedData.get("startDate");
         String endDate = (String) parsedData.get("endDate");
         String repeatType = (String) parsedData.get("repeatType");
+        String repeatDays = (String) parsedData.get("repeatDays");
         String location = (String) parsedData.get("location");
-        String priority = (String) parsedData.getOrDefault("priority", "NORMAL");
+        String priority = (String) parsedData.getOrDefault("priority", Priority.NORMAL.name());
 
         Map<String, Object> createResult = recurringReminderService.generateInstancesFromConfirm(
-                userId, title, remindTime, startDate, endDate, repeatType, location, priority);
+                userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority);
 
         session.setStage("REMINDER_EXECUTE");
         confirmationRepository.save(session);
@@ -423,16 +425,17 @@ public class ConfirmationService {
         String startDate = (String) parsedData.get("startDate");
         String endDate = (String) parsedData.get("endDate");
         String repeatType = (String) parsedData.get("repeatType");
+        String repeatDays = (String) parsedData.get("repeatDays");
         String location = (String) parsedData.get("location");
-        String priority = (String) parsedData.getOrDefault("priority", "NORMAL");
+        String priority = (String) parsedData.getOrDefault("priority", Priority.NORMAL.name());
 
         return switch (mode) {
             case "direct" -> recurringReminderService.generateAll(
-                    userId, title, remindTime, startDate, endDate, repeatType, location, priority);
+                    userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority);
             case "skip" -> recurringReminderService.generateWithSkip(
-                    userId, title, remindTime, startDate, endDate, repeatType, location, priority);
+                    userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority);
             case "overwrite" -> recurringReminderService.generateWithOverwrite(
-                    userId, title, remindTime, startDate, endDate, repeatType, location, priority);
+                    userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority);
             default -> throw new IllegalArgumentException("未知的创建模式: " + mode);
         };
     }
@@ -512,9 +515,9 @@ public class ConfirmationService {
             r.put("success", true);
             r.put("reminderId", reminder.getId());
             r.put("title", reminder.getTitle());
-            r.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+            r.put("remindTime", reminder.getRemindTime().format(TimeUtils.FORMATTER));
             if (reminder.getEndTime() != null) {
-                r.put("endTime", reminder.getEndTime().format(FORMATTER));
+                r.put("endTime", reminder.getEndTime().format(TimeUtils.FORMATTER));
             }
             if (reminder.getLocation() != null) {
                 r.put("location", reminder.getLocation());
@@ -561,9 +564,9 @@ public class ConfirmationService {
             r.put("success", true);
             r.put("reminderId", reminder.getId());
             r.put("title", reminder.getTitle());
-            r.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+            r.put("remindTime", reminder.getRemindTime().format(TimeUtils.FORMATTER));
             if (reminder.getEndTime() != null) {
-                r.put("endTime", reminder.getEndTime().format(FORMATTER));
+                r.put("endTime", reminder.getEndTime().format(TimeUtils.FORMATTER));
             }
             if (reminder.getLocation() != null) {
                 r.put("location", reminder.getLocation());
@@ -748,7 +751,7 @@ public class ConfirmationService {
         parsedData.put("title", title);
         parsedData.put("remindTime", remindTime);
         parsedData.put("location", location);
-        parsedData.put("priority", priority != null ? priority : "NORMAL");
+        parsedData.put("priority", priority != null ? priority : Priority.NORMAL.name());
         parsedData.put("advanceMinutes", 10);
         parsedData.put("source", "USER_INPUT");
         parsedData.put("intentType", "REMINDER");
@@ -790,7 +793,7 @@ public class ConfirmationService {
             result.put("hasConflict", true);
             result.put("conflicts", conflictResponse.getConflicts());
             result.put("suggestedTime", conflictResponse.getSuggestedTime() != null 
-                    ? conflictResponse.getSuggestedTime().format(FORMATTER) : null);
+                    ? conflictResponse.getSuggestedTime().format(TimeUtils.FORMATTER) : null);
             result.put("message", description);
             result.put("title", title);
             result.put("remindTime", newTime);
@@ -804,7 +807,7 @@ public class ConfirmationService {
         parsedData.put("title", title);
         parsedData.put("remindTime", newTime);
         parsedData.put("location", location);
-        parsedData.put("priority", priority != null ? priority : "NORMAL");
+        parsedData.put("priority", priority != null ? priority : Priority.NORMAL.name());
         parsedData.put("advanceMinutes", 10);
         parsedData.put("source", "USER_INPUT");
         parsedData.put("intentType", "REMINDER");
@@ -826,11 +829,21 @@ public class ConfirmationService {
     public ConfirmationCardResponse reparse(String sessionId, Long userId, String newInput, Map<String, Object> newParsedData) {
         ConfirmationSession session = findValidSession(sessionId, userId);
 
+        // 保留原 parsedData 中的 note：表单式重新解析接口（如卡片上改时间）不会传 note，
+        // 若不补回原值，buildConfirmationCard 与 createReminder 都会用 null 覆盖原备注
+        if (newParsedData.get("note") == null) {
+            Map<String, Object> oldParsedData = parseParsedData(session.getParsedData());
+            Object oldNote = oldParsedData.get("note");
+            if (oldNote != null) {
+                newParsedData.put("note", oldNote);
+            }
+        }
+
         // 冲突检测（修改时间后重新检测）
         String remindTimeStr = (String) newParsedData.get("remindTime");
         if (remindTimeStr != null) {
             try {
-                LocalDateTime parsedTime = LocalDateTime.parse(remindTimeStr, FORMATTER);
+                LocalDateTime parsedTime = LocalDateTime.parse(remindTimeStr, TimeUtils.FORMATTER);
                 ConflictResponse conflictResponse = conflictDetectionService.checkConflict(userId, parsedTime, null);
                 if (conflictResponse.isHasConflict()) {
                     String description = conflictDetectionService.getConflictDescription(
@@ -839,7 +852,7 @@ public class ConfirmationService {
                     newParsedData.put("conflictMessage", description);
                     newParsedData.put("conflictList", conflictResponse.getConflicts());
                     newParsedData.put("suggestedTime", conflictResponse.getSuggestedTime() != null 
-                            ? conflictResponse.getSuggestedTime().format(FORMATTER) : null);
+                            ? conflictResponse.getSuggestedTime().format(TimeUtils.FORMATTER) : null);
                     if (conflictResponse.getConflicts() != null && !conflictResponse.getConflicts().isEmpty()) {
                         newParsedData.put("conflictId", conflictResponse.getConflicts().get(0).getId());
                     }
@@ -873,10 +886,14 @@ public class ConfirmationService {
         session.setParsedTitle((String) newParsedData.get("title"));
         session.setParsedTime(parsedTime);
         session.setParsedLocation((String) newParsedData.get("location"));
-        session.setParsedPriority((String) newParsedData.getOrDefault("priority", "NORMAL"));
+        session.setParsedPriority((String) newParsedData.getOrDefault("priority", Priority.NORMAL.name()));
         session.setParsedAdvanceMinutes((Integer) newParsedData.getOrDefault("advanceMinutes", 10));
         session.setRetryCount(session.getRetryCount() + 1);
-        session.setExpiresAt(LocalDateTime.now().plusSeconds(TIMEOUT_SECONDS));
+        // 根据 conflict/recurring 决定是否超时，与 createSession 逻辑一致
+        boolean hasConflict = Boolean.TRUE.equals(newParsedData.get("hasConflict"));
+        boolean isRecurring = Boolean.TRUE.equals(newParsedData.get("isRecurring"));
+        LocalDateTime expiresAt = (isRecurring || hasConflict) ? null : LocalDateTime.now().plusSeconds(TIMEOUT_SECONDS);
+        session.setExpiresAt(expiresAt);
         confirmationRepository.save(session);
 
         ConfirmationCardResponse card = buildConfirmationCard(session, newParsedData);
@@ -912,7 +929,7 @@ public class ConfirmationService {
                     result.put("reminderId", reminder.getId());
                     result.put("sessionId", session.getSessionId());
                     result.put("title", reminder.getTitle());
-                    result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+                    result.put("remindTime", reminder.getRemindTime().format(TimeUtils.FORMATTER));
 
                     // 保留 timeout_auto_create 消息用于向后兼容
                     pushUserMessage(session.getUserId(), "timeout_auto_create", result);
@@ -970,11 +987,12 @@ public class ConfirmationService {
         String startDate = (String) parsedData.get("startDate");
         String endDate = (String) parsedData.get("endDate");
         String repeatType = (String) parsedData.get("repeatType");
+        String repeatDays = (String) parsedData.get("repeatDays");
         String location = (String) parsedData.get("location");
-        String priority = (String) parsedData.getOrDefault("priority", "NORMAL");
+        String priority = (String) parsedData.getOrDefault("priority", Priority.NORMAL.name());
 
         Map<String, Object> createResult = recurringReminderService.generateInstancesFromConfirm(
-                session.getUserId(), title, remindTime, startDate, endDate, repeatType, location, priority);
+                session.getUserId(), title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority);
 
         session.setStatus(SessionStatus.CONFIRMED);
         session.setStage("REMINDER_EXECUTE");
@@ -1055,7 +1073,7 @@ public class ConfirmationService {
         reminder.setRemindTime(parseTimeFlexible((String) parsedData.get("remindTime")));
         reminder.setEndTime(parseTimeFlexible((String) parsedData.get("endTime")));
         reminder.setPriority(Priority.valueOf(
-                ((String) parsedData.getOrDefault("priority", "NORMAL")).toUpperCase()));
+                ((String) parsedData.getOrDefault("priority", Priority.NORMAL.name())).toUpperCase()));
         reminder.setLocation((String) parsedData.get("location"));
         reminder.setNote((String) parsedData.get("note"));
         int defaultAdvance = userService.getUserById(userId)
@@ -1086,7 +1104,7 @@ public class ConfirmationService {
                 .title((String) parsedData.get("title"))
                 .remindTime((String) parsedData.get("remindTime"))
                 .endTime((String) parsedData.get("endTime"))
-                .priority((String) parsedData.getOrDefault("priority", "NORMAL"))
+                .priority((String) parsedData.getOrDefault("priority", Priority.NORMAL.name()))
                 .location((String) parsedData.get("location"))
                 .note((String) parsedData.get("note"))
                 .advanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", defaultAdvance))
@@ -1097,6 +1115,10 @@ public class ConfirmationService {
                 .suggestedTime((String) parsedData.get("suggestedTime"))
                 .build();
 
+        log.info("buildConfirmationCard: sessionId={}, title={}, remindTime={}, location={}, note={}, parsedData.keys={}",
+                session.getSessionId(), data.getTitle(), data.getRemindTime(), data.getLocation(), data.getNote(),
+                parsedData.keySet());
+
         // 将 parsedData 中的 conflictList 转换为 List<ConflictResponse.ConflictItem>
         if (hasConflict) {
             data.setConflictList(parseConflictList(parsedData.get("conflictList")));
@@ -1106,7 +1128,7 @@ public class ConfirmationService {
         if (isRecurring) {
             StringBuilder titleBuilder = new StringBuilder();
             titleBuilder.append("📅 周期提醒：").append(parsedData.get("title"));
-            String repeatType = (String) parsedData.getOrDefault("repeatType", "DAILY");
+            String repeatType = (String) parsedData.getOrDefault("repeatType", RepeatType.DAILY.name());
             String repeatLabel = switch (repeatType) {
                 case "WEEKLY" -> "每周";
                 case "MONTHLY" -> "每月";
@@ -1156,7 +1178,7 @@ public class ConfirmationService {
                     Action.builder().id("edit").label("✏️ 修改").style("warning").build()
             );
         } else if (isRecurring) {
-            String repeatType = (String) parsedData.getOrDefault("repeatType", "DAILY");
+            String repeatType = (String) parsedData.getOrDefault("repeatType", RepeatType.DAILY.name());
             String repeatLabel = switch (repeatType) {
                 case "WEEKLY" -> "每周";
                 case "MONTHLY" -> "每月";
@@ -1205,6 +1227,11 @@ public class ConfirmationService {
     }
 
     private void pushConfirmationCard(Long userId, ConfirmationCardResponse card) {
+        log.info("pushConfirmationCard: userId={}, type={}, title={}, note={}, hasConflict={}, dataKeys={}",
+                userId, card.getType(), card.getData() != null ? card.getData().getTitle() : null,
+                card.getData() != null ? card.getData().getNote() : null,
+                card.getData() != null ? card.getData().getHasConflict() : null,
+                card.getData() != null ? card.getData().getClass().getSimpleName() : "null");
         webSocketPushService.pushToUser(userId, "/queue/confirmations", card);
     }
 
@@ -1265,7 +1292,7 @@ public class ConfirmationService {
 
         Map<String, Object> parsedData = new HashMap<>();
         parsedData.put("title", reminder.getTitle());
-        parsedData.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+        parsedData.put("remindTime", reminder.getRemindTime().format(TimeUtils.FORMATTER));
         parsedData.put("location", reminder.getLocation());
         parsedData.put("note", reminder.getNote());
         parsedData.put("priority", reminder.getPriority().name());
@@ -1409,7 +1436,7 @@ public class ConfirmationService {
                     Map<String, Object> data = new HashMap<>();
                     data.put("sessionId", session.getSessionId());
                     data.put("title", session.getParsedTitle());
-                    data.put("remindTime", session.getParsedTime() != null ? session.getParsedTime().format(FORMATTER) : null);
+                    data.put("remindTime", session.getParsedTime() != null ? session.getParsedTime().format(TimeUtils.FORMATTER) : null);
                     data.put("location", session.getParsedLocation());
                     data.put("priority", session.getParsedPriority());
                     data.put("advanceMinutes", session.getParsedAdvanceMinutes());
@@ -1447,7 +1474,7 @@ public class ConfirmationService {
     // 构建确认成功消息，覆盖场景会额外说明被覆盖的提醒标题
     private String buildConfirmSuccessMessage(Reminder reminder, String overwrittenTitle) {
         String title = reminder.getTitle();
-        String remindTime = reminder.getRemindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+        String remindTime = reminder.getRemindTime().format(TimeUtils.DATETIME_MINUTE_FORMATTER);
         if (overwrittenTitle != null && !overwrittenTitle.isBlank()) {
             return "✅ 已覆盖「" + overwrittenTitle + "」，新提醒\"" + title + "\"已创建\n" +
                    "⏰ 我将在 " + remindTime + " 提醒您";
@@ -1459,7 +1486,7 @@ public class ConfirmationService {
     // 构建超时自动确认消息，提示用户因未及时确认已自动创建提醒
     private String buildAutoConfirmMessage(Reminder reminder) {
         String title = reminder.getTitle();
-        String remindTime = reminder.getRemindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+        String remindTime = reminder.getRemindTime().format(TimeUtils.DATETIME_MINUTE_FORMATTER);
         return "⏳ 5分钟未确认，已自动确认提醒：\"" + title + "\"，" + remindTime + " 执行\n" +
                "⏰ 我将在 " + remindTime + " 提醒您" + title;
     }
@@ -1541,7 +1568,7 @@ public class ConfirmationService {
         data.put("sessionId", null);
         data.put("title", targetReminder.getTitle());
         data.put("remindTime", targetReminder.getRemindTime() != null ? 
-                targetReminder.getRemindTime().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) : null);
+                targetReminder.getRemindTime().format(TimeUtils.FORMATTER) : null);
         pushUserMessage(userId, "card_confirmed", data);
         
         return targetReminder;
@@ -1645,7 +1672,7 @@ public class ConfirmationService {
                     data.put("sessionId", session.getSessionId());
                     data.put("title", session.getParsedTitle());
                     data.put("remindTime", session.getParsedTime() != null ? 
-                            session.getParsedTime().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) : null);
+                            session.getParsedTime().format(TimeUtils.FORMATTER) : null);
                     pushUserMessage(userId, "card_cancelled", data);
                     
                     return true;
@@ -1674,7 +1701,7 @@ public class ConfirmationService {
         
         String priorityStr = session.getParsedPriority();
         if (priorityStr == null || priorityStr.isBlank()) {
-            priorityStr = "NORMAL";
+            priorityStr = Priority.NORMAL.name();
         }
         try {
             reminder.setPriority(Priority.valueOf(priorityStr.toUpperCase()));
@@ -1723,7 +1750,7 @@ public class ConfirmationService {
         Map<String, Object> data = new HashMap<>();
         data.put("sessionId", sessionId);
         data.put("title", title);
-        data.put("remindTime", remindTime != null ? remindTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) : null);
+        data.put("remindTime", remindTime != null ? remindTime.format(TimeUtils.FORMATTER) : null);
         pushUserMessage(userId, "card_confirmed", data);
     }
 
@@ -1738,9 +1765,9 @@ public class ConfirmationService {
         if (session.getParsedTime() != null) {
             LocalDateTime now = LocalDateTime.now();
             if (session.getParsedTime().toLocalDate().equals(now.toLocalDate())) {
-                timeStr = session.getParsedTime().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+                timeStr = session.getParsedTime().format(TimeUtils.TIME_FORMATTER);
             } else {
-                timeStr = session.getParsedTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+                timeStr = session.getParsedTime().format(TimeUtils.DATETIME_MINUTE_FORMATTER);
             }
         } else {
             timeStr = "未设置";
@@ -1766,7 +1793,7 @@ public class ConfirmationService {
                     
                     String timeStr;
                     if (session.getParsedTime() != null) {
-                        timeStr = session.getParsedTime().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"));
+                        timeStr = session.getParsedTime().format(TimeUtils.TIME_FORMATTER);
                     } else {
                         timeStr = "未设置";
                     }
@@ -1793,7 +1820,7 @@ public class ConfirmationService {
         int index = 1;
         for (ConfirmationSession session : sessions) {
             String timeStr = session.getParsedTime() != null 
-                    ? session.getParsedTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) 
+                    ? session.getParsedTime().format(TimeUtils.DATETIME_MINUTE_FORMATTER) 
                     : "未设置";
             sb.append(index++).append(". ").append(session.getParsedTitle()).append(" - ").append(timeStr).append("\n");
         }

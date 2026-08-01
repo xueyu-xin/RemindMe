@@ -11,6 +11,7 @@ import com.dormrepair.remindme.enums.ReminderSource;
 import com.dormrepair.remindme.enums.ReminderStatus;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.repository.UserRepository;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -293,7 +294,7 @@ public class PeriodService {
         }
 
         PeriodStatusResponse status = calculatePeriodStatus(user);
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        DateTimeFormatter formatter = TimeUtils.DATE_FORMATTER;
 
         result.put("success", true);
         result.put("status", status.getStatus());
@@ -330,7 +331,7 @@ public class PeriodService {
         }
 
         LocalDate nextPeriod = getNextPeriodDate(user);
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        DateTimeFormatter formatter = TimeUtils.DATE_FORMATTER;
         LocalDate today = LocalDate.now();
         long daysUntilNext = ChronoUnit.DAYS.between(today, nextPeriod);
 
@@ -364,7 +365,7 @@ public class PeriodService {
             periodStart = LocalDate.now();
         } else {
             try {
-                periodStart = LocalDate.parse(startDate.trim(), DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                periodStart = LocalDate.parse(startDate.trim(), TimeUtils.DATE_FORMATTER);
             } catch (Exception e) {
                 result.put("success", false);
                 result.put("message", "日期格式不正确，请使用 yyyy-MM-dd 格式");
@@ -392,7 +393,7 @@ public class PeriodService {
         userRepository.save(user);
         log.info("Agent更新经期开始日期: userId={}, date={}", userId, periodStart);
 
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        DateTimeFormatter formatter = TimeUtils.DATE_FORMATTER;
         
         // 重新计算经期状态（calculatePeriodStatus内部可能推进lastPeriodStart并持久化）
         PeriodStatusResponse status = calculatePeriodStatus(user);
@@ -493,7 +494,7 @@ public class PeriodService {
         userRepository.save(user);
         log.info("Agent更新经期设置: userId={}, cycleDays={}, periodDuration={}", userId, cycleDays, periodDuration);
 
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        DateTimeFormatter formatter = TimeUtils.DATE_FORMATTER;
 
         // 即使没有经期记录，也返回用户当前最新的 cycleDays 和 periodDuration 给LLM
         int effectiveCycle = user.getCycleDays() != null ? user.getCycleDays() : DEFAULT_CYCLE_LENGTH;

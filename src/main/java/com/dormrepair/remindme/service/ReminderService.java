@@ -13,8 +13,10 @@ import com.dormrepair.remindme.enums.ConfirmStatus;
 import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.enums.ReminderSource;
 import com.dormrepair.remindme.enums.ReminderStatus;
+import com.dormrepair.remindme.enums.RepeatType;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.repository.UserRepository;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -23,7 +25,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -45,18 +46,15 @@ public class ReminderService {
     private final ConflictDetectionService conflictDetectionService;
     private final RecurringReminderService recurringReminderService;
 
-    // 统一的日期时间格式，对应 Agent 入参中 remindTime/endTime 的字符串格式
-    private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-
     // HTTP 层创建提醒入口：校验用户后转交给 Agent 版本处理
     @Transactional
     public Map<String, Object> createReminder(ReminderCreateRequest request) {
         User user = userRepository.findById(request.getUserId())
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
 
-        String remindTimeStr = request.getRemindTime().format(FORMATTER);
-        String endTimeStr = request.getEndTime() != null ? request.getEndTime().format(FORMATTER) : null;
-        String priority = request.getPriority() != null ? request.getPriority() : "NORMAL";
+        String remindTimeStr = request.getRemindTime().format(TimeUtils.FORMATTER);
+        String endTimeStr = request.getEndTime() != null ? request.getEndTime().format(TimeUtils.FORMATTER) : null;
+        String priority = request.getPriority() != null ? request.getPriority() : Priority.NORMAL.name();
         String location = request.getLocation();
         String note = request.getNote();
 
@@ -192,7 +190,8 @@ public class ReminderService {
     public Map<String, Object> createReminderForAgent(Long userId, String title, String remindTime,
             String endTime, String location, String note, String priority, Integer advanceMinutes) {
         
-        log.info("Agent调用创建提醒: userId={}, title={}, remindTime={}, endTime={}", userId, title, remindTime, endTime);
+        log.info("Agent调用创建提醒: userId={}, title={}, remindTime={}, endTime={}, location={}, note={}, priority={}, advanceMinutes={}",
+                userId, title, remindTime, endTime, location, note, priority, advanceMinutes);
         
         Map<String, Object> result = new HashMap<>();
         
@@ -200,12 +199,13 @@ public class ReminderService {
             // 周期识别：检查标题是否包含周期关键词
             RecurringParams recurringParams = detectDateRange(title, remindTime);
             if (recurringParams != null) {
-                log.info("检测到日期范围，路由到周期提醒: startDate={}, endDate={}, repeatType={}",
-                        recurringParams.startDate, recurringParams.endDate, recurringParams.repeatType);
+                log.info("检测到日期范围，路由到周期提醒: startDate={}, endDate={}, repeatType={}, repeatDays={}",
+                        recurringParams.startDate, recurringParams.endDate, recurringParams.repeatType, recurringParams.repeatDays);
                 return recurringReminderService.createRecurringReminder(
                         userId, title, recurringParams.remindTime,
                         recurringParams.startDate, recurringParams.endDate,
-                        recurringParams.repeatType, location, priority != null ? priority : "NORMAL");
+                        recurringParams.repeatType, recurringParams.repeatDays,
+                        location, priority != null ? priority : Priority.NORMAL.name());
             }
 
             // 解析时间
@@ -216,13 +216,13 @@ public class ReminderService {
             LocalDateTime relativeTime = parseRelativeTimeInRemindTime(remindTime);
             if (relativeTime != null) {
                 parsedTime = relativeTime;
-                remindTime = parsedTime.format(FORMATTER);
+                remindTime = parsedTime.format(TimeUtils.FORMATTER);
                 long relDiff = java.time.Duration.between(LocalDateTime.now(), parsedTime).toMinutes();
                 finalAdvance = relDiff > 0 && relDiff <= 1440 ? (int) relDiff : 10;
                 log.info("相对时间解析成功: remindTime={}, parsedTime={}, advanceMinutes={}", remindTime, parsedTime, finalAdvance);
             } else {
                 // 原有逻辑：解析绝对时间，通过 diffMinutes 判断语义
-                parsedTime = LocalDateTime.parse(remindTime, FORMATTER);
+                parsedTime = LocalDateTime.parse(remindTime, TimeUtils.FORMATTER);
 
                 int defaultAdvance = userRepository.findById(userId)
                         .map(User::getDefaultAdvanceMinutes)
@@ -238,13 +238,13 @@ public class ReminderService {
                 } else if (advanceMinutes != null && advanceMinutes == 0) {
                     // LLM 传入 0 → "等会/马上"，走原有逻辑
                     parsedTime = now.plusMinutes(defaultAdvance);
-                    remindTime = parsedTime.format(FORMATTER);
+                    remindTime = parsedTime.format(TimeUtils.FORMATTER);
                     finalAdvance = defaultAdvance;
                     log.info("LLM传入advanceMinutes=0(等会/马上), 使用默认提前量={}", defaultAdvance);
                 } else if (diffMinutes == 0 || (diffMinutes > -1 && diffMinutes < 0)) {
                     // 未传 advanceMinutes，用户说"等会"/"等一下" → 使用默认提前量
                     parsedTime = now.plusMinutes(defaultAdvance);
-                    remindTime = parsedTime.format(FORMATTER);
+                    remindTime = parsedTime.format(TimeUtils.FORMATTER);
                     finalAdvance = defaultAdvance;
                 } else {
                     // 明确指定的时间（如 18:30、明天下午3点）→ 使用默认提前量
@@ -252,7 +252,7 @@ public class ReminderService {
                 }
             }
 
-            LocalDateTime parsedEndTime = endTime != null ? LocalDateTime.parse(endTime, FORMATTER) : null;
+            LocalDateTime parsedEndTime = endTime != null ? LocalDateTime.parse(endTime, TimeUtils.FORMATTER) : null;
             
             // 构建确认会话的解析数据
             Map<String, Object> parsedData = new HashMap<>();
@@ -260,7 +260,7 @@ public class ReminderService {
             parsedData.put("remindTime", remindTime);
             parsedData.put("location", location);
             parsedData.put("note", note);
-            parsedData.put("priority", priority != null ? priority : "NORMAL");
+            parsedData.put("priority", priority != null ? priority : Priority.NORMAL.name());
             parsedData.put("advanceMinutes", finalAdvance);
             parsedData.put("source", "USER_INPUT");
             parsedData.put("intentType", "REMINDER");
@@ -280,7 +280,7 @@ public class ReminderService {
                 parsedData.put("conflictMessage", description);
                 parsedData.put("conflictList", conflictResponse.getConflicts());
                 parsedData.put("suggestedTime", conflictResponse.getSuggestedTime() != null 
-                        ? conflictResponse.getSuggestedTime().format(FORMATTER) : null);
+                        ? conflictResponse.getSuggestedTime().format(TimeUtils.FORMATTER) : null);
                 
                 // 取第一个冲突提醒的 ID，便于后续覆盖
                 if (conflictResponse.getConflicts() != null && !conflictResponse.getConflicts().isEmpty()) {
@@ -306,7 +306,7 @@ public class ReminderService {
             result.put("remindTime", remindTime);
             result.put("location", location);
             result.put("note", note);
-            result.put("priority", priority != null ? priority : "NORMAL");
+            result.put("priority", priority != null ? priority : Priority.NORMAL.name());
             result.put("sessionCreated", true);
             result.put("sessionId", card.getData().getSessionId());
             result.put("confirmationRequired", true);
@@ -343,7 +343,7 @@ public class ReminderService {
             // 解析日期，默认今天
             LocalDateTime parsedDate;
             if (date != null && !date.isBlank()) {
-                parsedDate = LocalDateTime.parse(date + " 00:00:00", FORMATTER);
+                parsedDate = LocalDateTime.parse(date + " 00:00:00", TimeUtils.FORMATTER);
             } else {
                 parsedDate = LocalDateTime.now().withHour(0).withMinute(0).withSecond(0);
             }
@@ -359,7 +359,7 @@ public class ReminderService {
                         Map<String, Object> item = new HashMap<>();
                         item.put("id", r.getId());
                         item.put("title", r.getTitle());
-                        item.put("remindTime", r.getRemindTime().format(FORMATTER));
+                        item.put("remindTime", r.getRemindTime().format(TimeUtils.FORMATTER));
                         item.put("location", r.getLocation());
                         item.put("note", r.getNote());
                         item.put("priority", r.getPriority().name());
@@ -370,7 +370,7 @@ public class ReminderService {
                     .collect(Collectors.toList());
             
             result.put("success", true);
-            result.put("date", date != null ? date : LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd")));
+            result.put("date", date != null ? date : LocalDateTime.now().format(TimeUtils.DATE_FORMATTER));
             result.put("count", reminderList.size());
             result.put("reminders", reminderList);
             
@@ -405,11 +405,11 @@ public class ReminderService {
                 reminder.setTitle(title);
             }
             if (remindTime != null && !remindTime.isBlank()) {
-                LocalDateTime parsedTime = LocalDateTime.parse(remindTime, FORMATTER);
+                LocalDateTime parsedTime = LocalDateTime.parse(remindTime, TimeUtils.FORMATTER);
                 reminder.setRemindTime(parsedTime);
             }
             if (endTime != null && !endTime.isBlank()) {
-                LocalDateTime parsedEndTime = LocalDateTime.parse(endTime, FORMATTER);
+                LocalDateTime parsedEndTime = LocalDateTime.parse(endTime, TimeUtils.FORMATTER);
                 reminder.setEndTime(parsedEndTime);
             }
             if (location != null) {
@@ -425,9 +425,9 @@ public class ReminderService {
             result.put("message", "提醒已更新");
             result.put("id", saved.getId());
             result.put("title", saved.getTitle());
-            result.put("remindTime", saved.getRemindTime().format(FORMATTER));
+            result.put("remindTime", saved.getRemindTime().format(TimeUtils.FORMATTER));
             if (saved.getEndTime() != null) {
-                result.put("endTime", saved.getEndTime().format(FORMATTER));
+                result.put("endTime", saved.getEndTime().format(TimeUtils.FORMATTER));
             }
             result.put("location", saved.getLocation());
             result.put("note", saved.getNote());
@@ -492,7 +492,7 @@ public class ReminderService {
             result.put("success", true);
             result.put("id", reminder.getId());
             result.put("title", reminder.getTitle());
-            result.put("remindTime", reminder.getRemindTime().format(FORMATTER));
+            result.put("remindTime", reminder.getRemindTime().format(TimeUtils.FORMATTER));
             result.put("timezone", reminder.getTimezone());
             result.put("advanceMinutes", reminder.getAdvanceMinutes());
             result.put("cronExpression", reminder.getCronExpression());
@@ -504,8 +504,8 @@ public class ReminderService {
             result.put("executionStatus", reminder.getExecutionStatus().name());
             result.put("confirmAttempts", reminder.getConfirmAttempts());
             result.put("source", reminder.getSource().name());
-            result.put("createdAt", reminder.getCreatedAt() != null ? reminder.getCreatedAt().format(FORMATTER) : null);
-            result.put("updatedAt", reminder.getUpdatedAt() != null ? reminder.getUpdatedAt().format(FORMATTER) : null);
+            result.put("createdAt", reminder.getCreatedAt() != null ? reminder.getCreatedAt().format(TimeUtils.FORMATTER) : null);
+            result.put("updatedAt", reminder.getUpdatedAt() != null ? reminder.getUpdatedAt().format(TimeUtils.FORMATTER) : null);
 
             log.info("Agent获取提醒详情成功: reminderId={}, title={}", reminderId, reminder.getTitle());
 
@@ -527,10 +527,10 @@ public class ReminderService {
     @AgentTool(name = "create_recurring_reminder", description = "创建周期提醒，用户输入包含日期范围时调用")
     @Transactional
     public Map<String, Object> createRecurringReminderForAgent(Long userId, String title,
-            String remindTime, String startDate, String endDate, String repeatType) {
+            String remindTime, String startDate, String endDate, String repeatType, String repeatDays) {
 
-        log.info("Agent调用创建周期提醒: userId={}, title={}, remindTime={}, startDate={}, endDate={}, repeatType={}",
-                userId, title, remindTime, startDate, endDate, repeatType);
+        log.info("Agent调用创建周期提醒: userId={}, title={}, remindTime={}, startDate={}, endDate={}, repeatType={}, repeatDays={}",
+                userId, title, remindTime, startDate, endDate, repeatType, repeatDays);
 
         Map<String, Object> result = new HashMap<>();
 
@@ -575,11 +575,11 @@ public class ReminderService {
             }
 
             String normalizedRepeatType = (repeatType != null && !repeatType.isBlank())
-                    ? repeatType.toUpperCase() : "DAILY";
+                    ? repeatType.toUpperCase() : RepeatType.DAILY.name();
 
             return recurringReminderService.createRecurringReminder(
                     userId, title, remindTime, startDate, endDate,
-                    normalizedRepeatType, null, "NORMAL");
+                    normalizedRepeatType, repeatDays, null, Priority.NORMAL.name());
 
         } catch (Exception e) {
             log.error("创建周期提醒失败: userId={}, error={}", userId, e.getMessage(), e);
@@ -590,33 +590,46 @@ public class ReminderService {
         return result;
     }
 
-    // Agent 工具：按日期取消提醒
-    // 命中某天的全部 PENDING 提醒，可选用 keyword 进一步过滤标题
-    @AgentTool(name = "cancel_reminders_by_date", description = "取消指定日期的提醒，用户要求取消某天的提醒时调用")
+    // Agent 工具：按日期（或日期范围）取消提醒
+    // 命中范围内全部 PENDING 提醒，可选用 keyword 进一步过滤；keyword 为"课程/课"等时按来源=COURSE 过滤
+    @AgentTool(name = "cancel_reminders_by_date", description = "取消指定日期或日期范围的提醒，用户要求取消某天/某几天/本周的提醒时调用")
     @Transactional
-    public Map<String, Object> cancelRemindersByDate(Long userId, String date, String keyword) {
-        log.info("取消提醒: userId={}, date={}, keyword={}", userId, date, keyword);
+    public Map<String, Object> cancelRemindersByDate(Long userId, String date, String endDate, String keyword) {
+        log.info("取消提醒: userId={}, date={}, endDate={}, keyword={}", userId, date, endDate, keyword);
 
         Map<String, Object> result = new HashMap<>();
 
         try {
-            LocalDate targetDate = LocalDate.parse(date);
-            LocalDateTime dayStart = targetDate.atStartOfDay();
-            LocalDateTime dayEnd = targetDate.atTime(LocalTime.MAX);
+            LocalDate startDate = LocalDate.parse(date);
+            LocalDate endLocalDate = (endDate != null && !endDate.isBlank()) ? LocalDate.parse(endDate) : startDate;
+            LocalDateTime rangeStart = startDate.atStartOfDay();
+            LocalDateTime rangeEnd = endLocalDate.atTime(LocalTime.MAX);
+
+            // 课程相关关键词：课程提醒标题是课程名（如"高等数学"），不含"课程"二字，故按来源=COURSE 过滤
+            String kw = keyword == null ? "" : keyword.trim();
+            boolean isCourseFilter = kw.equals("课程") || kw.equals("课") || kw.equals("上课")
+                    || kw.equalsIgnoreCase("course") || kw.equals("课程表") || kw.equals("课表");
 
             List<Reminder> reminders = reminderRepository.findAll().stream()
                     .filter(r -> r.getUserId().equals(userId))
                     .filter(r -> r.getRemindTime() != null)
-                    .filter(r -> !r.getRemindTime().isBefore(dayStart) && !r.getRemindTime().isAfter(dayEnd))
+                    .filter(r -> !r.getRemindTime().isBefore(rangeStart) && !r.getRemindTime().isAfter(rangeEnd))
                     .filter(r -> r.getStatus() == ReminderStatus.PENDING)
-                    .filter(r -> keyword == null || keyword.isBlank() ||
-                            (r.getTitle() != null && r.getTitle().contains(keyword)))
+                    .filter(r -> {
+                        if (kw.isEmpty()) return true;
+                        if (isCourseFilter) {
+                            return ReminderSource.COURSE.equals(r.getSource());
+                        }
+                        return r.getTitle() != null && r.getTitle().contains(kw);
+                    })
                     .collect(Collectors.toList());
 
             if (reminders.isEmpty()) {
                 result.put("success", true);
                 result.put("cancelCount", 0);
-                result.put("message", "未找到" + (keyword != null ? "包含「" + keyword + "」" : "") + "的提醒");
+                String rangeDesc = endLocalDate.isAfter(startDate)
+                        ? (startDate + " 至 " + endLocalDate) : startDate.toString();
+                result.put("message", "未找到" + rangeDesc + (kw.isEmpty() ? "" : "包含「" + kw + "」") + "的提醒");
                 return result;
             }
 
@@ -628,7 +641,7 @@ public class ReminderService {
                 Map<String, Object> item = new HashMap<>();
                 item.put("id", r.getId());
                 item.put("title", r.getTitle());
-                item.put("remindTime", r.getRemindTime().format(FORMATTER));
+                item.put("remindTime", r.getRemindTime().format(TimeUtils.FORMATTER));
                 cancelledList.add(item);
 
                 log.info("取消提醒: reminderId={}, title={}", r.getId(), r.getTitle());
@@ -686,23 +699,26 @@ public class ReminderService {
 
     // 周期关键词识别：扫描标题里的"每天/每周/每月"等词，推断重复类型与默认跨度
     // 命中则返回拼好的起止日期与重复类型，未命中返回 null（按单次提醒处理）
+    // WEEKLY 时还会从标题解析具体星期几填入 repeatDays（如"每周一"→"1"），解析不到则留空
     private RecurringParams detectDateRange(String title, String remindTime) {
         if (title == null || remindTime == null) {
             return null;
         }
 
-        title = title.toLowerCase();
+        String lowerTitle = title.toLowerCase();
         String repeatType = null;
+        String repeatDays = null;
         int spanDays = 30;
 
-        if (title.contains("每周") || title.contains("星期") || title.contains("周")) {
-            repeatType = "WEEKLY";
+        if (lowerTitle.contains("每周") || lowerTitle.contains("星期") || lowerTitle.contains("周")) {
+            repeatType = RepeatType.WEEKLY.name();
             spanDays = 90;
-        } else if (title.contains("每月") || title.contains("每个月")) {
-            repeatType = "MONTHLY";
+            repeatDays = parseWeekDays(lowerTitle);
+        } else if (lowerTitle.contains("每月") || lowerTitle.contains("每个月")) {
+            repeatType = RepeatType.MONTHLY.name();
             spanDays = 365;
-        } else if (title.contains("每天") || title.contains("每日") || title.contains("天天") || title.contains("定期")) {
-            repeatType = "DAILY";
+        } else if (lowerTitle.contains("每天") || lowerTitle.contains("每日") || lowerTitle.contains("天天") || lowerTitle.contains("定期")) {
+            repeatType = RepeatType.DAILY.name();
             spanDays = 30;
         }
 
@@ -712,33 +728,68 @@ public class ReminderService {
 
         LocalDateTime parsedTime;
         try {
-            parsedTime = LocalDateTime.parse(remindTime, FORMATTER);
+            parsedTime = LocalDateTime.parse(remindTime, TimeUtils.FORMATTER);
         } catch (Exception e) {
             return null;
         }
 
-        String timePart = parsedTime.toLocalTime().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
+        String timePart = parsedTime.toLocalTime().format(TimeUtils.TIME_SECONDS_FORMATTER);
         String startDate = parsedTime.toLocalDate().toString();
         String endDate = parsedTime.toLocalDate().plusDays(spanDays).toString();
 
-        log.info("周期识别: title={}, repeatType={}, timePart={}, startDate={}, endDate={}",
-                title, repeatType, timePart, startDate, endDate);
+        log.info("周期识别: title={}, repeatType={}, repeatDays={}, timePart={}, startDate={}, endDate={}",
+                title, repeatType, repeatDays, timePart, startDate, endDate);
 
-        return new RecurringParams(timePart, startDate, endDate, repeatType);
+        return new RecurringParams(timePart, startDate, endDate, repeatType, repeatDays);
     }
 
-    // 周期识别结果的内部载体：纯时间 + 起止日期 + 重复类型
+    // 从标题解析 WEEKLY 的星期几，返回逗号分隔的 ISO DayOfWeek（1=周一…7=周日）。
+    // 识别"周一/星期一/礼拜一/每周一"及"每周末"等，识别不到返回 null
+    private String parseWeekDays(String title) {
+        java.util.Set<Integer> days = new java.util.TreeSet<>();
+        // 先处理"周末"=周六日
+        if (title.contains("周末")) {
+            days.add(6);
+            days.add(7);
+        }
+        // 按出现顺序扫描"周X/星期X/礼拜X"，X 为 一二三四五六日/天 或 1-7
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:周|星期|礼拜)([一二三四五六日天1-7])").matcher(title);
+        while (m.find()) {
+            Integer d = chineseDayOfWeek(m.group(1));
+            if (d != null) days.add(d);
+        }
+        if (days.isEmpty()) return null;
+        return days.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
+    }
+
+    // 单个中文/数字星期标记 → ISO DayOfWeek
+    private Integer chineseDayOfWeek(String token) {
+        return switch (token) {
+            case "一", "1" -> 1;
+            case "二", "2" -> 2;
+            case "三", "3" -> 3;
+            case "四", "4" -> 4;
+            case "五", "5" -> 5;
+            case "六", "6" -> 6;
+            case "日", "天", "7" -> 7;
+            default -> null;
+        };
+    }
+
+    // 周期识别结果的内部载体：纯时间 + 起止日期 + 重复类型 + WEEKLY 星期几
     private static class RecurringParams {
         String remindTime;
         String startDate;
         String endDate;
         String repeatType;
+        String repeatDays;
 
-        RecurringParams(String remindTime, String startDate, String endDate, String repeatType) {
+        RecurringParams(String remindTime, String startDate, String endDate, String repeatType, String repeatDays) {
             this.remindTime = remindTime;
             this.startDate = startDate;
             this.endDate = endDate;
             this.repeatType = repeatType;
+            this.repeatDays = repeatDays;
         }
     }
 }

@@ -4,6 +4,7 @@ import com.dormrepair.remindme.agent.ConversationMemory;
 import com.dormrepair.remindme.agent.ConversationMemory.Message;
 import com.dormrepair.remindme.agent.ToolCall;
 import com.dormrepair.remindme.agent.ToolDefinition;
+import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.utils.TimeUtils;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -20,7 +21,6 @@ import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -35,8 +35,6 @@ public class LLMService {
     private final ChatModel chatModel;
     private final ObjectMapper objectMapper;
     private final UserService userService;
-
-    private static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     // 解析用户输入（兼容入口，使用默认 10 分钟提前量）
     public ParsedResult parseReminder(String userInput) {
@@ -75,7 +73,7 @@ public class LLMService {
                     .endTime(root.has("endTime") && !root.get("endTime").isNull() ? parseDateTime(root.get("endTime").asText()) : null)
                     .intentType(root.has("intentType") ? root.get("intentType").asText() : "UNKNOWN")
                     .location(root.has("location") && !root.get("location").isNull() ? root.get("location").asText() : null)
-                    .priority(root.has("priority") ? root.get("priority").asText() : "NORMAL")
+                    .priority(root.has("priority") ? root.get("priority").asText() : Priority.NORMAL.name())
                     .note(root.has("note") && !root.get("note").isNull() ? root.get("note").asText() : null)
                     .advanceMinutes(advanceMinutes)
                     .build();
@@ -924,7 +922,7 @@ public class LLMService {
 
     // 构建包含工具定义的系统提示词，拼入当前时间和工具列表
     private String buildSystemPromptWithTools(List<ToolDefinition> tools) {
-        String currentDate = LocalDateTime.now().format(FORMATTER);
+        String currentDate = TimeUtils.getCurrentBeijingTime();
         
         StringBuilder toolsJson = new StringBuilder();
         if (tools != null && !tools.isEmpty()) {
@@ -983,6 +981,13 @@ public class LLMService {
             ║   工具一旦返回 success=true，该任务即视为完成，不得再次用同样参数  ║
             ║   调同一工具（例如反复 add_private_memory 同一句"用户是大三学生"）。║
             ║   多任务时，完成一个就立刻处理下一个，不要在已完成的任务上打转。    ║
+            ║                                                                    ║
+            ║ ⑨ 调用 create_reminder 时，note 参数必须按以下规则传递：           ║
+            ║   · 用户输入含"带XX/穿XX/记得/别忘了/要带/注意"等补充说明 → note 必须为该说明原文，不能为 null ║
+            ║   · 通知含"提前X分钟到场/签到/到达/入场"等要求 → note 必须包含原始会议时间、提前到场要求、地点、签退/加分等信息，不能为 null ║
+            ║   · 用户粘贴大段通知文本（>50字）→ note 必须摘要通知关键信息（时间/地点/要求/加分等），不能为 null ║
+            ║   · 只有简单短句（如"明天3点开会"）且无任何补充信息 → note 才允许为 null ║
+            ║   · 违反此规则视为严重错误！note 为 null 会导致用户在提醒卡片上看不到任何补充说明。║
             ╚══════════════════════════════════════════════════════════════════╝
 
             你是一个智能提醒助手。你可以调用工具来完成用户的请求。
@@ -1038,6 +1043,57 @@ public class LLMService {
             6. "去拿快递" → location="快递站", title="拿快递"
             7. 地点词应从标题中排除，title 只保留动作/事项
             8. 如果没有明确地点，location 传 null
+
+            ================================================
+            备注提取规则（调用 create_reminder 时严格遵守）：
+            ================================================
+            1. 当用户输入中包含对提醒事项的补充说明、注意事项、需要准备的物品时，必须提取为 note 参数
+            2. 常见模式："记得..."、"别忘了..."、"要带..."、"带上..."、"带XX"、"注意..."、"穿XX"等
+            3. 物品类（雨伞、笔记本、借书证、学生证、礼物、水杯、钥匙等）一律放入 note，不要塞进 title
+            4. "明天3点提醒我还书，记得带借书证" → title="还书", note="记得带借书证"
+            5. "周五10点在三教开会，记得带笔记本电脑" → title="开会", location="三教", note="记得带笔记本电脑"
+            6. "一分钟后提醒我带雨伞去快递站拿快递" → title="拿快递", location="快递站", note="带雨伞"
+            7. "明天上午去图书馆，穿外套" → title="去图书馆", location="图书馆", note="穿外套"
+            8. note 必须从 title 中排除，避免 title 出现"带XX"等冗余词
+            9. 如果用户没有提供任何补充信息，note 传 null
+
+            ================================================
+            提前到场规则（处理大通知中"提前X分钟到场/签到"等要求）：
+            ================================================
+            当通知中明确要求"请提前X分钟到场/签到/到达/入场"时，必须按下面方式处理：
+            1. remindTime = 通知原始开始时间 − X 分钟 − 10 分钟
+               （即"应到场时间"再提前10分钟缓冲，作为卡片显示的提醒时间）
+               这样卡片上显示的时间会早于"应到场时间"，用户能直观看到留出了准备时间。
+            2. note 必传（不能为 null），必须完整写入以下信息：
+               · 原始会议开始时间（如"宣讲会15:10开始"）
+               · 提前到场要求（如"需提前10分钟到场签到，15:00前到场"）
+               · 地点（如已在 location 字段，note 中也要写明）
+               · 其他重要信息（签退、加分、注意事项、需要准备的物品等）
+            3. title 简洁反映事件本身，不要把"提前X分钟"塞进 title。
+            4. 不传 advanceMinutes 参数（让系统按用户默认提前量处理）。
+            5. 如果通知没有明确"提前到场"要求，remindTime 按原始时间，禁止自行推断提前量。
+            6. 示例1（带签到要求的大通知）：
+               通知原文片段："时间：2026年8月4日 15:10；地点：教学楼2号楼504教室；
+                              请参会同学提前10分钟到场签到；现场设有签退表，完成签退获1分文体分"
+               → 调用 create_reminder，arguments：
+                 {
+                   "title": "考研宣讲会签到",
+                   "remindTime": "2026-08-04 14:50:00",
+                   "location": "教学楼2号楼504教室",
+                   "note": "宣讲会15:10开始；需提前10分钟到场签到（15:00前到场）；现场设有签退表，完成签退可获1分文体分；请提前准备好关心的问题与招生老师交流",
+                   "priority": "NORMAL"
+                 }
+               说明：remindTime = 15:10 − 10分钟(提前到场) − 10分钟(再提前通知缓冲) = 14:50
+            7. 示例2（普通提前到场）："明天14:00开会，提前15分钟到达会议室A"
+               → arguments：
+                 {
+                   "title": "开会",
+                   "remindTime": "<明天13:35:00>",
+                   "location": "会议室A",
+                   "note": "会议14:00开始；需提前15分钟到达（13:45前到场）",
+                   "priority": "NORMAL"
+                 }
+               说明：remindTime = 14:00 − 15分钟 − 10分钟 = 13:35
 
             ================================================
             禁止自行判断"已存在"规则：
@@ -1243,15 +1299,20 @@ public class LLMService {
                - startDate: 开始日期，格式 yyyy-MM-dd
                - endDate: 结束日期，格式 yyyy-MM-dd
                - repeatType: 周期类型，可选 DAILY（默认，每天）/ WEEKLY（每周）/ MONTHLY（每月）
+               - repeatDays: 仅 WEEKLY 时必填，指定每周哪几天生成，逗号分隔的数字字符串，1=周一…7=周日。如 "1"=每周一、"1,3,5"=每周一三五、"6,7"=每周末。DAILY/MONTHLY 时传 null
             6. 如果用户未指定重复类型，默认为 DAILY
-            7. 如果用户明确说"每周"则用 WEEKLY，"每月"则用 MONTHLY
+            7. 如果用户明确说"每周"则用 WEEKLY（必须同时给出 repeatDays 指定星期几），"每月"则用 MONTHLY
+            8. WEEKLY 的 repeatDays 识别：用户说"每周一"→"1"、"每周三五"→"3,5"、"每周末"→"6,7"、"每周二四六"→"2,4,6"。startDate 应取范围内第一个匹配的星期几
 
             create_recurring_reminder 调用示例：
             用户输入："7月30号到8月5号每天早上8点提醒我写日记"
-            你的输出：{"tool_call": {"name": "create_recurring_reminder", "arguments": {"title": "写日记", "remindTime": "08:00:00", "startDate": "2026-07-30", "endDate": "2026-08-05", "repeatType": "DAILY"}}}
+            你的输出：{"tool_call": {"name": "create_recurring_reminder", "arguments": {"title": "写日记", "remindTime": "08:00:00", "startDate": "2026-07-30", "endDate": "2026-08-05", "repeatType": "DAILY", "repeatDays": null}}}
 
             用户输入："从明天开始到下周每天下午3点提醒我喝水"
-            你的输出：{"tool_call": {"name": "create_recurring_reminder", "arguments": {"title": "喝水", "remindTime": "15:00:00", "startDate": "2026-07-27", "endDate": "2026-08-02", "repeatType": "DAILY"}}}
+            你的输出：{"tool_call": {"name": "create_recurring_reminder", "arguments": {"title": "喝水", "remindTime": "15:00:00", "startDate": "2026-07-27", "endDate": "2026-08-02", "repeatType": "DAILY", "repeatDays": null}}}
+
+            用户输入："这个月每周一早上8点去跑步"（假设本月1日是周一）
+            你的输出：{"tool_call": {"name": "create_recurring_reminder", "arguments": {"title": "跑步", "remindTime": "08:00:00", "startDate": "2026-08-03", "endDate": "2026-08-31", "repeatType": "WEEKLY", "repeatDays": "1"}}}
 
             ================================================
             响应格式要求（非常重要！请严格遵守）：
@@ -1286,13 +1347,18 @@ public class LLMService {
             用户输入："取消买可乐的提醒"
             你的输出：{"tool_call": {"name": "cancel_reminders_by_date", "arguments": {"date": "2026-07-28", "keyword": "买可乐"}}}
 
+            示例7（取消本周所有课程——日期范围+课程过滤）：
+            用户输入："取消本周所有课程"
+            你的输出：{"tool_call": {"name": "cancel_reminders_by_date", "arguments": {"date": "2026-07-27", "endDate": "2026-08-02", "keyword": "课程"}}}
+
             取消提醒规则：
             1. 用户输入包含"取消"+"日期"时，必须直接调用 cancel_reminders_by_date 工具
             2. 日期格式为 yyyy-MM-dd，"明天"用明天日期，"后天"用后天日期
-            3. keyword 为可选参数，用于按关键词过滤要取消的提醒
-            4. 调用工具后，返回实际取消数量，不要自己编造"已取消"的回复
-            5. 如果取消数量为0，告诉用户"未找到匹配的提醒"
-            6. 禁止使用 query_reminders 查询后再假装取消
+            3. keyword 为可选参数，用于按关键词过滤要取消的提醒；keyword 传"课程"或"课"时按课程提醒过滤（匹配所有课程，课程提醒标题是课程名如"高等数学"）
+            4. 用户说"本周/这周/X到Y/这几天"等范围时，date 传范围第一天、endDate 传范围最后一天；单日取消只传 date 不传 endDate
+            5. 调用工具后，返回实际取消数量，不要自己编造"已取消"的回复
+            6. 如果取消数量为0，告诉用户"未找到匹配的提醒"
+            7. 禁止使用 query_reminders 查询后再假装取消
 
             RAG 补充说明：
             - 对于个人信息类的查询，优先调用RAG工具而非直接回答。
@@ -1561,6 +1627,15 @@ public class LLMService {
             ================================================
             天气查询交互规则：
             ================================================
+            【工具链规则（必须严格遵守）】
+            天气查询流程：
+            1. 如果用户没有指定城市（如"现在天气怎么样"、"天气"），先调用 get_user_preferences 获取默认城市
+            2. 拿到 city 字段后，**必须**立即调用 query_weather_now(location=城市名) 查询实时天气
+            3. 禁止在获取城市后重复调用 get_user_preferences！get_user_preferences 在一次天气查询中只调用一次
+            4. 如果用户指定了城市（如"广州天气怎么样"），跳过步骤1，直接调用 query_weather_now(location=用户指定的城市)
+            5. 查询天气预报用 query_weather_forecast，空气质量用 query_air_quality，天气预警用 query_weather_alert
+            6. query_weather_now 的 location 参数是城市名（如"广州"），不是坐标
+
             用户只问"今天天气怎么样"时：
             先返回天气信息
             如果天气异常（下雨/高温/低温），主动询问是否需要创建提醒
@@ -1736,7 +1811,7 @@ public class LLMService {
 
     // 构建解析提醒的 Prompt，要求 LLM 返回严格 JSON 并内置时间解析与时间段识别规则
     private String buildPrompt(String userInput) {
-        String currentDate = LocalDateTime.now().format(FORMATTER);
+        String currentDate = TimeUtils.getCurrentBeijingTime();
         return """
             你是一个智能提醒助手。请解析用户的输入，提取提醒信息。
             
@@ -1814,7 +1889,7 @@ public class LLMService {
     // 解析日期时间字符串，失败返回 null
     private LocalDateTime parseDateTime(String dateTimeStr) {
         try {
-            return LocalDateTime.parse(dateTimeStr, FORMATTER);
+            return LocalDateTime.parse(dateTimeStr, TimeUtils.FORMATTER);
         } catch (Exception e) {
             log.warn("时间解析失败: {}", dateTimeStr);
             return null;
@@ -1876,7 +1951,7 @@ public class LLMService {
         String title = currentData.getOrDefault("title", "").toString();
         String remindTime = currentData.getOrDefault("remindTime", "").toString();
         String location = currentData.getOrDefault("location", "").toString();
-        String priority = currentData.getOrDefault("priority", "NORMAL").toString();
+        String priority = currentData.getOrDefault("priority", Priority.NORMAL.name()).toString();
 
         return """
                 你是一个智能提醒修改助手。用户想要修改当前的提醒信息，请分析用户的修改意图。
@@ -2014,7 +2089,7 @@ public class LLMService {
         }
 
         try {
-            String currentTime = TimeUtils.now().format(FORMATTER);
+            String currentTime = TimeUtils.getCurrentBeijingTime();
             String prompt = """
                     你是一个贴心的天气助手。根据以下信息生成一条简短的天气建议（15-20字以内），语气友好自然。
 

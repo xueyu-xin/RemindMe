@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.entity;
 
+import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.enums.RepeatType;
 import jakarta.persistence.*;
 import lombok.Data;
@@ -53,12 +54,17 @@ public class RecurringReminder {
     @Column(name = "repeat_type", nullable = false)
     private RepeatType repeatType;
 
+    // WEEKLY 时生效：指定每周哪几天生成，存逗号分隔的 ISO DayOfWeek（1=周一…7=周日），如 "1" 或 "1,3,5"。
+    // 为空时（兼容旧数据）WEEKLY 退化为每天都生成。DAILY/MONTHLY 忽略此字段
+    @Column(name = "repeat_days")
+    private String repeatDays;
+
     // 地点（可选），生成实例时原样复制
     private String location;
 
     // 优先级字符串：LOW / NORMAL / HIGH，默认 NORMAL
     @Column(nullable = false)
-    private String priority = "NORMAL";
+    private String priority = Priority.NORMAL.name();
 
     // 提前多少分钟提醒（相对 remind_time 的偏移，默认 10 分钟）
     @Column(name = "advance_minutes", nullable = false)

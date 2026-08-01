@@ -13,6 +13,12 @@ public final class TimeUtils {
     public static final DateTimeFormatter FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     // 纯日期格式：yyyy-MM-dd，日程日期、经期日期等仅需年月日的场景
     public static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    // 纯时间格式：HH:mm，日程视图时间标签、确认卡片时间摘要等场景
+    public static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
+    // 带秒时间格式：HH:mm:ss，循环提醒时间字段、日志时间戳等场景
+    public static final DateTimeFormatter TIME_SECONDS_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
+    // 日期+分钟格式：yyyy-MM-dd HH:mm，不带秒的完整时间，确认卡片时间摘要等场景
+    public static final DateTimeFormatter DATETIME_MINUTE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     // 私有构造，禁止实例化
     private TimeUtils() {
@@ -63,5 +69,13 @@ public final class TimeUtils {
     // 获取当前北京时间完整字符串；等价于 format(now())，日志/调试可直接调用
     public static String getCurrentBeijingTime() {
         return now().format(FORMATTER);
+    }
+
+    // LocalDateTime 转「HH:mm」纯时间字符串；null 入参返回 null
+    public static String formatTime(LocalDateTime dateTime) {
+        if (dateTime == null) {
+            return null;
+        }
+        return dateTime.format(TIME_FORMATTER);
     }
 }

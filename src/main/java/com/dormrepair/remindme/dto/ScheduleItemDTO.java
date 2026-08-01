@@ -21,6 +21,9 @@ public class ScheduleItemDTO {
     // 日程发生时间，格式 HH:mm
     private String time;
 
+    // 日程结束时间，格式 HH:mm（课表导入场景下来自节次时间表，可选）
+    private String endTime;
+
     // 地点（可选）
     private String location;
 

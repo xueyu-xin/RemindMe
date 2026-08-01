@@ -10,6 +10,7 @@ import com.dormrepair.remindme.service.ConfirmationService;
 import com.dormrepair.remindme.service.DialogStatsService;
 import com.dormrepair.remindme.service.LLMService;
 import com.dormrepair.remindme.service.ReminderService;
+import com.dormrepair.remindme.utils.TimeUtils;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -112,10 +113,11 @@ public class ReminderController {
         // 组装统一的 parsedData，传给确认会话或直接返回；缺省提前 10 分钟、置信度 0.95
         Map<String, Object> parsedData = new HashMap<>();
         parsedData.put("title", result.title());
-        parsedData.put("remindTime", result.remindTime() != null ? result.remindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) : null);
+        parsedData.put("remindTime", result.remindTime() != null ? result.remindTime().format(TimeUtils.FORMATTER) : null);
         parsedData.put("intentType", result.intentType());
         parsedData.put("location", result.location());
         parsedData.put("priority", result.priority());
+        parsedData.put("note", result.note());
         parsedData.put("advanceMinutes", 10);
         parsedData.put("confidence", 0.95);
 

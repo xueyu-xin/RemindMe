@@ -189,8 +189,9 @@ public class ToolRegistry implements SmartInitializingSingleton {
         ));
         paramDescriptions.put("cancelRemindersByDate", Map.of(
                 "userId", "用户ID（系统自动填充）",
-                "date", "日期，格式 yyyy-MM-dd（必填）",
-                "keyword", "关键词，用于按标题过滤要取消的提醒（可选）"
+                "date", "开始日期，格式 yyyy-MM-dd（必填）",
+                "endDate", "结束日期，格式 yyyy-MM-dd（可选）。用户说\"本周/这周/X到Y/这几天\"等范围时必填，传范围最后一天；单日取消不传",
+                "keyword", "关键词，用于过滤要取消的提醒（可选）。传\"课程\"或\"课\"时按课程提醒（来源=COURSE）过滤，匹配所有课程；其他关键词按标题包含过滤"
         ));
         paramDescriptions.put("queryWeatherNowForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",
@@ -246,7 +247,8 @@ public class ToolRegistry implements SmartInitializingSingleton {
                 "remindTime", "每天提醒时间，格式为 HH:mm:ss（必填）",
                 "startDate", "开始日期，格式为 yyyy-MM-dd（必填）",
                 "endDate", "结束日期，格式为 yyyy-MM-dd（必填）",
-                "repeatType", "周期类型，可选值 DAILY/WEEKLY/MONTHLY（默认DAILY）"
+                "repeatType", "周期类型，可选值 DAILY/WEEKLY/MONTHLY（默认DAILY）",
+                "repeatDays", "WEEKLY 时必填，指定每周哪几天生成，逗号分隔的数字字符串，1=周一…7=周日，如 \"1\" 表示每周一、\"1,3,5\" 表示周一三五。DAILY/MONTHLY 时传 null"
         ));
         // RAG 相关参数描述
         paramDescriptions.put("retrievePrivateKnowledgeForAgent", Map.of(

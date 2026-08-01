@@ -3,12 +3,12 @@ package com.dormrepair.remindme.controller;
 import com.dormrepair.remindme.entity.RecurringReminder;
 import com.dormrepair.remindme.enums.RepeatType;
 import com.dormrepair.remindme.service.RecurringReminderService;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,8 +21,6 @@ public class RecurringReminderController {
 
     // 周期提醒服务：模板 CRUD、状态流转（ACTIVE→PAUSED→CANCELLED）、按用户过滤等核心逻辑
     private final RecurringReminderService recurringReminderService;
-    // 日期格式常量：起止日期（yyyy-MM-dd）统一用此格式解析，避免各处硬编码
-    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
 
     // 列表接口：按用户返回其所有 ACTIVE/PAUSED/CANCELLED 状态的周期提醒模板，供调用方查询使用
     @GetMapping
@@ -77,16 +75,17 @@ public class RecurringReminderController {
             String startDateStr = (String) body.get("startDate");
             String endDateStr = (String) body.get("endDate");
             String repeatTypeStr = (String) body.get("repeatType");
+            String repeatDays = (String) body.get("repeatDays");
             String location = (String) body.get("location");
             String priority = (String) body.get("priority");
 
             // 字符串转 LocalDate，空值保持 null 以便底层按"不修改该字段"处理
-            LocalDate startDate = startDateStr != null ? LocalDate.parse(startDateStr, DATE_FORMATTER) : null;
-            LocalDate endDate = endDateStr != null ? LocalDate.parse(endDateStr, DATE_FORMATTER) : null;
+            LocalDate startDate = startDateStr != null ? LocalDate.parse(startDateStr, TimeUtils.DATE_FORMATTER) : null;
+            LocalDate endDate = endDateStr != null ? LocalDate.parse(endDateStr, TimeUtils.DATE_FORMATTER) : null;
             RepeatType repeatType = repeatTypeStr != null ? RepeatType.valueOf(repeatTypeStr) : null;
 
             RecurringReminder updated = recurringReminderService.updateRecurringReminder(
-                    id, userId, title, remindTime, startDate, endDate, repeatType, location, priority);
+                    id, userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority);
 
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);

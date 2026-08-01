@@ -6,12 +6,14 @@ import com.dormrepair.remindme.entity.RecurringInstance;
 import com.dormrepair.remindme.entity.RecurringReminder;
 import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.enums.ConfirmStatus;
+import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.enums.RepeatType;
 import com.dormrepair.remindme.enums.ReminderSource;
 import com.dormrepair.remindme.enums.ReminderStatus;
 import com.dormrepair.remindme.repository.RecurringInstanceRepository;
 import com.dormrepair.remindme.repository.RecurringReminderRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -20,7 +22,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -34,30 +35,26 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class RecurringReminderService {
 
-    private final RecurringReminderRepository recurringReminderRepository;
     private final RecurringInstanceRepository recurringInstanceRepository;
+    private final RecurringReminderRepository recurringReminderRepository;
     private final ReminderRepository reminderRepository;
     private final ConflictDetectionService conflictDetectionService;
     private final ConfirmationService confirmationService;
-
-    // 纯时间格式：解析 remindTime（HH:mm:ss）
-    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm:ss");
-    // 完整日期时间格式：序列化冲突项的 remindTime
-    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     // 创建周期提醒入口
     // 不直接落库，而是构建 parsedData 走确认卡片流程，由确认回调真正创建模板与实例
     @Transactional
     public Map<String, Object> createRecurringReminder(Long userId, String title, String remindTime,
-            String startDate, String endDate, String repeatType, String location, String priority) {
+            String startDate, String endDate, String repeatType, String repeatDays,
+            String location, String priority) {
 
-        log.info("创建周期提醒: userId={}, title={}, remindTime={}, startDate={}, endDate={}, repeatType={}",
-                userId, title, remindTime, startDate, endDate, repeatType);
+        log.info("创建周期提醒: userId={}, title={}, remindTime={}, startDate={}, endDate={}, repeatType={}, repeatDays={}",
+                userId, title, remindTime, startDate, endDate, repeatType, repeatDays);
 
         Map<String, Object> result = new HashMap<>();
 
         try {
-            LocalTime parsedTime = LocalTime.parse(remindTime, TIME_FORMATTER);
+            LocalTime parsedTime = LocalTime.parse(remindTime, TimeUtils.TIME_SECONDS_FORMATTER);
             LocalDate parsedStartDate = LocalDate.parse(startDate);
             LocalDate parsedEndDate = LocalDate.parse(endDate);
             RepeatType parsedRepeatType = (repeatType != null && !repeatType.isBlank())
@@ -68,6 +65,13 @@ public class RecurringReminderService {
                 result.put("error", "开始日期不能晚于结束日期");
                 return result;
             }
+
+            // 构造探针模板（不落库），供 shouldGenerateForDate 判断哪些日期真正会生成实例
+            RecurringReminder probe = new RecurringReminder();
+            probe.setStartDate(parsedStartDate);
+            probe.setEndDate(parsedEndDate);
+            probe.setRepeatType(parsedRepeatType);
+            probe.setRepeatDays(repeatDays);
 
             // 构建周期提醒的 parsedData，走确认卡片流程
             String fullDateTime = startDate + " " + remindTime;  // "2026-08-03 19:00:00"
@@ -82,18 +86,31 @@ public class RecurringReminderService {
             parsedData.put("recurringStartDate", startDate);
             parsedData.put("recurringEndDate", endDate);
             parsedData.put("recurringRepeatType", parsedRepeatType.name());
+            parsedData.put("repeatDays", repeatDays);
             parsedData.put("location", location);
-            parsedData.put("priority", priority != null ? priority : "NORMAL");
+            parsedData.put("priority", priority != null ? priority : Priority.NORMAL.name());
             parsedData.put("source", "AGENT");
 
-            int totalDays = (int) (parsedEndDate.toEpochDay() - parsedStartDate.toEpochDay()) + 1;
+            // totalDays 只统计真正会生成实例的日期数（WEEKLY 按 repeatDays 过滤），而非整个范围跨度
+            int totalDays = 0;
+            LocalDate scan = parsedStartDate;
+            while (!scan.isAfter(parsedEndDate)) {
+                if (shouldGenerateForDate(probe, scan)) {
+                    totalDays++;
+                }
+                scan = scan.plusDays(1);
+            }
             parsedData.put("totalDays", totalDays);
 
-            // 周期冲突检测 - 遍历日期范围内每一天
+            // 周期冲突检测 - 仅遍历真正会生成实例的日期
             List<Map<String, Object>> allConflicts = new ArrayList<>();
             int conflictDayCount = 0;
             LocalDate currentDate = parsedStartDate;
             while (!currentDate.isAfter(parsedEndDate)) {
+                if (!shouldGenerateForDate(probe, currentDate)) {
+                    currentDate = currentDate.plusDays(1);
+                    continue;
+                }
                 LocalDateTime dateTime = LocalDateTime.of(currentDate, parsedTime);
                 ConflictResponse dayConflict = conflictDetectionService.checkConflict(userId, dateTime, null);
                 if (dayConflict.isHasConflict() && dayConflict.getConflicts() != null) {
@@ -103,7 +120,7 @@ public class RecurringReminderService {
                         conflictMap.put("id", item.getId());
                         conflictMap.put("title", item.getTitle());
                         conflictMap.put("remindTime", item.getRemindTime() != null
-                                ? item.getRemindTime().format(DATE_TIME_FORMATTER) : null);
+                                ? item.getRemindTime().format(TimeUtils.FORMATTER) : null);
                         conflictMap.put("conflictDate", currentDate.toString());
                         allConflicts.add(conflictMap);
                     }
@@ -130,6 +147,7 @@ public class RecurringReminderService {
             result.put("startDate", startDate);
             result.put("endDate", endDate);
             result.put("repeatType", parsedRepeatType.name());
+            result.put("repeatDays", repeatDays);
             result.put("totalDays", totalDays);
             result.put("sessionId", card.getData().getSessionId());
             result.put("confirmationRequired", true);
@@ -151,27 +169,29 @@ public class RecurringReminderService {
     // 从确认流程生成周期实例
     @Transactional
     public Map<String, Object> generateInstancesFromConfirm(Long userId, String title, String remindTime,
-            String startDate, String endDate, String repeatType, String location, String priority) {
-        return confirmAndCreateRecurring(userId, title, remindTime, startDate, endDate, repeatType, location, priority);
+            String startDate, String endDate, String repeatType, String repeatDays,
+            String location, String priority) {
+        return confirmAndCreateRecurring(userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority);
     }
 
     // 直接创建全部周期实例
     // 不检查冲突，冲突日多条提醒并存
     @Transactional
     public Map<String, Object> generateAll(Long userId, String title, String remindTime,
-            String startDate, String endDate, String repeatType, String location, String priority) {
+            String startDate, String endDate, String repeatType, String repeatDays,
+            String location, String priority) {
         Map<String, Object> result = new HashMap<>();
         try {
-            LocalTime parsedTime = LocalTime.parse(remindTime, TIME_FORMATTER);
+            LocalTime parsedTime = LocalTime.parse(remindTime, TimeUtils.TIME_SECONDS_FORMATTER);
             LocalDate parsedStartDate = LocalDate.parse(startDate);
             LocalDate parsedEndDate = LocalDate.parse(endDate);
             RepeatType parsedRepeatType = RepeatType.valueOf(repeatType);
 
-            log.info("直接创建周期提醒: userId={}, title={}, time={}, {}~{}, repeat={}",
-                    userId, title, remindTime, startDate, endDate, repeatType);
+            log.info("直接创建周期提醒: userId={}, title={}, time={}, {}~{}, repeat={}, repeatDays={}",
+                    userId, title, remindTime, startDate, endDate, repeatType, repeatDays);
 
             RecurringReminder template = createRecurringTemplate(userId, title, parsedTime,
-                    parsedStartDate, parsedEndDate, parsedRepeatType, location, priority);
+                    parsedStartDate, parsedEndDate, parsedRepeatType, repeatDays, location, priority);
             log.info("周期模板已保存: recurringId={}, title={}", template.getId(), template.getTitle());
 
             int total = 0, success = 0;
@@ -207,10 +227,11 @@ public class RecurringReminderService {
     // 跳过冲突日，只创建无冲突的日期
     @Transactional
     public Map<String, Object> generateWithSkip(Long userId, String title, String remindTime,
-            String startDate, String endDate, String repeatType, String location, String priority) {
+            String startDate, String endDate, String repeatType, String repeatDays,
+            String location, String priority) {
         Map<String, Object> result = new HashMap<>();
         try {
-            LocalTime parsedTime = LocalTime.parse(remindTime, TIME_FORMATTER);
+            LocalTime parsedTime = LocalTime.parse(remindTime, TimeUtils.TIME_SECONDS_FORMATTER);
             LocalDate parsedStartDate = LocalDate.parse(startDate);
             LocalDate parsedEndDate = LocalDate.parse(endDate);
             RepeatType parsedRepeatType = RepeatType.valueOf(repeatType);
@@ -218,7 +239,7 @@ public class RecurringReminderService {
             log.info("跳过冲突创建周期提醒: userId={}, title={}, time={}, {}~{}", userId, title, remindTime, startDate, endDate);
 
             RecurringReminder template = createRecurringTemplate(userId, title, parsedTime,
-                    parsedStartDate, parsedEndDate, parsedRepeatType, location, priority);
+                    parsedStartDate, parsedEndDate, parsedRepeatType, repeatDays, location, priority);
             log.info("周期模板已保存: recurringId={}", template.getId());
 
             int total = 0, success = 0, skipped = 0;
@@ -269,10 +290,11 @@ public class RecurringReminderService {
     // 全部覆盖：把冲突日原有提醒置为 CANCELLED，再创建全部日期
     @Transactional
     public Map<String, Object> generateWithOverwrite(Long userId, String title, String remindTime,
-            String startDate, String endDate, String repeatType, String location, String priority) {
+            String startDate, String endDate, String repeatType, String repeatDays,
+            String location, String priority) {
         Map<String, Object> result = new HashMap<>();
         try {
-            LocalTime parsedTime = LocalTime.parse(remindTime, TIME_FORMATTER);
+            LocalTime parsedTime = LocalTime.parse(remindTime, TimeUtils.TIME_SECONDS_FORMATTER);
             LocalDate parsedStartDate = LocalDate.parse(startDate);
             LocalDate parsedEndDate = LocalDate.parse(endDate);
             RepeatType parsedRepeatType = RepeatType.valueOf(repeatType);
@@ -280,7 +302,7 @@ public class RecurringReminderService {
             log.info("覆盖创建周期提醒: userId={}, title={}, time={}, {}~{}", userId, title, remindTime, startDate, endDate);
 
             RecurringReminder template = createRecurringTemplate(userId, title, parsedTime,
-                    parsedStartDate, parsedEndDate, parsedRepeatType, location, priority);
+                    parsedStartDate, parsedEndDate, parsedRepeatType, repeatDays, location, priority);
             log.info("周期模板已保存: recurringId={}", template.getId());
 
             int total = 0, success = 0, overwritten = 0;
@@ -341,7 +363,7 @@ public class RecurringReminderService {
     // 创建并保存周期模板，状态置为 ACTIVE，来源标记为 AGENT
     private RecurringReminder createRecurringTemplate(Long userId, String title, LocalTime parsedTime,
             LocalDate parsedStartDate, LocalDate parsedEndDate, RepeatType parsedRepeatType,
-            String location, String priority) {
+            String repeatDays, String location, String priority) {
         RecurringReminder template = new RecurringReminder();
         template.setUserId(userId);
         template.setTitle(title);
@@ -349,8 +371,9 @@ public class RecurringReminderService {
         template.setStartDate(parsedStartDate);
         template.setEndDate(parsedEndDate);
         template.setRepeatType(parsedRepeatType);
+        template.setRepeatDays(repeatDays);
         template.setLocation(location);
-        template.setPriority(priority != null ? priority : "NORMAL");
+        template.setPriority(priority != null ? priority : Priority.NORMAL.name());
         template.setStatus("ACTIVE");
         template.setSource("AGENT");
         template.setTimezone("Asia/Shanghai");
@@ -387,12 +410,13 @@ public class RecurringReminderService {
     // 确认回调后实际创建周期模板和实例
     @Transactional
     public Map<String, Object> confirmAndCreateRecurring(Long userId, String title, String remindTime,
-            String startDate, String endDate, String repeatType, String location, String priority) {
+            String startDate, String endDate, String repeatType, String repeatDays,
+            String location, String priority) {
 
         Map<String, Object> result = new HashMap<>();
 
         try {
-            LocalTime parsedTime = LocalTime.parse(remindTime, TIME_FORMATTER);
+            LocalTime parsedTime = LocalTime.parse(remindTime, TimeUtils.TIME_SECONDS_FORMATTER);
             LocalDate parsedStartDate = LocalDate.parse(startDate);
             LocalDate parsedEndDate = LocalDate.parse(endDate);
             RepeatType parsedRepeatType = RepeatType.valueOf(repeatType);
@@ -404,8 +428,9 @@ public class RecurringReminderService {
             template.setStartDate(parsedStartDate);
             template.setEndDate(parsedEndDate);
             template.setRepeatType(parsedRepeatType);
+            template.setRepeatDays(repeatDays);
             template.setLocation(location);
-            template.setPriority(priority != null ? priority : "NORMAL");
+            template.setPriority(priority != null ? priority : Priority.NORMAL.name());
             template.setStatus("ACTIVE");
             template.setSource("AGENT");
             template.setTimezone("Asia/Shanghai");
@@ -484,8 +509,10 @@ public class RecurringReminderService {
     }
 
     // 判断某日是否应生成实例：先校验是否落在周期范围内，再按重复类型过滤
-    // MONTHLY 仅在每月与起始日相同的那一天生成；DAILY/WEEKLY 当前每天都生成
-    private boolean shouldGenerateForDate(RecurringReminder template, LocalDate date) {
+    // DAILY 每天生成；WEEKLY 按 repeatDays 指定的星期几生成（为空时兼容旧数据退化为每天）；
+    // MONTHLY 仅在每月与起始日相同的那一天生成
+    // public 供 CalendarController 判断日历某天是否被周期模板覆盖（用于小红点/⟳标记）
+    public boolean shouldGenerateForDate(RecurringReminder template, LocalDate date) {
         LocalDate start = template.getStartDate();
         LocalDate end = template.getEndDate();
         if (date.isBefore(start) || date.isAfter(end)) {
@@ -496,7 +523,21 @@ public class RecurringReminderService {
         if (repeatType == RepeatType.DAILY) {
             return true;
         } else if (repeatType == RepeatType.WEEKLY) {
-            return true;
+            String repeatDays = template.getRepeatDays();
+            if (repeatDays == null || repeatDays.isBlank()) {
+                // 兼容旧数据：未指定星期几时退化为每天都生成
+                return true;
+            }
+            int dow = date.getDayOfWeek().getValue();  // ISO 1=周一…7=周日
+            for (String token : repeatDays.split(",")) {
+                try {
+                    if (Integer.parseInt(token.trim()) == dow) {
+                        return true;
+                    }
+                } catch (NumberFormatException ignored) {
+                }
+            }
+            return false;
         } else if (repeatType == RepeatType.MONTHLY) {
             return date.getDayOfMonth() == start.getDayOfMonth();
         }
@@ -528,7 +569,7 @@ public class RecurringReminderService {
 
             Map<String, Object> parsedData = new HashMap<>();
             parsedData.put("title", template.getTitle());
-            parsedData.put("remindTime", remindDateTime.format(DATE_TIME_FORMATTER));
+            parsedData.put("remindTime", remindDateTime.format(TimeUtils.FORMATTER));
             parsedData.put("location", template.getLocation());
             parsedData.put("priority", template.getPriority());
             parsedData.put("advanceMinutes", template.getAdvanceMinutes());
@@ -541,7 +582,7 @@ public class RecurringReminderService {
             parsedData.put("startDate", template.getStartDate().toString());
             parsedData.put("endDate", template.getEndDate().toString());
             parsedData.put("repeatType", template.getRepeatType().name());
-            parsedData.put("recurringRemindTime", template.getRemindTime().format(TIME_FORMATTER));
+            parsedData.put("recurringRemindTime", template.getRemindTime().format(TimeUtils.TIME_SECONDS_FORMATTER));
 
             confirmationService.createSession(template.getUserId(), template.getTitle(), parsedData);
 
@@ -667,18 +708,19 @@ public class RecurringReminderService {
     @Transactional
     public RecurringReminder updateRecurringReminder(Long id, Long userId, String title,
             String remindTime, LocalDate startDate, LocalDate endDate, RepeatType repeatType,
-            String location, String priority) {
+            String repeatDays, String location, String priority) {
         RecurringReminder reminder = recurringReminderRepository.findById(id)
                 .filter(r -> r.getUserId().equals(userId))
                 .orElseThrow(() -> new IllegalArgumentException("周期提醒不存在或无权操作"));
 
         if (title != null) reminder.setTitle(title);
         if (remindTime != null) {
-            reminder.setRemindTime(java.time.LocalTime.parse(remindTime, TIME_FORMATTER));
+            reminder.setRemindTime(java.time.LocalTime.parse(remindTime, TimeUtils.TIME_SECONDS_FORMATTER));
         }
         if (startDate != null) reminder.setStartDate(startDate);
         if (endDate != null) reminder.setEndDate(endDate);
         if (repeatType != null) reminder.setRepeatType(repeatType);
+        if (repeatDays != null) reminder.setRepeatDays(repeatDays);
         if (location != null) reminder.setLocation(location);
         if (priority != null) reminder.setPriority(priority);
 

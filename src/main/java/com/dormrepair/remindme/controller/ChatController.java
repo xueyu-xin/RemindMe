@@ -8,6 +8,7 @@ import com.dormrepair.remindme.enums.IntentType;
 import com.dormrepair.remindme.service.ConfirmationService;
 import com.dormrepair.remindme.service.DialogStatsService;
 import com.dormrepair.remindme.service.LLMService;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -133,7 +134,7 @@ public class ChatController {
                 String keyword = text.substring(2).trim();
                 com.dormrepair.remindme.entity.Reminder reminder = confirmationService.confirmByTitle(userId, keyword);
                 String timeStr = reminder.getRemindTime() != null 
-                        ? reminder.getRemindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")) 
+                        ? reminder.getRemindTime().format(TimeUtils.DATETIME_MINUTE_FORMATTER) 
                         : "未设置";
                 Map<String, Object> response = new HashMap<>();
                 response.put("success", true);
@@ -197,10 +198,11 @@ public class ChatController {
 
                 Map<String, Object> parsedData = new HashMap<>();
                 parsedData.put("title", result.title());
-                parsedData.put("remindTime", result.remindTime() != null ? result.remindTime().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")) : null);
+                parsedData.put("remindTime", result.remindTime() != null ? result.remindTime().format(TimeUtils.FORMATTER) : null);
                 parsedData.put("intentType", result.intentType());
                 parsedData.put("location", result.location());
                 parsedData.put("priority", result.priority());
+                parsedData.put("note", result.note());
                 parsedData.put("advanceMinutes", result.advanceMinutes() != null ? result.advanceMinutes() : getDefaultAdvance(userId));
                 parsedData.put("confidence", 0.95);
 
@@ -267,10 +269,11 @@ public class ChatController {
                 log.info("时间兜底解析失败，使用当前时间 → {}", remindTime);
             }
         }
-        parsedData.put("remindTime", remindTime.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+        parsedData.put("remindTime", remindTime.format(TimeUtils.FORMATTER));
         parsedData.put("intentType", result.intentType());
         parsedData.put("location", result.location());
         parsedData.put("priority", result.priority());
+        parsedData.put("note", result.note());
         parsedData.put("advanceMinutes", advance);
         parsedData.put("confidence", 0.95);
 

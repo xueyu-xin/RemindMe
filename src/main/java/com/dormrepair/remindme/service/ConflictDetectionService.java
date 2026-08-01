@@ -5,12 +5,12 @@ import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.enums.ConfirmStatus;
 import com.dormrepair.remindme.enums.ReminderStatus;
 import com.dormrepair.remindme.repository.ReminderRepository;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -24,7 +24,6 @@ public class ConflictDetectionService {
 
     // 单点提醒的冲突窗口：前后各 5 分钟视为冲突
     private static final int CONFLICT_WINDOW_MINUTES = 5;
-    private static final DateTimeFormatter TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm");
 
     // 单点提醒冲突检测的便捷重载，endTime 传 null
     // userId              用户ID
@@ -112,14 +111,14 @@ public class ConflictDetectionService {
         if (conflicts.size() == 1) {
             // 单个冲突：标题 + 时间
             ConflictResponse.ConflictItem item = conflicts.get(0);
-            String timeStr = item.getRemindTime().format(TIME_FORMATTER);
+            String timeStr = item.getRemindTime().format(TimeUtils.TIME_FORMATTER);
             sb.append("「").append(item.getTitle()).append("」在 ").append(timeStr);
         } else {
             // 多个冲突：列出数量并逐个拼接
             sb.append("（").append(conflicts.size()).append("个）：");
             for (int i = 0; i < conflicts.size(); i++) {
                 ConflictResponse.ConflictItem item = conflicts.get(i);
-                String timeStr = item.getRemindTime().format(TIME_FORMATTER);
+                String timeStr = item.getRemindTime().format(TimeUtils.TIME_FORMATTER);
                 if (i > 0) {
                     sb.append("、");
                 }
@@ -127,7 +126,7 @@ public class ConflictDetectionService {
             }
         }
 
-        String newTimeStr = newRemindTime.format(TIME_FORMATTER);
+        String newTimeStr = newRemindTime.format(TimeUtils.TIME_FORMATTER);
         sb.append("，当前提醒 ").append(newTimeStr).append(" 与其冲突");
 
         return sb.toString();

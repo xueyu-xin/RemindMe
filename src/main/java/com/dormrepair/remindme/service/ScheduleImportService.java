@@ -16,11 +16,13 @@ import com.dormrepair.remindme.enums.ExecutionStatus;
 import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.enums.ReminderSource;
 import com.dormrepair.remindme.enums.ReminderStatus;
+import com.dormrepair.remindme.enums.RepeatType;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.repository.ScheduleImportItemRepository;
 import com.dormrepair.remindme.repository.ScheduleImportRepository;
 import com.dormrepair.remindme.repository.UserRepository;
 import com.dormrepair.remindme.utils.FileParserUtil;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -31,7 +33,6 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -51,10 +52,6 @@ public class ScheduleImportService {
     private final ConflictDetectionService conflictDetectionService;
     private final UserRepository userRepository;
     private final ReminderRepository reminderRepository;
-
-    private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd");
-    private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm");
-    private static final DateTimeFormatter REMIND_TIME_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     // 课表识别结果缓存，importId 映射到识别出的 ScheduleTableDTO
     private final Map<Long, ScheduleTableDTO> scheduleTableCache = new ConcurrentHashMap<>();
@@ -203,7 +200,7 @@ public class ScheduleImportService {
         if (tableResult.getSemesterStartDate() != null) {
             User user = userRepository.findById(userId).orElse(null);
             if (user != null) {
-                user.setSemesterStartDate(LocalDate.parse(tableResult.getSemesterStartDate(), DATE_FMT));
+                user.setSemesterStartDate(LocalDate.parse(tableResult.getSemesterStartDate(), TimeUtils.DATE_FORMATTER));
                 userRepository.save(user);
                 log.info("保存学期开始日期：userId={}, semesterStartDate={}", userId, tableResult.getSemesterStartDate());
             }
@@ -221,7 +218,7 @@ public class ScheduleImportService {
         importRecord.setStatus("PENDING");
         importRecord.setTotalWeeks(tableResult.getSuggestedWeeks() != null ? tableResult.getSuggestedWeeks() : 16);
         if (tableResult.getSemesterStartDate() != null) {
-            importRecord.setSemesterStartDate(LocalDate.parse(tableResult.getSemesterStartDate(), DATE_FMT));
+            importRecord.setSemesterStartDate(LocalDate.parse(tableResult.getSemesterStartDate(), TimeUtils.DATE_FORMATTER));
         }
         importRecord = importRepository.save(importRecord);
         Long importId = importRecord.getId();
@@ -354,7 +351,7 @@ public class ScheduleImportService {
         } else if (user.getSemesterStartDate() != null) {
             semesterStart = user.getSemesterStartDate();
         } else if (tableResult.getSemesterStartDate() != null) {
-            semesterStart = LocalDate.parse(tableResult.getSemesterStartDate(), DATE_FMT);
+            semesterStart = LocalDate.parse(tableResult.getSemesterStartDate(), TimeUtils.DATE_FORMATTER);
             user.setSemesterStartDate(semesterStart);
             userRepository.save(user);
         } else {
@@ -384,11 +381,12 @@ public class ScheduleImportService {
 
         for (ScheduleTableDTO.CourseItem course : tableResult.getCourses()) {
             try {
-                List<LocalDateTime> courseTimes = calculateCourseTimesFromCourseItem(
+                List<CourseTimeSlot> slots = calculateCourseTimesFromCourseItem(
                         semesterStart, course, timeSections, totalWeeks);
 
-                for (LocalDateTime courseTime : courseTimes) {
-                    LocalDateTime endTime = courseTime.plusMinutes(90);
+                for (CourseTimeSlot slot : slots) {
+                    LocalDateTime courseTime = slot.start();
+                    LocalDateTime endTime = slot.end();
 
                     // 处理冲突
                     if ("overwrite-all".equals(action)) {
@@ -465,8 +463,8 @@ public class ScheduleImportService {
         for (ScheduleImportItem item : items) {
             Map<String, Object> silentItem = new HashMap<>();
             silentItem.put("title", item.getTitle());
-            silentItem.put("remindTime", item.getRemindDate().format(DATE_FMT) + " "
-                    + item.getRemindTime().format(TIME_FMT) + ":00");
+            silentItem.put("remindTime", item.getRemindDate().format(TimeUtils.DATE_FORMATTER) + " "
+                    + item.getRemindTime().format(TimeUtils.TIME_FORMATTER) + ":00");
             silentItem.put("location", item.getLocation());
             silentItems.add(silentItem);
         }
@@ -525,7 +523,7 @@ public class ScheduleImportService {
                     continue;
                 }
 
-                LocalDateTime remindTime = LocalDateTime.parse(remindTimeStr, REMIND_TIME_FMT);
+                LocalDateTime remindTime = LocalDateTime.parse(remindTimeStr, TimeUtils.FORMATTER);
 
                 Reminder reminder = new Reminder();
                 reminder.setUserId(userId);
@@ -624,8 +622,8 @@ public class ScheduleImportService {
             Map<String, Object> map = new HashMap<>();
             map.put("id", item.getId());
             map.put("title", item.getTitle());
-            map.put("date", item.getRemindDate().format(DATE_FMT));
-            map.put("time", item.getRemindTime().format(TIME_FMT));
+            map.put("date", item.getRemindDate().format(TimeUtils.DATE_FORMATTER));
+            map.put("time", item.getRemindTime().format(TimeUtils.TIME_FORMATTER));
             map.put("location", item.getLocation());
             map.put("status", item.getStatus());
             map.put("errorMessage", item.getErrorMessage());
@@ -733,7 +731,7 @@ public class ScheduleImportService {
                         .date("")
                         .time((String) course.get("dayOfWeek"))
                         .location((String) course.get("location"))
-                        .repeatType("WEEKLY")
+                        .repeatType(RepeatType.WEEKLY.name())
                         .build());
             }
 
@@ -789,7 +787,7 @@ public class ScheduleImportService {
             throw new IllegalArgumentException("学期开始日期不能为空");
         }
 
-        LocalDate semesterStart = LocalDate.parse(config.getSemesterStartDate(), DATE_FMT);
+        LocalDate semesterStart = LocalDate.parse(config.getSemesterStartDate(), TimeUtils.DATE_FORMATTER);
 
         // 保存学期开始日期
         User user = userRepository.findById(userId)
@@ -839,7 +837,7 @@ public class ScheduleImportService {
         // 获取学期开始日期
         LocalDate semesterStart;
         if (config != null && config.getSemesterStartDate() != null) {
-            semesterStart = LocalDate.parse(config.getSemesterStartDate(), DATE_FMT);
+            semesterStart = LocalDate.parse(config.getSemesterStartDate(), TimeUtils.DATE_FORMATTER);
             user.setSemesterStartDate(semesterStart);
             userRepository.save(user);
         } else if (user.getSemesterStartDate() != null) {
@@ -864,16 +862,19 @@ public class ScheduleImportService {
 
         for (ManualCourseDTO course : courses) {
             try {
-                List<LocalDateTime> courseTimes = calculateCourseTimes(
+                List<CourseTimeSlot> slots = calculateCourseTimes(
                         semesterStart, course, timeSections, totalWeeks);
 
-                for (LocalDateTime courseTime : courseTimes) {
+                for (CourseTimeSlot slot : slots) {
+                    LocalDateTime courseTime = slot.start();
+                    LocalDateTime endTime = slot.end();
                     // 冲突检测
-                    ConflictResponse conflict = conflictDetectionService.checkConflict(userId, courseTime, (LocalDateTime) null, null);
+                    ConflictResponse conflict = conflictDetectionService.checkConflict(userId, courseTime, endTime, null);
 
                     Map<String, Object> item = new HashMap<>();
                     item.put("courseName", course.getCourseName());
-                    item.put("time", courseTime.format(REMIND_TIME_FMT));
+                    item.put("time", courseTime.format(TimeUtils.FORMATTER));
+                    item.put("endTime", endTime.format(TimeUtils.FORMATTER));
                     item.put("location", course.getLocation());
                     item.put("teacher", course.getTeacher());
                     item.put("dayOfWeek", course.getDayOfWeek());
@@ -939,11 +940,11 @@ public class ScheduleImportService {
         // 确定学期开始日期
         LocalDate semesterStart;
         if (config != null && config.getSemesterStartDate() != null && !config.getSemesterStartDate().isEmpty()) {
-            semesterStart = LocalDate.parse(config.getSemesterStartDate(), DATE_FMT);
+            semesterStart = LocalDate.parse(config.getSemesterStartDate(), TimeUtils.DATE_FORMATTER);
             user.setSemesterStartDate(semesterStart);
             userRepository.save(user);
         } else if (tableResult.getSemesterStartDate() != null) {
-            semesterStart = LocalDate.parse(tableResult.getSemesterStartDate(), DATE_FMT);
+            semesterStart = LocalDate.parse(tableResult.getSemesterStartDate(), TimeUtils.DATE_FORMATTER);
             user.setSemesterStartDate(semesterStart);
             userRepository.save(user);
         } else if (user.getSemesterStartDate() != null) {
@@ -982,17 +983,19 @@ public class ScheduleImportService {
         if (tableResult.getCourses() != null) {
             for (ScheduleTableDTO.CourseItem course : tableResult.getCourses()) {
                 try {
-                    List<LocalDateTime> courseTimes = calculateCourseTimesFromCourseItem(
+                    List<CourseTimeSlot> slots = calculateCourseTimesFromCourseItem(
                             semesterStart, course, timeSections, totalWeeks);
 
-                    for (LocalDateTime courseTime : courseTimes) {
-                        LocalDateTime endTime = courseTime.plusMinutes(90);
+                    for (CourseTimeSlot slot : slots) {
+                        LocalDateTime courseTime = slot.start();
+                        LocalDateTime endTime = slot.end();
                         ConflictResponse conflict = conflictDetectionService.checkConflict(
                                 userId, courseTime, endTime, null);
 
                         Map<String, Object> item = new HashMap<>();
                         item.put("title", course.getTitle());
-                        item.put("time", courseTime.format(REMIND_TIME_FMT));
+                        item.put("time", courseTime.format(TimeUtils.FORMATTER));
+                        item.put("endTime", endTime.format(TimeUtils.FORMATTER));
                         item.put("location", course.getLocation());
                         item.put("teacher", course.getTeacher());
                         item.put("dayOfWeek", course.getDayOfWeek());
@@ -1025,17 +1028,42 @@ public class ScheduleImportService {
         return result;
     }
 
-    // 从 CourseItem 计算具体上课时间列表：按周次、节次、单双周规则展开到学期开始日期上
-    private List<LocalDateTime> calculateCourseTimesFromCourseItem(
+    // 一节课的起止时间对：start=首节开始时间，end=末节结束时间（同一日期）
+    private record CourseTimeSlot(LocalDateTime start, LocalDateTime end) {}
+
+    // 从 CourseItem 计算具体上课时间列表：按周次、单双周规则展开到学期开始日期上。
+    // 每周生成一条 CourseTimeSlot（一课一条提醒），起止时间取自该课所占首节 startTime 与末节 endTime，
+    // 不再使用"开始+90分钟"的粗略估算，确保与节次时间表一致。
+    private List<CourseTimeSlot> calculateCourseTimesFromCourseItem(
             LocalDate semesterStart, ScheduleTableDTO.CourseItem course,
             List<ScheduleTableDTO.TimeSection> timeSections, int totalWeeks) {
-        List<LocalDateTime> times = new ArrayList<>();
+        List<CourseTimeSlot> slots = new ArrayList<>();
 
         DayOfWeek dayOfWeek = parseDayOfWeek(course.getDayOfWeek());
-        if (dayOfWeek == null) return times;
+        if (dayOfWeek == null) return slots;
 
         List<Integer> sectionIndices = course.getSectionIndices();
-        if (sectionIndices == null || sectionIndices.isEmpty()) return times;
+        if (sectionIndices == null || sectionIndices.isEmpty()) return slots;
+
+        // 取首末节次，查对应时间段
+        int firstSection = sectionIndices.stream().min(Integer::compareTo).orElse(-1);
+        int lastSection = sectionIndices.stream().max(Integer::compareTo).orElse(-1);
+        ScheduleTableDTO.TimeSection firstTs = timeSections.stream()
+                .filter(t -> t.getIndex() == firstSection).findFirst().orElse(null);
+        ScheduleTableDTO.TimeSection lastTs = timeSections.stream()
+                .filter(t -> t.getIndex() == lastSection).findFirst().orElse(null);
+        if (firstTs == null || lastTs == null) return slots;
+
+        LocalTime startTime;
+        LocalTime endTime;
+        try {
+            startTime = LocalTime.parse(firstTs.getStartTime(), TimeUtils.TIME_FORMATTER);
+            endTime = LocalTime.parse(lastTs.getEndTime(), TimeUtils.TIME_FORMATTER);
+        } catch (Exception e) {
+            log.warn("解析课程起止时间失败：course={}, firstSection={}, lastSection={}",
+                    course.getTitle(), firstSection, lastSection);
+            return slots;
+        }
 
         // 用户配置的 totalWeeks 优先：用它作为完整周次范围，覆盖课程自带的 weeks
         List<Integer> weeks;
@@ -1065,22 +1093,11 @@ public class ScheduleImportService {
             if (!oddWeek && evenWeek && week % 2 == 1) skipWeek = true;
             if (skipWeek) continue;
 
-            for (int sectionIndex : sectionIndices) {
-                ScheduleTableDTO.TimeSection ts = timeSections.stream()
-                        .filter(t -> t.getIndex() == sectionIndex)
-                        .findFirst().orElse(null);
-                if (ts != null) {
-                    try {
-                        LocalTime time = LocalTime.parse(ts.getStartTime(), TIME_FMT);
-                        LocalDateTime courseTime = LocalDateTime.of(courseDate, time);
-                        times.add(courseTime);
-                    } catch (Exception e) {
-                        log.warn("解析课程时间失败：section={}, startTime={}", sectionIndex, ts.getStartTime());
-                    }
-                }
-            }
+            slots.add(new CourseTimeSlot(
+                    LocalDateTime.of(courseDate, startTime),
+                    LocalDateTime.of(courseDate, endTime)));
         }
-        return times;
+        return slots;
     }
 
     // 确认并创建课表日程：按 action 处理冲突，逐条创建提醒并统计成败
@@ -1105,10 +1122,19 @@ public class ScheduleImportService {
                         .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
 
                 String remindTimeStr = item.getDate() + " " + item.getTime() + ":00";
-                LocalDateTime remindTime = LocalDateTime.parse(remindTimeStr, REMIND_TIME_FMT);
+                LocalDateTime remindTime = LocalDateTime.parse(remindTimeStr, TimeUtils.FORMATTER);
 
-                // 计算结束时间（默认 90 分钟）
-                LocalDateTime endTime = remindTime.plusMinutes(90);
+                // 结束时间：优先用 item 携带的 endTime（来自节次时间表），缺失时回退到开始时间+90分钟
+                LocalDateTime endTime;
+                if (item.getEndTime() != null && !item.getEndTime().isBlank()) {
+                    try {
+                        endTime = LocalDateTime.parse(item.getDate() + " " + item.getEndTime() + ":00", TimeUtils.FORMATTER);
+                    } catch (Exception e) {
+                        endTime = remindTime.plusMinutes(90);
+                    }
+                } else {
+                    endTime = remindTime.plusMinutes(90);
+                }
 
                 // 根据 action 处理冲突
                 if ("overwrite-all".equals(action)) {
@@ -1161,18 +1187,39 @@ public class ScheduleImportService {
         return result;
     }
 
-    // 计算手动输入课程的所有上课时间：解析星期、节次、周次和单双周后逐周展开
-    private List<LocalDateTime> calculateCourseTimes(LocalDate semesterStart, ManualCourseDTO course,
+    // 计算手动输入课程的所有上课时间：解析星期、节次、周次和单双周后逐周展开。
+    // 每周生成一条 CourseTimeSlot（一课一条提醒），起止时间取自首节 startTime 与末节 endTime。
+    private List<CourseTimeSlot> calculateCourseTimes(LocalDate semesterStart, ManualCourseDTO course,
                                                       List<ScheduleTableDTO.TimeSection> timeSections, int totalWeeks) {
-        List<LocalDateTime> times = new ArrayList<>();
+        List<CourseTimeSlot> slots = new ArrayList<>();
 
         // 解析星期几
         DayOfWeek dayOfWeek = parseDayOfWeek(course.getDayOfWeek());
-        if (dayOfWeek == null) return times;
+        if (dayOfWeek == null) return slots;
 
         // 解析节次范围
         int[] sectionRange = parseSectionRange(course.getSectionRange());
-        if (sectionRange == null) return times;
+        if (sectionRange == null) return slots;
+
+        // 取首末节次对应时间段
+        int firstSection = sectionRange[0];
+        int lastSection = sectionRange[1];
+        ScheduleTableDTO.TimeSection firstTs = timeSections.stream()
+                .filter(t -> t.getIndex() == firstSection).findFirst().orElse(null);
+        ScheduleTableDTO.TimeSection lastTs = timeSections.stream()
+                .filter(t -> t.getIndex() == lastSection).findFirst().orElse(null);
+        if (firstTs == null || lastTs == null) return slots;
+
+        LocalTime startTime;
+        LocalTime endTime;
+        try {
+            startTime = LocalTime.parse(firstTs.getStartTime(), TimeUtils.TIME_FORMATTER);
+            endTime = LocalTime.parse(lastTs.getEndTime(), TimeUtils.TIME_FORMATTER);
+        } catch (Exception e) {
+            log.warn("解析课程起止时间失败：course={}, firstSection={}, lastSection={}",
+                    course.getCourseName(), firstSection, lastSection);
+            return slots;
+        }
 
         // 解析周次范围，如果为空则使用总周数作为默认
         List<Integer> weeks = parseWeekRange(course.getWeekRange());
@@ -1194,24 +1241,11 @@ public class ScheduleImportService {
             if ("单周".equals(oddEven) && week % 2 == 0) continue;
             if ("双周".equals(oddEven) && week % 2 == 1) continue;
 
-            for (int section = sectionRange[0]; section <= sectionRange[1]; section++) {
-                final int currentSection = section;
-                // 找到对应的时间段
-                ScheduleTableDTO.TimeSection ts = timeSections.stream()
-                        .filter(t -> t.getIndex() == currentSection)
-                        .findFirst().orElse(null);
-                if (ts != null) {
-                    try {
-                        LocalTime time = LocalTime.parse(ts.getStartTime(), TIME_FMT);
-                        LocalDateTime courseTime = LocalDateTime.of(courseDate, time);
-                        times.add(courseTime);
-                    } catch (Exception e) {
-                        log.warn("解析课程时间失败：section={}, startTime={}", section, ts.getStartTime());
-                    }
-                }
-            }
+            slots.add(new CourseTimeSlot(
+                    LocalDateTime.of(courseDate, startTime),
+                    LocalDateTime.of(courseDate, endTime)));
         }
-        return times;
+        return slots;
     }
 
     // 解析星期几，支持"星期一/周一/1"等多种写法
@@ -1369,7 +1403,7 @@ public class ScheduleImportService {
             return LocalDate.now();
         }
         try {
-            return LocalDate.parse(dateStr, DATE_FMT);
+            return LocalDate.parse(dateStr, TimeUtils.DATE_FORMATTER);
         } catch (DateTimeParseException e) {
             log.warn("日期解析失败：{}，使用当前日期", dateStr);
             return LocalDate.now();
@@ -1381,7 +1415,7 @@ public class ScheduleImportService {
             return LocalTime.of(9, 0);
         }
         try {
-            return LocalTime.parse(timeStr, TIME_FMT);
+            return LocalTime.parse(timeStr, TimeUtils.TIME_FORMATTER);
         } catch (DateTimeParseException e) {
             log.warn("时间解析失败：{}，使用默认 09:00", timeStr);
             return LocalTime.of(9, 0);

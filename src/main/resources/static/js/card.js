@@ -99,6 +99,10 @@ var CardSystem = (function() {
             html += '<div class="info-item"><span class="info-label">地点</span><span class="info-value">' + escapeHtml(card.data.location) + '</span></div>';
         }
 
+        if (card.data.note) {
+            html += '<div class="info-item"><span class="info-label">备注</span><span class="info-value">' + escapeHtml(card.data.note) + '</span></div>';
+        }
+
         html += '<div class="info-item"><span class="info-label">优先级</span><span class="info-value">' + escapeHtml(card.data.priority || 'NORMAL') + '</span></div>';
         html += '</div>';
 
@@ -301,6 +305,7 @@ var CardSystem = (function() {
         formHtml += '<div class="form-group"><label>标题</label><input type="text" class="edit-title" value="' + escapeHtml(card.data.title || '') + '"></div>';
         formHtml += '<div class="form-group"><label>时间</label><input type="text" class="edit-remindTime" value="' + escapeHtml(card.data.remindTime || '') + '"></div>';
         formHtml += '<div class="form-group"><label>地点</label><input type="text" class="edit-location" value="' + escapeHtml(card.data.location || '') + '"></div>';
+        formHtml += '<div class="form-group"><label>备注</label><textarea class="edit-note" rows="2">' + escapeHtml(card.data.note || '') + '</textarea></div>';
         formHtml += '<div class="form-group"><label>优先级</label>';
         formHtml += '<select class="edit-priority">';
         formHtml += '<option value="LOW"' + (card.data.priority === 'LOW' ? ' selected' : '') + '>低</option>';
@@ -361,6 +366,7 @@ var CardSystem = (function() {
             title: card.element.querySelector('.edit-title').value,
             remindTime: card.element.querySelector('.edit-remindTime').value,
             location: card.element.querySelector('.edit-location').value,
+            note: card.element.querySelector('.edit-note').value,
             priority: card.element.querySelector('.edit-priority').value
         };
 

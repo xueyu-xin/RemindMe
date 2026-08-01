@@ -544,7 +544,14 @@ window.saveMessageToBackend = saveMessageToBackend;
                         html += '<div class="course-item">';
                         html += '<span class="course-index">' + (idx + 1) + '.</span>';
                         html += '<span class="course-title">' + (item.title || '未知课程') + '</span>';
-                        if (item.time) html += '<span class="course-info">' + item.time + '</span>';
+                        if (item.time) {
+                            var startShort = item.time.length >= 16 ? item.time.slice(11, 16) : item.time;
+                            var timeDisplay = startShort;
+                            if (item.endTime && item.endTime.length >= 16) {
+                                timeDisplay = startShort + ' - ' + item.endTime.slice(11, 16);
+                            }
+                            html += '<span class="course-info">' + timeDisplay + '</span>';
+                        }
                         if (item.location) html += '<span class="course-info">📍' + item.location + '</span>';
                         html += '</div>';
                     });
@@ -610,7 +617,7 @@ window.saveMessageToBackend = saveMessageToBackend;
                 html += '<div class="link-mode-group">';
                 html += '<div class="link-mode-label">联动模式：</div>';
                 html += '<div class="link-mode-buttons">';
-                html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'TOP_DOWN\')">⬇️ 向下联动</button>';
+                html += '<button class="link-mode-btn active" onclick="selectLinkMode(this, \'TOP_DOWN\')">⬇️ 向下联动</button>';
                 html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'BOTTOM_UP\')">⬆️ 向上联动</button>';
                 html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'BOTH\')">⬅️➡️ 双向联动</button>';
                 html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'NONE\')">❌ 互不影响</button>';
@@ -638,6 +645,8 @@ window.saveMessageToBackend = saveMessageToBackend;
                 html += '</div>';
                 html += '</div>';
                 container.innerHTML = html;
+                // 默认向下联动，重置状态避免上次选择残留
+                currentLinkMode = 'TOP_DOWN';
                 // 初始推理
                 inferTimeSlots();
             }
@@ -675,7 +684,7 @@ window.saveMessageToBackend = saveMessageToBackend;
 
         // ===== 课表相关函数 =====
         
-        var currentLinkMode = 'NONE';
+        var currentLinkMode = 'TOP_DOWN';
         var manualCourseRowCount = 0;
 
         function getImportIdFromCard() {
@@ -806,8 +815,9 @@ window.saveMessageToBackend = saveMessageToBackend;
             current._userFilled = true;
 
             function getFirstClassDuration(slotList) {
+                // 跳过 current（正在被修改的节次），避免用 start 新值 / end 旧值的过渡态推时长
                 var first = slotList.find(function(s) {
-                    return s.startTime && s.endTime && s.startTime.length > 0 && s.endTime.length > 0;
+                    return s !== current && s.startTime && s.endTime && s.startTime.length > 0 && s.endTime.length > 0;
                 });
                 if (first) {
                     var dur = calculateDuration(first.startTime, first.endTime);
@@ -829,40 +839,30 @@ window.saveMessageToBackend = saveMessageToBackend;
                 }
             }
 
-            // === 检查节次时间合法性 ===
-            for (var i = idx + 1; i < slots.length; i++) {
-                var target = slots[i];
-                var prev = slots[i - 1];
-
-                if (target._userFilled) {
-                    continue;
-                }
-
-                if (!target.startTime || target.startTime.length === 0) {
-                    continue;
-                }
-
-                if (prev && prev.endTime && prev.endTime.length > 0) {
-                    var gap = calculateDuration(prev.endTime, target.startTime);
-                    if (gap < 0) {
-                        var breakTime = getDefaultBreakTime(slots, i);
-                        var newStart = addMinutes(prev.endTime, breakTime);
-                        target.startTime = newStart;
-                        target.endTime = addMinutes(target.startTime, classDuration);
-                    }
-                }
+            // 根据 currentLinkMode 控制联动方向
+            // TOP_DOWN：影响 fromIdx 之后；BOTTOM_UP：影响 fromIdx 之前；BOTH：双向
+            if (currentLinkMode === 'TOP_DOWN' || currentLinkMode === 'BOTH') {
+                propagateDownward(slots, idx, classDuration);
+            }
+            if (currentLinkMode === 'BOTTOM_UP' || currentLinkMode === 'BOTH') {
+                propagateUpward(slots, idx, classDuration);
             }
 
-            // === 向下联动：更新所有后续节次 ===
-            for (var i = idx + 1; i < slots.length; i++) {
+            // === 再次检查，确保所有节次时间合法 ===
+            slots = validateAllSlots(slots, classDuration);
+
+            updateTimeSlotsUI(slots);
+            inferTimeSlots();
+        }
+
+        // 向下联动：更新 fromIdx 之后的所有节次
+        function propagateDownward(slots, fromIdx, classDuration) {
+            for (var i = fromIdx + 1; i < slots.length; i++) {
                 var target = slots[i];
                 var prev = slots[i - 1];
+                if (target._userFilled) continue;
 
-                if (target._userFilled) {
-                    continue;
-                }
-
-                // 后续节次 startTime 为空时，基于前一节课 endTime + 课间休息自动推断
+                // startTime 为空时，基于前一节 endTime + 课间自动推断
                 if (!target.startTime || target.startTime.length === 0) {
                     if (prev && prev.endTime && prev.endTime.length > 0) {
                         var autoBreak = getDefaultBreakTime(slots, i);
@@ -872,22 +872,48 @@ window.saveMessageToBackend = saveMessageToBackend;
                     continue;
                 }
 
-                var breakTime = 10;
+                // startTime 有值：若时间倒退（早于前一节 endTime）则前移
                 if (prev && prev.endTime && prev.endTime.length > 0) {
-                    var calc = calculateDuration(prev.endTime, target.startTime);
-                    if (calc > 0 && calc < 120) {
-                        breakTime = calc;
+                    var gap = calculateDuration(prev.endTime, target.startTime);
+                    if (gap < 0) {
+                        var breakTime = getDefaultBreakTime(slots, i);
+                        target.startTime = addMinutes(prev.endTime, breakTime);
                     }
                 }
-
                 target.endTime = addMinutes(target.startTime, classDuration);
             }
+        }
 
-            // === 再次检查，确保所有节次时间合法 ===
-            slots = validateAllSlots(slots, classDuration);
+        // 向上联动：更新 fromIdx 之前的所有节次（基于后续节次反推）
+        function propagateUpward(slots, fromIdx, classDuration) {
+            var standardBreak = getStandardBreak(slots);
+            for (var i = fromIdx - 1; i >= 0; i--) {
+                var target = slots[i];
+                var next = slots[i + 1];
+                if (target._userFilled) continue;
+                if (!next || !next.startTime || next.startTime.length === 0) continue;
 
-            updateTimeSlotsUI(slots);
-            inferTimeSlots();
+                // endTime = 下一节 startTime - 标准课间；startTime = endTime - 课时长
+                target.endTime = subtractMinutes(next.startTime, standardBreak);
+                target.startTime = subtractMinutes(target.endTime, classDuration);
+            }
+        }
+
+        // 获取标准课间时长：统计所有相邻节次间隔的众数，无数据时默认 10 分钟
+        function getStandardBreak(slots) {
+            var breaks = [];
+            for (var i = 0; i < slots.length - 1; i++) {
+                var a = slots[i];
+                var b = slots[i + 1];
+                if (a.endTime && a.endTime.length > 0 && b.startTime && b.startTime.length > 0) {
+                    var g = calculateDuration(a.endTime, b.startTime);
+                    if (g > 0 && g < 120) {
+                        breaks.push(g);
+                    }
+                }
+            }
+            var mostCommon = getMostCommon(breaks);
+            return (mostCommon && mostCommon > 0) ? mostCommon : 10;
         }
 
         function getDefaultBreakTime(slots, index) {
@@ -963,8 +989,9 @@ window.saveMessageToBackend = saveMessageToBackend;
 
         function calculateDuration(start, end) {
             if (!start || !end) return 45;
-            var diff = parseTimeToMinutes(end) - parseTimeToMinutes(start);
-            return diff > 0 ? diff : 45;
+            // 返回真实差值（含负数），让"时间倒退"检测生效；
+            // 计算课时长等正向场景的调用方均有 > 0 守卫，负数不会影响
+            return parseTimeToMinutes(end) - parseTimeToMinutes(start);
         }
 
         function getMostCommon(arr) {
@@ -3081,39 +3108,50 @@ window.saveMessageToBackend = saveMessageToBackend;
 
         // 恢复所有待确认会话（多卡片独立恢复）
         function restorePendingSession() {
-            try {
-                var sessions = loadAllPendingSessions();
-                if (!sessions || sessions.length === 0) return;
+            var userId = localStorage.getItem('userId');
+            if (!userId) return;
+            // 先调用后端获取有效 pending 会话列表，只恢复后端确认有效的会话
+            // 避免 sessionStorage 堆积已超时/已确认的旧会话导致刷新后冒出无效卡片
+            fetch('/api/confirmations/pending?userId=' + userId, { headers: getHeaders() })
+                .then(function(res) { return res.json(); })
+                .then(function(result) {
+                    var validSessionIds = (result && result.sessionIds) ? result.sessionIds : [];
+                    var sessions = loadAllPendingSessions();
+                    if (!sessions || sessions.length === 0) return;
 
-                sessions.forEach(function(state) {
-                    if (!state.sessionId) return;
+                    sessions.forEach(function(state) {
+                        if (!state.sessionId) return;
+                        // 后端已无此会话（超时/确认/取消）→ 清除 sessionStorage 并跳过
+                        if (validSessionIds.indexOf(state.sessionId) === -1) {
+                            clearPendingSession(state.sessionId);
+                            return;
+                        }
 
-                    var groupId = 'card-' + state.sessionId;
+                        var groupId = 'card-' + state.sessionId;
 
-                    // 恢复引导语（临时消息，检查是否已存在）
-                    if (state.leadMessage) {
-                        var history = document.getElementById('chatHistory');
-                        if (history) {
-                            var existingMsgs = history.querySelectorAll('[data-group="' + groupId + '"]');
-                            if (existingMsgs.length === 0) {
-                                addMessage('bot', state.leadMessage, { skipSave: true, isTemp: true, groupId: groupId });
+                        // 恢复引导语（临时消息，检查是否已存在）
+                        if (state.leadMessage) {
+                            var history = document.getElementById('chatHistory');
+                            if (history) {
+                                var existingMsgs = history.querySelectorAll('[data-group="' + groupId + '"]');
+                                if (existingMsgs.length === 0) {
+                                    addMessage('bot', state.leadMessage, { skipSave: true, isTemp: true, groupId: groupId });
+                                }
                             }
                         }
-                    }
 
-                    // 恢复卡片（如果有卡片数据）
-                    if (state.cardData) {
-                        var cardData = state.cardData;
-                        if (typeof cardData === 'object' && !cardData.type) {
-                            cardData.type = 'confirmation_card';
+                        // 恢复卡片（如果有卡片数据）
+                        if (state.cardData) {
+                            var cardData = state.cardData;
+                            if (typeof cardData === 'object' && !cardData.type) {
+                                cardData.type = 'confirmation_card';
+                            }
+                            showConfirmationCard(cardData);
                         }
-                        showConfirmationCard(cardData);
-                    }
+                    });
+                }).catch(function(err) {
+                    console.warn('获取pending会话失败:', err.message);
                 });
-            } catch (e) {
-                console.warn('恢复待确认会话失败:', e.message);
-                try { clearPendingSession(); } catch (_) {}
-            }
         }
 
         // ============ 确认流程增强 ============
@@ -4020,11 +4058,21 @@ window.saveMessageToBackend = saveMessageToBackend;
                 var row = document.createElement('div');
                 row.className = 'schedule-row';
 
-                // 时间标签
+                // 时间标签：显示时间段（起始-结束），与每日日程一致；结束时间取该时间组内首个带 endTime 的提醒
                 var timeLabel = document.createElement('div');
                 timeLabel.className = 'schedule-time-label';
-                // 时间段由每个 block 内部的 .time-range 精确展示，时间标签只显示起始时间
-                timeLabel.textContent = time;
+                var endTimeStr = '';
+                var dayGroups = timeGroups[time] || {};
+                for (var ds in dayGroups) {
+                    for (var ri = 0; ri < dayGroups[ds].length; ri++) {
+                        if (dayGroups[ds][ri].endTime) {
+                            endTimeStr = dayGroups[ds][ri].endTime.slice(11, 16);
+                            break;
+                        }
+                    }
+                    if (endTimeStr) break;
+                }
+                timeLabel.textContent = endTimeStr ? (time + '-' + endTimeStr) : time;
                 row.appendChild(timeLabel);
 
                 // 7 列对应 7 天
@@ -4058,10 +4106,6 @@ window.saveMessageToBackend = saveMessageToBackend;
                                 weekBlockText += '📖 ';
                             }
                             weekBlockText += reminder.title;
-                            // 时间段显示
-                            if (reminder.endTime) {
-                                weekBlockText += '<div class="time-range">' + (reminder.remindTime ? reminder.remindTime.slice(11, 16) : '') + '-' + reminder.endTime.slice(11, 16) + '</div>';
-                            }
                             block.innerHTML = weekBlockText;
 
                             var blockTitle = reminder.title;

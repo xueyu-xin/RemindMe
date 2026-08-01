@@ -226,6 +226,24 @@ public class AgentService {
                     }
                     conversationMemory.addToolResult(userId, llmToolCall.getToolName(), toolResult, toolSuccess);
 
+                    // 天气查询工具链引导：get_user_preferences 返回 city 后，显式提示 LLM 调用 query_weather_now
+                    if ("get_user_preferences".equals(llmToolCall.getToolName())) {
+                        try {
+                            Map<String, Object> prefMap = objectMapper.readValue(toolResult, Map.class);
+                            Object city = prefMap.get("city");
+                            if (city != null && !city.toString().isBlank() && Boolean.TRUE.equals(prefMap.get("success"))) {
+                                String weatherHint = "已获取用户默认城市：" + city + "。如果用户在查询天气，请立即调用 query_weather_now(location=\"" + city + "\") 查询实时天气，不要再重复调用 get_user_preferences。";
+                                history.add(ConversationMemory.Message.builder()
+                                        .role("system")
+                                        .content(weatherHint)
+                                        .build());
+                                log.info("注入天气查询引导: userId={}, city={}", userId, city);
+                            }
+                        } catch (Exception e) {
+                            // 解析失败忽略
+                        }
+                    }
+
                     // 含 sessionId → 返回确认卡片响应（create_reminder / create_recurring_reminder 场景）
                     AgentResponse confirmationResponse = buildConfirmationResponse(toolResult, userId);
                     if (confirmationResponse != null) {

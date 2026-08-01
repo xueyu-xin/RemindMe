@@ -1,5 +1,7 @@
 package com.dormrepair.remindme.dto.request;
 
+import com.dormrepair.remindme.enums.Priority;
+import com.dormrepair.remindme.enums.ReminderSource;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -46,8 +48,8 @@ public class ReminderCreateRequest {
     private String note;
 
     // 优先级，默认 NORMAL，可选值：LOW/NORMAL/HIGH，决定提醒通知的样式和权重
-    private String priority = "NORMAL";
+    private String priority = Priority.NORMAL.name();
 
     // 创建来源，默认 USER_INPUT（手动），可选 AI_PARSE（AI 解析生成）、SCHEDULE_IMPORT（课表导入）等
-    private String source = "USER_INPUT";
+    private String source = ReminderSource.USER_INPUT.name();
 }
