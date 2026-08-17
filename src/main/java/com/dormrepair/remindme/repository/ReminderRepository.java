@@ -5,6 +5,7 @@ import com.dormrepair.remindme.enums.ConfirmStatus;
 import com.dormrepair.remindme.enums.ExecutionStatus;
 import com.dormrepair.remindme.enums.ReminderStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -65,4 +66,11 @@ public interface ReminderRepository extends JpaRepository<Reminder, Long> {
             @Param("startTime") LocalDateTime startTime,
             @Param("endTime") LocalDateTime endTime
     );
+
+    // 按ID列表 + 用户ID批量更新状态，用于取消提醒的原子操作
+    @Modifying
+    @Query("UPDATE Reminder r SET r.status = :status WHERE r.id IN :ids AND r.userId = :userId")
+    int bulkCancelByIds(@Param("ids") List<Long> ids,
+                        @Param("userId") Long userId,
+                        @Param("status") ReminderStatus status);
 }

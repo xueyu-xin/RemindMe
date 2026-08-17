@@ -37,6 +37,17 @@ var CardSystem = (function() {
             sessionId: sessionId
         };
 
+        // 周期卡片（含 confirm_direct/confirm_skip/overwrite_all 任一）自动补充取消按钮
+        var isRecurringCard = card.actions.some(function(a) {
+            return a.id === 'confirm_direct' || a.id === 'confirm_skip' || a.id === 'overwrite_all';
+        });
+        if (isRecurringCard) {
+            var hasCancel = card.actions.some(function(a) { return a.id === 'cancel'; });
+            if (!hasCancel) {
+                card.actions.push({ id: 'cancel', label: '❌ 取消', style: 'danger' });
+            }
+        }
+
         // 如果已存在相同 sessionId 的卡片，先移除
         if (cards[sessionId]) {
             removeCard(sessionId);
@@ -537,7 +548,11 @@ var CardSystem = (function() {
      * 处理自定义操作
      */
     function handleCustomAction(actionId, sessionId, userId) {
-        var endpoint = actionId === 'retry' ? 'reparse' : actionId;
+        var endpoint = actionId === 'retry' ? 'reparse'
+            : actionId === 'confirm_direct' ? 'recurring/direct'
+            : actionId === 'confirm_skip' ? 'recurring/skip'
+            : actionId === 'overwrite_all' ? 'recurring/overwrite-all'
+            : actionId;
 
         // 禁用按钮
         var cardEl = document.getElementById('card-' + sessionId);

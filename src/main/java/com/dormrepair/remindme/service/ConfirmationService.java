@@ -66,7 +66,7 @@ public class ConfirmationService {
     private static final int TIMEOUT_SECONDS = 30;
 
     // 阶段一：创建信息确认会话，解析提醒字段后构建并推送确认卡片
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public ConfirmationCardResponse createSession(Long userId, String originalInput, Map<String, Object> parsedData) {
         String sessionId = UUID.randomUUID().toString();
 
@@ -134,7 +134,7 @@ public class ConfirmationService {
         return card;
     }
 
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirm(String sessionId, Long userId) {
         return confirm(sessionId, userId, List.of());
     }
@@ -286,7 +286,7 @@ public class ConfirmationService {
     }
 
     // 周期提醒-直接创建全部：不覆盖冲突，冲突日多条并存
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmRecurringDirect(String sessionId, Long userId) {
         ConfirmationSession session = atomicMarkConfirmed(sessionId, userId);
         if (session.getStatus() == SessionStatus.CONFIRMED) {
@@ -310,7 +310,7 @@ public class ConfirmationService {
     }
 
     // 周期提醒-创建无冲突部分：跳过冲突日，仅生成不冲突的实例
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmRecurringSkip(String sessionId, Long userId) {
         ConfirmationSession session = atomicMarkConfirmed(sessionId, userId);
         if (session.getStatus() == SessionStatus.CONFIRMED) {
@@ -334,7 +334,7 @@ public class ConfirmationService {
     }
 
     // 周期提醒-全部覆盖：删除冲突提醒后再创建全部实例
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmRecurringOverwriteAll(String sessionId, Long userId) {
         ConfirmationSession session = atomicMarkConfirmed(sessionId, userId);
         if (session.getStatus() == SessionStatus.CONFIRMED) {
@@ -684,7 +684,7 @@ public class ConfirmationService {
 
     // 处理冲突选择：按 action 分派覆盖/取消/修改三种处理方式
     // action=overwrite 删除冲突提醒后建新会话；cancel 直接放弃；modify 用新时间重新检测冲突
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> handleConflict(Long userId, String action, String title,
             String remindTime, String location, String priority, Long conflictReminderId, String newTime) {
         
@@ -825,7 +825,7 @@ public class ConfirmationService {
     }
 
     // 重新解析会话：用新输入覆盖原解析数据，重新做冲突检测并刷新过期时间后再次推送卡片
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public ConfirmationCardResponse reparse(String sessionId, Long userId, String newInput, Map<String, Object> newParsedData) {
         ConfirmationSession session = findValidSession(sessionId, userId);
 
@@ -905,7 +905,7 @@ public class ConfirmationService {
 
     // 定时清理过期会话：每 15 秒扫描一次，只处理有超时的会话（expiresAt 不为 null）
     @Scheduled(fixedRate = 15000)
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void cleanupExpiredSessions() {
         List<ConfirmationSession> expired = confirmationRepository.findByStatusAndExpiresAtBefore(
                 SessionStatus.PENDING, LocalDateTime.now())
@@ -1259,13 +1259,13 @@ public class ConfirmationService {
     }
 
     // 阶段二提醒执行卡片推送入口（无天气建议）
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void pushExecuteCard(Reminder reminder) {
         pushExecuteCard(reminder, null);
     }
 
     // 阶段二提醒执行卡片：创建执行会话并推送，可携带天气建议
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void pushExecuteCard(Reminder reminder, String weatherSuggestion) {
         // 清理旧的 PENDING 执行会话，防止会话泄漏
         confirmationRepository.expireOldExecuteSessions(reminder.getId());
@@ -1310,7 +1310,7 @@ public class ConfirmationService {
     }
 
     // 阶段二-稍后提醒：推迟指定时间后由调度器重新推送，不触发自动确认
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> handleExecuteLater(String sessionId, Long userId) {
         ConfirmationSession session = findExecuteSession(sessionId, userId);
 
@@ -1336,7 +1336,7 @@ public class ConfirmationService {
     }
 
     // 阶段二-确认执行：标记提醒为已确认并已发送，结束会话
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> handleExecuteConfirm(String sessionId, Long userId) {
         ConfirmationSession session = findExecuteSession(sessionId, userId);
 
@@ -1359,7 +1359,7 @@ public class ConfirmationService {
     }
 
     // 阶段二-取消：取消提醒并结束执行会话
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> handleExecuteCancel(String sessionId, Long userId) {
         ConfirmationSession session = findExecuteSession(sessionId, userId);
 
@@ -1511,7 +1511,7 @@ public class ConfirmationService {
     }
 
     // 按标题关键词确认行程：先查阶段一待确认会话，找不到再查阶段二待执行提醒
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Reminder confirmByTitle(Long userId, String keyword) {
         // 阶段一：查询待确认创建的会话
         List<ConfirmationSession> sessions = getPendingSessions(userId);
@@ -1575,7 +1575,7 @@ public class ConfirmationService {
     }
 
     // 按标题关键词取消阶段一待确认会话，成功返回 true
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public boolean cancelByTitle(Long userId, String keyword) {
         List<ConfirmationSession> sessions = getPendingSessions(userId);
         if (sessions.isEmpty()) {
@@ -1604,7 +1604,7 @@ public class ConfirmationService {
     }
 
     // 一键确认所有阶段一待确认会话，批量创建提醒并推送汇总消息
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public List<Reminder> confirmAll(Long userId) {
         List<ConfirmationSession> sessions = getPendingSessions(userId);
         if (sessions.isEmpty()) {
@@ -1625,7 +1625,7 @@ public class ConfirmationService {
     }
 
     // 一键取消所有阶段一待确认会话，返回取消数量
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public int cancelAll(Long userId) {
         List<ConfirmationSession> sessions = getPendingSessions(userId);
         if (sessions.isEmpty()) {
@@ -1646,7 +1646,7 @@ public class ConfirmationService {
     }
 
     // 按 sessionId 确认单个阶段一会话并创建提醒
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Reminder confirmSingle(Long userId, String sessionId) {
         ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                 .filter(s -> s.getStatus() == SessionStatus.PENDING)
@@ -1657,7 +1657,7 @@ public class ConfirmationService {
     }
 
     // 按 sessionId 取消单个阶段一会话并推送取消消息
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public boolean cancelSingle(Long userId, String sessionId) {
         return confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                 .filter(s -> s.getStatus() == SessionStatus.PENDING)

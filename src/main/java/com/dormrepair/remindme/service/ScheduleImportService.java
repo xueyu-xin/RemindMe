@@ -57,7 +57,7 @@ public class ScheduleImportService {
     private final Map<Long, ScheduleTableDTO> scheduleTableCache = new ConcurrentHashMap<>();
 
     // 处理文件上传 → 解析 → 识别 → 创建导入记录 → 推送确认卡片
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> processUpload(MultipartFile file, Long userId) {
         if (file == null || file.isEmpty()) {
             throw new IllegalArgumentException("文件不能为空");
@@ -280,7 +280,7 @@ public class ScheduleImportService {
     }
 
     // 创建一条 PENDING 状态的导入记录，记录文件名、类型和总数
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public ScheduleImport createImportRecord(Long userId, String fileName, String fileType,
                                              List<ScheduleItemDTO> items) {
         ScheduleImport importRecord = new ScheduleImport();
@@ -295,7 +295,7 @@ public class ScheduleImportService {
     }
 
     // 批量创建提醒，由用户在确认卡片上确认后触发，action 控制冲突处理策略
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> batchCreateReminders(Long importId, Long userId, String action) {
         if (userId == null) {
             throw new IllegalArgumentException("用户ID不能为空");
@@ -497,7 +497,7 @@ public class ScheduleImportService {
     }
 
     // 批量静默创建提醒：不触发确认会话、不逐条推送，一次性创建全部并仅推送一条汇总消息
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> batchCreateSilently(Long userId, List<Map<String, Object>> items) {
         if (items == null || items.isEmpty()) {
             Map<String, Object> result = new HashMap<>();
@@ -576,7 +576,7 @@ public class ScheduleImportService {
     }
 
     // 取消导入：校验归属与状态后置为 CANCELLED，并把待处理明细一并取消
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> cancelImport(Long importId, Long userId) {
         ScheduleImport importRecord = importRepository.findById(importId)
                 .orElseThrow(() -> new IllegalArgumentException("导入记录不存在：" + importId));
@@ -606,7 +606,7 @@ public class ScheduleImportService {
     }
 
     // 查询导入结果：返回导入记录状态、明细列表，以及缓存中的课表识别结果（时间段、课程、学期开始日期）
-    @Transactional(readOnly = true)
+    @Transactional(readOnly = true, rollbackFor = Exception.class)
     public Map<String, Object> getImportResult(Long importId, Long userId) {
         ScheduleImport importRecord = importRepository.findById(importId)
                 .orElseThrow(() -> new IllegalArgumentException("导入记录不存在：" + importId));
@@ -778,7 +778,7 @@ public class ScheduleImportService {
     }
 
     // 根据用户配置的时间表生成具体日程：保存学期开始日期和时间段配置，返回配置结果
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> generateScheduleFromConfig(Long userId, CourseTimeConfigDTO config) {
         log.info("根据配置生成日程：userId={}, semesterStartDate={}, linkMode={}",
                 userId, config.getSemesterStartDate(), config.getLinkMode());
@@ -822,7 +822,7 @@ public class ScheduleImportService {
     }
 
     // 根据手动输入的课程列表生成具体日程：逐课展开上课时间并做冲突检测
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> generateScheduleFromManual(Long userId, List<ManualCourseDTO> courses,
                                                            CourseTimeConfigDTO config) {
         log.info("根据手动输入生成日程：userId={}, courseCount={}", userId, courses != null ? courses.size() : 0);
@@ -910,7 +910,7 @@ public class ScheduleImportService {
     }
 
     // 根据缓存的课表识别结果生成具体日程：写回用户的时间配置，逐课展开时间并做冲突检测
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> generateScheduleFromImport(Long userId, Long importId,
                                                           CourseTimeConfigDTO config) {
         log.info("根据导入记录生成日程：userId={}, importId={}", userId, importId);
@@ -1101,7 +1101,7 @@ public class ScheduleImportService {
     }
 
     // 确认并创建课表日程：按 action 处理冲突，逐条创建提醒并统计成败
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmSchedule(Long userId, String action, List<ScheduleItemDTO> items) {
         log.info("确认课表日程：userId={}, action={}, itemCount={}", userId, action, items != null ? items.size() : 0);
 

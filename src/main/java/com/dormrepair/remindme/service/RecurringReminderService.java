@@ -43,7 +43,7 @@ public class RecurringReminderService {
 
     // 创建周期提醒入口
     // 不直接落库，而是构建 parsedData 走确认卡片流程，由确认回调真正创建模板与实例
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> createRecurringReminder(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
             String location, String priority) {
@@ -159,15 +159,13 @@ public class RecurringReminderService {
 
         } catch (Exception e) {
             log.error("创建周期提醒失败: userId={}, error={}", userId, e.getMessage(), e);
-            result.put("success", false);
-            result.put("error", "创建周期提醒失败: " + e.getMessage());
+            throw new RuntimeException("创建周期提醒失败: " + e.getMessage(), e);
         }
-
         return result;
     }
 
     // 从确认流程生成周期实例
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> generateInstancesFromConfirm(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
             String location, String priority) {
@@ -176,7 +174,7 @@ public class RecurringReminderService {
 
     // 直接创建全部周期实例
     // 不检查冲突，冲突日多条提醒并存
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> generateAll(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
             String location, String priority) {
@@ -218,14 +216,13 @@ public class RecurringReminderService {
             result.put("successCount", success);
         } catch (Exception e) {
             log.error("直接创建周期提醒失败: userId={}, error={}", userId, e.getMessage(), e);
-            result.put("success", false);
-            result.put("error", "直接创建周期提醒失败: " + e.getMessage());
+            throw new RuntimeException("直接创建周期提醒失败: " + e.getMessage(), e);
         }
         return result;
     }
 
     // 跳过冲突日，只创建无冲突的日期
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> generateWithSkip(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
             String location, String priority) {
@@ -281,14 +278,13 @@ public class RecurringReminderService {
             }
         } catch (Exception e) {
             log.error("跳过冲突创建周期提醒失败: userId={}, error={}", userId, e.getMessage(), e);
-            result.put("success", false);
-            result.put("error", "创建周期提醒失败: " + e.getMessage());
+            throw new RuntimeException("创建周期提醒失败: " + e.getMessage(), e);
         }
         return result;
     }
 
     // 全部覆盖：把冲突日原有提醒置为 CANCELLED，再创建全部日期
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> generateWithOverwrite(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
             String location, String priority) {
@@ -352,8 +348,7 @@ public class RecurringReminderService {
             }
         } catch (Exception e) {
             log.error("覆盖创建周期提醒失败: userId={}, error={}", userId, e.getMessage(), e);
-            result.put("success", false);
-            result.put("error", "覆盖创建周期提醒失败: " + e.getMessage());
+            throw new RuntimeException("覆盖创建周期提醒失败: " + e.getMessage(), e);
         }
         return result;
     }
@@ -408,7 +403,7 @@ public class RecurringReminderService {
     }
 
     // 确认回调后实际创建周期模板和实例
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmAndCreateRecurring(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
             String location, String priority) {
@@ -454,10 +449,8 @@ public class RecurringReminderService {
 
         } catch (Exception e) {
             log.error("创建周期提醒失败: userId={}, error={}", userId, e.getMessage(), e);
-            result.put("success", false);
-            result.put("error", "创建周期提醒失败: " + e.getMessage());
+            throw new RuntimeException("创建周期提醒失败: " + e.getMessage(), e);
         }
-
         return result;
     }
 
@@ -645,7 +638,7 @@ public class RecurringReminderService {
     }
 
     // 取消周期提醒：模板置为 CANCELLED，并级联取消所有已生成实例
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void cancelRecurringReminder(Long id, Long userId) {
         RecurringReminder reminder = recurringReminderRepository.findById(id)
                 .filter(r -> r.getUserId().equals(userId))
@@ -661,7 +654,7 @@ public class RecurringReminderService {
     }
 
     // 暂停周期提醒：仅改状态为 PAUSED，不触动已有实例
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void pauseRecurringReminder(Long id, Long userId) {
         RecurringReminder reminder = recurringReminderRepository.findById(id)
                 .filter(r -> r.getUserId().equals(userId))
@@ -671,7 +664,7 @@ public class RecurringReminderService {
     }
 
     // 恢复已暂停的周期提醒，状态回到 ACTIVE
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void resumeRecurringReminder(Long id, Long userId) {
         RecurringReminder reminder = recurringReminderRepository.findById(id)
                 .filter(r -> r.getUserId().equals(userId))
@@ -681,7 +674,7 @@ public class RecurringReminderService {
     }
 
     // 为所有 ACTIVE 模板补生成本日实例，返回实际生成条数
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public int generatePendingInstancesForToday() {
         LocalDate today = LocalDate.now();
         List<RecurringReminder> activeReminders = recurringReminderRepository.findByStatus("ACTIVE");
@@ -705,7 +698,7 @@ public class RecurringReminderService {
     }
 
     // 更新周期模板字段：仅入参非 null 的字段才覆盖，避免误清空
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public RecurringReminder updateRecurringReminder(Long id, Long userId, String title,
             String remindTime, LocalDate startDate, LocalDate endDate, RepeatType repeatType,
             String repeatDays, String location, String priority) {

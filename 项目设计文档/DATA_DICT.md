@@ -1,4 +1,4 @@
-# 校园生活提醒助手 — 数据字典 v1.1
+# 校园生活提醒助手 — 数据字典 v1.2
 
 
 ## 一、文档说明
@@ -611,6 +611,11 @@ public static final String STAGE_AUTO_CONFIRM = "AUTO_CONFIRM";
 | periodConfirmStatus | `period_confirm_status` | `ConfirmStatus` | `string` | 是 | `'PENDING'` | 无 | 经期确认状态 |
 | periodPostponedUntil | `period_postponed_until` | `LocalDate` | `string` | 否 | `NULL` | 无 | 经期确认推迟到哪天 |
 | periodPostponeCount | `period_postpone_count` | `Integer` | `number` | 是 | `0` | 无 | 经期已推迟次数，范围0-3 |
+| periodRemindPostponed | `period_remind_postponed` | `Boolean` | `boolean` | 是 | `FALSE` | 无 | 本周期经期提醒是否已被推迟到明天，下一周期自动重置 |
+| periodConfirmCount | `period_confirm_count` | `Integer` | `number` | 是 | `0` | 无 | 经期信息确认累计已完成次数，用于统计与个性化推荐 |
+| periodRemindPostponedCount | `period_remind_postponed_count` | `Integer` | `number` | 是 | `0` | 无 | 经期提醒累计被推迟次数，用于判断用户偏好 |
+| periodRemindTime | `period_remind_time` | `String` | `string` | 是 | `'20:30'` | VARCHAR(8) | 经期提醒时间（HH:mm），在下次经期前一天该时间推送 |
+| semesterStartDate | `semester_start_date` | `LocalDate` | `string` | 否 | `NULL` | 无 | 学期开始日期（第一周周一），课程表导入时回填，便于第 N 周换算为具体日期 |
 | createdAt | `created_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 创建时间 |
 | updatedAt | `updated_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 更新时间 |
 
@@ -634,6 +639,11 @@ CREATE TABLE users (
     period_confirm_status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     period_postponed_until DATE DEFAULT NULL,
     period_postpone_count INT NOT NULL DEFAULT 0,
+    period_remind_postponed BOOLEAN NOT NULL DEFAULT FALSE,
+    period_confirm_count INT NOT NULL DEFAULT 0,
+    period_remind_postponed_count INT NOT NULL DEFAULT 0,
+    period_remind_time VARCHAR(8) NOT NULL DEFAULT '20:30',
+    semester_start_date DATE DEFAULT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -662,14 +672,17 @@ CREATE INDEX idx_users_gender ON users(gender);
 | id | `id` | `Long` | `number` | 是 | 自增 | PK | 提醒ID，主键 |
 | userId | `user_id` | `Long` | `number` | 是 | 无 | FK | 所属用户ID |
 | title | `title` | `String` | `string` | 是 | 无 | NOT NULL | 提醒事项 |
-| remindTime | `remind_time` | `LocalDateTime` | `string` | 是 | 无 | NOT NULL | 计划推送时间 |
+| remindTime | `remind_time` | `LocalDateTime` | `string` | 是 | 无 | NOT NULL | 事件时间（实际动作发生/事情开始时间），推送时间 = remind_time - advance_minutes |
+| endTime | `end_time` | `LocalDateTime` | `string` | 否 | `NULL` | 无 | 结束时间（可选）：会议结束/课程下课时间，用于日历连续显示；NULL 表示单时间点提醒 |
 | timezone | `timezone` | `String` | `string` | 是 | `'Asia/Shanghai'` | 无 | 时区 |
 | advanceMinutes | `advance_minutes` | `Integer` | `number` | 是 | `10` | 无 | 提前量（分钟） |
-| cronExpression | `cron_expression` | `String` | `string` | 否 | `NULL` | 无 | Cron表达式，非NULL时为周期提醒 |
+| cronExpression | `cron_expression` | `String` | `string` | 否 | `NULL` | 无 | Cron表达式，非NULL时为周期提醒（预留字段，目前多数情况下为 NULL） |
 | location | `location` | `String` | `string` | 否 | `NULL` | 无 | 地点 |
+| note | `note` | `String` | `string` | 否 | `NULL` | VARCHAR(500) | 备注/附加信息（如：带袋子、带伞等） |
 | priority | `priority` | `Priority` | `string` | 是 | `'NORMAL'` | 无 | 优先级 |
 | status | `status` | `ReminderStatus` | `string` | 是 | `'PENDING'` | 无 | 推送状态 |
-| confirmStatus | `confirm_status` | `ConfirmStatus` | `string` | 是 | `'PENDING'` | 无 | 确认状态 |
+| confirmStatus | `confirm_status` | `ConfirmStatus` | `string` | 是 | `'PENDING'` | 无 | 信息确认阶段状态 |
+| executionStatus | `execution_status` | `ExecutionStatus` | `string` | 是 | `'PENDING'` | 无 | 到点执行确认阶段状态（PENDING/CONFIRMED/CANCELLED/DEFAULTED） |
 | confirmAttempts | `confirm_attempts` | `Integer` | `number` | 是 | `0` | 无 | 已确认提醒次数，范围0-3 |
 | lastConfirmRemindAt | `last_confirm_remind_at` | `LocalDateTime` | `string` | 否 | `NULL` | 无 | 最后一次确认提醒时间 |
 | source | `source` | `ReminderSource` | `string` | 是 | `'USER_INPUT'` | 无 | 来源 |
@@ -684,13 +697,16 @@ CREATE TABLE reminders (
     user_id BIGINT NOT NULL,
     title VARCHAR(255) NOT NULL,
     remind_time TIMESTAMP NOT NULL,
+    end_time TIMESTAMP DEFAULT NULL,
     timezone VARCHAR(50) NOT NULL DEFAULT 'Asia/Shanghai',
     advance_minutes INT NOT NULL DEFAULT 10,
     cron_expression VARCHAR(100) DEFAULT NULL,
     location VARCHAR(255) DEFAULT NULL,
+    note VARCHAR(500) DEFAULT NULL,
     priority VARCHAR(20) NOT NULL DEFAULT 'NORMAL',
     status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     confirm_status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
+    execution_status VARCHAR(20) NOT NULL DEFAULT 'PENDING',
     confirm_attempts INT NOT NULL DEFAULT 0,
     last_confirm_remind_at TIMESTAMP DEFAULT NULL,
     source VARCHAR(20) NOT NULL DEFAULT 'USER_INPUT',
@@ -704,15 +720,16 @@ CREATE INDEX idx_reminders_user_status_time ON reminders(user_id, status, remind
 CREATE INDEX idx_reminders_remind_time ON reminders(remind_time);
 CREATE INDEX idx_reminders_confirm_status ON reminders(confirm_status);
 CREATE INDEX idx_reminders_user_time ON reminders(user_id, remind_time);
+CREATE INDEX idx_reminders_execution_status ON reminders(execution_status);
+CREATE INDEX idx_reminders_user_end_time ON reminders(user_id, end_time);
 ```
 
 #### 3.2.3 扩展性预留
 
 | 预留字段 | 类型 | 说明 | 计划版本 |
 |----------|------|------|----------|
-| `parent_id` | BIGINT | 周期提醒的父ID | v1.1 |
+| `parent_id` | BIGINT | 周期提醒的父ID | v2.0 |
 | `tags` | VARCHAR(255) | 标签（JSON数组） | v2.0 |
-| `notes` | TEXT | 备注 | v1.1 |
 
 
 ### 3.3 表名：push_logs（推送日志表）
@@ -899,6 +916,193 @@ CREATE INDEX idx_stage ON confirmation_sessions(stage);
 | `conflict_ids` | JSON | 冲突提醒ID列表 | v1.1 |
 | `resolved_conflict_ids` | JSON | 已解决的冲突ID列表 | v1.1 |
 | `auto_confirmed` | BOOLEAN | 是否自动确认 | v1.1 |
+
+
+### 3.7 表名：recurring_reminders（周期提醒模板表）
+
+**用途**：存储「按日/周/月重复」的提醒规则（模板），实际单条提醒由调度器每日根据模板生成 recurring_instances + reminders
+
+#### 3.7.1 字段定义
+
+| 字段名 | 数据库字段 | Java类型 | JSON类型 | 必填 | 默认值 | 约束 | 说明 |
+|--------|-----------|----------|----------|------|--------|------|------|
+| id | `id` | `Long` | `number` | 是 | 自增 | PK | 周期提醒ID，主键 |
+| userId | `user_id` | `Long` | `number` | 是 | 无 | FK | 所属用户ID |
+| title | `title` | `String` | `string` | 是 | 无 | NOT NULL | 提醒标题（每次生成实例时原样复制到 reminders.title） |
+| remindTime | `remind_time` | `LocalTime` | `string` | 是 | 无 | NOT NULL | 每天几点提醒（HH:mm:ss，日期部分由 start_date~end_date + repeat_type 决定） |
+| startDate | `start_date` | `LocalDate` | `string` | 是 | 无 | NOT NULL | 周期生效起始日期（含当天） |
+| endDate | `end_date` | `LocalDate` | `string` | 是 | 无 | NOT NULL | 周期结束日期（含当天，超过后状态自动置为 COMPLETED） |
+| repeatType | `repeat_type` | `RepeatType` | `string` | 是 | `'DAILY'` | 无 | 重复粒度：DAILY/WEEKLY/MONTHLY |
+| repeatDays | `repeat_days` | `String` | `string` | 否 | `NULL` | 无 | WEEKLY 时生效：逗号分隔的 ISO DayOfWeek（1=周一…7=周日），如 "1" 或 "1,3,5"；为空时（兼容旧数据）退化为每天都生成。DAILY/MONTHLY 忽略此字段 |
+| location | `location` | `String` | `string` | 否 | `NULL` | 无 | 地点（可选），生成实例时原样复制 |
+| priority | `priority` | `String` | `string` | 是 | `'NORMAL'` | 无 | 优先级：LOW/NORMAL/HIGH |
+| advanceMinutes | `advance_minutes` | `Integer` | `number` | 是 | `10` | 无 | 提前多少分钟提醒（相对 remind_time 的偏移） |
+| status | `status` | `String` | `string` | 是 | `'ACTIVE'` | 无 | 模板状态：ACTIVE-正常生成实例、PAUSED-用户暂停、CANCELLED-用户取消、COMPLETED-end_date 已到 |
+| lastGeneratedDate | `last_generated_date` | `LocalDate` | `string` | 否 | `NULL` | 无 | 调度器上次成功生成实例的日期（避免重复生成，便于断点续跑） |
+| source | `source` | `String` | `string` | 是 | `'USER_INPUT'` | 无 | 模板来源：USER_INPUT-用户手动创建、EXCEL_IMPORT-Excel 课表导入、PERIOD_REMINDER-经期自动生成 |
+| timezone | `timezone` | `String` | `string` | 是 | `'Asia/Shanghai'` | 无 | 时区 |
+| createdAt | `created_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 创建时间 |
+| updatedAt | `updated_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 更新时间 |
+
+#### 3.7.2 建表DDL
+
+```sql
+CREATE TABLE recurring_reminders (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    remind_time TIME NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    repeat_type VARCHAR(20) NOT NULL DEFAULT 'DAILY',
+    repeat_days VARCHAR(20) DEFAULT NULL,
+    location VARCHAR(255) DEFAULT NULL,
+    priority VARCHAR(255) NOT NULL,
+    advance_minutes INT NOT NULL DEFAULT 10,
+    status VARCHAR(255) NOT NULL,
+    last_generated_date DATE DEFAULT NULL,
+    source VARCHAR(255) NOT NULL,
+    timezone VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_user_status ON recurring_reminders(user_id, status);
+CREATE INDEX idx_date_range ON recurring_reminders(start_date, end_date);
+CREATE INDEX idx_repeat_type ON recurring_reminders(repeat_type);
+```
+
+#### 3.7.3 扩展性预留
+
+| 预留字段 | 类型 | 说明 | 计划版本 |
+|----------|------|------|----------|
+| `cron_expression` | VARCHAR(100) | 复杂重复规则的 Cron 表达式 | v2.0 |
+| `exclude_dates` | JSON | 排除日期列表（如法定节假日） | v2.0 |
+
+
+### 3.8 表名：recurring_instances（周期提醒实例表）
+
+**用途**：记录由 RecurringReminder 模板按周期自动生成的「某天某条」实例，状态跟随实际 reminders 同步
+
+#### 3.8.1 字段定义
+
+| 字段名 | 数据库字段 | Java类型 | JSON类型 | 必填 | 默认值 | 约束 | 说明 |
+|--------|-----------|----------|----------|------|--------|------|------|
+| id | `id` | `Long` | `number` | 是 | 自增 | PK | 实例ID，主键 |
+| recurringId | `recurring_id` | `Long` | `number` | 是 | 无 | FK | 周期提醒模板ID，对应 recurring_reminders.id |
+| reminderId | `reminder_id` | `Long` | `number` | 否 | `NULL` | FK | 实际生成的单条提醒ID，对应 reminders.id；尚未生成前为 null |
+| remindDate | `remind_date` | `LocalDate` | `string` | 是 | 无 | NOT NULL | 该实例对应要提醒的日期 |
+| status | `status` | `String` | `string` | 是 | `'PENDING'` | 无 | 实例状态：PENDING-待生成、GENERATED-已生成、CANCELLED-已取消、COMPLETED-已完成 |
+| createdAt | `created_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 创建时间 |
+
+#### 3.8.2 建表DDL
+
+```sql
+CREATE TABLE recurring_instances (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    recurring_id BIGINT NOT NULL,
+    reminder_id BIGINT DEFAULT NULL,
+    remind_date DATE NOT NULL,
+    status VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (recurring_id) REFERENCES recurring_reminders(id) ON DELETE CASCADE,
+    FOREIGN KEY (reminder_id) REFERENCES reminders(id) ON DELETE CASCADE
+);
+
+-- 同一天不重复生成
+CREATE UNIQUE INDEX uk_recurring_date ON recurring_instances(recurring_id, remind_date);
+CREATE INDEX idx_recurring_id ON recurring_instances(recurring_id);
+CREATE INDEX idx_reminder_id ON recurring_instances(reminder_id);
+CREATE INDEX idx_remind_date ON recurring_instances(remind_date);
+CREATE INDEX idx_status ON recurring_instances(status);
+```
+
+
+### 3.9 表名：schedule_imports（日程导入任务表）
+
+**用途**：记录一次 Excel/PDF/图片导入的元信息，与明细表 schedule_import_items 为一对多关系
+
+#### 3.9.1 字段定义
+
+| 字段名 | 数据库字段 | Java类型 | JSON类型 | 必填 | 默认值 | 约束 | 说明 |
+|--------|-----------|----------|----------|------|--------|------|------|
+| id | `id` | `Long` | `number` | 是 | 自增 | PK | 导入记录ID，主键 |
+| userId | `user_id` | `Long` | `number` | 是 | 无 | FK | 发起导入的用户ID |
+| fileName | `file_name` | `String` | `string` | 是 | 无 | NOT NULL | 上传的原始文件名（含扩展名） |
+| fileType | `file_type` | `String` | `string` | 是 | 无 | NOT NULL | 文件类型：excel/pdf/image |
+| totalCount | `total_count` | `Integer` | `number` | 否 | `0` | 无 | 文件解析出的总条目数 |
+| successCount | `success_count` | `Integer` | `number` | 否 | `0` | 无 | 成功导入并创建提醒的条目数 |
+| failedCount | `failed_count` | `Integer` | `number` | 否 | `0` | 无 | 导入失败的条目数 |
+| totalWeeks | `total_weeks` | `Integer` | `number` | 否 | `NULL` | 无 | 学期总周数（课程表导入特有） |
+| semesterStartDate | `semester_start_date` | `LocalDate` | `string` | 否 | `NULL` | 无 | 学期开始日期（第 1 周的周一） |
+| status | `status` | `String` | `string` | 是 | `'PENDING'` | 无 | 任务状态：PENDING/SUCCESS/PARTIAL/FAILED/EXPIRED |
+| createdAt | `created_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 任务创建时间 |
+
+#### 3.9.2 建表DDL
+
+```sql
+CREATE TABLE schedule_imports (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id BIGINT NOT NULL,
+    file_name VARCHAR(255) NOT NULL,
+    file_type VARCHAR(255) NOT NULL,
+    total_count INT DEFAULT 0,
+    success_count INT DEFAULT 0,
+    failed_count INT DEFAULT 0,
+    total_weeks INT DEFAULT NULL,
+    semester_start_date DATE DEFAULT NULL,
+    status VARCHAR(255) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_user_created ON schedule_imports(user_id, created_at);
+```
+
+
+### 3.10 表名：schedule_import_items（日程导入明细表）
+
+**用途**：一次导入任务（schedule_imports）下的每一条待创建提醒都对应一条明细
+
+#### 3.10.1 字段定义
+
+| 字段名 | 数据库字段 | Java类型 | JSON类型 | 必填 | 默认值 | 约束 | 说明 |
+|--------|-----------|----------|----------|------|--------|------|------|
+| id | `id` | `Long` | `number` | 是 | 自增 | PK | 明细ID，主键 |
+| importId | `import_id` | `Long` | `number` | 是 | 无 | FK | 所属导入任务ID，对应 schedule_imports.id |
+| reminderId | `reminder_id` | `Long` | `number` | 否 | `NULL` | FK | 成功创建的提醒ID，对应 reminders.id；失败或未创建时为 null |
+| title | `title` | `String` | `string` | 是 | 无 | NOT NULL | 日程标题（课名或事项名） |
+| remindDate | `remind_date` | `LocalDate` | `string` | 是 | 无 | NOT NULL | 提醒日期 |
+| remindTime | `remind_time` | `LocalTime` | `string` | 是 | 无 | NOT NULL | 提醒具体时间（HH:mm:ss） |
+| location | `location` | `String` | `string` | 否 | `NULL` | 无 | 地点（教室或发生地点） |
+| repeatType | `repeat_type` | `String` | `string` | 否 | `'ONCE'` | 无 | 重复类型：ONCE-单次、WEEKLY-按周；仅记录文件解析的原始值，真实重复规则以 recurring_reminders 为准 |
+| status | `status` | `String` | `string` | 是 | `'PENDING'` | 无 | 明细处理状态：PENDING/SUCCESS/FAILED |
+| errorMessage | `error_message` | `String` | `string` | 否 | `NULL` | 无 | 处理失败时的错误描述 |
+| createdAt | `created_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 明细创建时间 |
+
+#### 3.10.2 建表DDL
+
+```sql
+CREATE TABLE schedule_import_items (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    import_id BIGINT NOT NULL,
+    reminder_id BIGINT DEFAULT NULL,
+    title VARCHAR(255) NOT NULL,
+    remind_date DATE NOT NULL,
+    remind_time TIME NOT NULL,
+    location VARCHAR(255) DEFAULT NULL,
+    repeat_type VARCHAR(255) DEFAULT NULL,
+    status VARCHAR(255) NOT NULL,
+    error_message VARCHAR(255) DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (import_id) REFERENCES schedule_imports(id) ON DELETE CASCADE,
+    FOREIGN KEY (reminder_id) REFERENCES reminders(id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_import ON schedule_import_items(import_id);
+CREATE INDEX idx_reminder ON schedule_import_items(reminder_id);
+```
 
 
 ## 四、API接口字段映射
@@ -1604,9 +1808,261 @@ public class ConfirmationSession {
 }
 ```
 
-### 5.7 DTO 定义
+### 5.7 RecurringReminder.java（周期提醒模板实体）
 
-#### 5.7.1 ConflictResponse.java（冲突检测响应）
+```java
+package com.dormrepair.remindme.entity;
+
+import com.dormrepair.remindme.enums.Priority;
+import com.dormrepair.remindme.enums.RepeatType;
+import jakarta.persistence.*;
+import lombok.Data;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+
+@Data
+@Entity
+@Table(name = "recurring_reminders", indexes = {
+    @Index(name = "idx_user_status", columnList = "user_id, status"),
+    @Index(name = "idx_date_range", columnList = "start_date, end_date"),
+    @Index(name = "idx_repeat_type", columnList = "repeat_type")
+})
+@EntityListeners(AuditingEntityListener.class)
+public class RecurringReminder {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
+    @Column(nullable = false)
+    private String title;
+
+    @Column(name = "remind_time", nullable = false)
+    private LocalTime remindTime;
+
+    @Column(name = "start_date", nullable = false)
+    private LocalDate startDate;
+
+    @Column(name = "end_date", nullable = false)
+    private LocalDate endDate;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "repeat_type", nullable = false)
+    private RepeatType repeatType;
+
+    // WEEKLY 时生效：逗号分隔的 ISO DayOfWeek（1=周一…7=周日），如 "1" 或 "1,3,5"
+    @Column(name = "repeat_days")
+    private String repeatDays;
+
+    private String location;
+
+    @Column(nullable = false)
+    private String priority = Priority.NORMAL.name();
+
+    @Column(name = "advance_minutes", nullable = false)
+    private Integer advanceMinutes = 10;
+
+    @Column(nullable = false)
+    private String status = "ACTIVE";
+
+    @Column(name = "last_generated_date")
+    private LocalDate lastGeneratedDate;
+
+    @Column(nullable = false)
+    private String source = "USER_INPUT";
+
+    @Column(nullable = false)
+    private String timezone = "Asia/Shanghai";
+
+    @CreatedDate
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @LastModifiedDate
+    @Column(name = "updated_at", nullable = false)
+    private LocalDateTime updatedAt;
+}
+```
+
+### 5.8 RecurringInstance.java（周期提醒实例实体）
+
+```java
+package com.dormrepair.remindme.entity;
+
+import jakarta.persistence.*;
+import lombok.Data;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+
+@Data
+@Entity
+@Table(name = "recurring_instances", indexes = {
+    @Index(name = "idx_recurring_id", columnList = "recurring_id"),
+    @Index(name = "idx_remind_date", columnList = "remind_date"),
+    @Index(name = "idx_recurring_date", columnList = "recurring_id, remind_date", unique = true)
+})
+@EntityListeners(AuditingEntityListener.class)
+public class RecurringInstance {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "recurring_id", nullable = false)
+    private Long recurringId;
+
+    @Column(name = "reminder_id")
+    private Long reminderId;
+
+    @Column(name = "remind_date", nullable = false)
+    private LocalDate remindDate;
+
+    @Column(nullable = false)
+    private String status = "PENDING";
+
+    @CreatedDate
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+}
+```
+
+### 5.9 ScheduleImport.java（日程导入任务实体）
+
+```java
+package com.dormrepair.remindme.entity;
+
+import jakarta.persistence.*;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+
+@Data
+@Entity
+@Table(name = "schedule_imports")
+@NoArgsConstructor
+public class ScheduleImport {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "user_id", nullable = false)
+    private Long userId;
+
+    @Column(name = "file_name", nullable = false)
+    private String fileName;
+
+    @Column(name = "file_type", nullable = false)
+    private String fileType;
+
+    @Column(name = "total_count")
+    private Integer totalCount;
+
+    @Column(name = "success_count")
+    private Integer successCount;
+
+    @Column(name = "failed_count")
+    private Integer failedCount;
+
+    @Column(name = "total_weeks")
+    private Integer totalWeeks;
+
+    @Column(name = "semester_start_date")
+    private LocalDate semesterStartDate;
+
+    @Column(nullable = false)
+    private String status = "PENDING";
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) {
+            createdAt = LocalDateTime.now();
+        }
+    }
+}
+```
+
+### 5.10 ScheduleImportItem.java（日程导入明细实体）
+
+```java
+package com.dormrepair.remindme.entity;
+
+import jakarta.persistence.*;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+
+@Data
+@Entity
+@Table(name = "schedule_import_items")
+@NoArgsConstructor
+public class ScheduleImportItem {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "import_id", nullable = false)
+    private Long importId;
+
+    @Column(name = "reminder_id")
+    private Long reminderId;
+
+    @Column(nullable = false)
+    private String title;
+
+    @Column(name = "remind_date", nullable = false)
+    private LocalDate remindDate;
+
+    @Column(name = "remind_time", nullable = false)
+    private LocalTime remindTime;
+
+    @Column
+    private String location;
+
+    @Column(name = "repeat_type")
+    private String repeatType = "ONCE";
+
+    @Column(nullable = false)
+    private String status = "PENDING";
+
+    @Column(name = "error_message")
+    private String errorMessage;
+
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @PrePersist
+    protected void onCreate() {
+        if (createdAt == null) {
+            createdAt = LocalDateTime.now();
+        }
+    }
+}
+```
+
+### 5.11 DTO 定义
+
+#### 5.11.1 ConflictResponse.java（冲突检测响应）
 
 ```java
 package com.dormrepair.remindme.dto.response;
@@ -1639,7 +2095,7 @@ public class ConflictResponse {
 }
 ```
 
-#### 5.7.2 ConfirmationCardResponse.java（确认卡片响应）
+#### 5.11.2 ConfirmationCardResponse.java（确认卡片响应）
 
 ```java
 package com.dormrepair.remindme.dto.response;
@@ -1829,8 +2285,33 @@ public class ReminderResponse {
 | attempt_count | attemptCount | attemptCount | confirmation_sessions | 尝试次数 |
 | max_attempts | maxAttempts | maxAttempts | confirmation_sessions | 最大尝试次数 |
 | interval_minutes | intervalMinutes | intervalMinutes | confirmation_sessions | 补提醒间隔 |
+| period_remind_postponed | periodRemindPostponed | periodRemindPostponed | users | 本周期经期提醒是否已推迟 |
+| period_confirm_count | periodConfirmCount | periodConfirmCount | users | 经期确认累计次数 |
+| period_remind_postponed_count | periodRemindPostponedCount | periodRemindPostponedCount | users | 经期提醒累计推迟次数 |
+| period_remind_time | periodRemindTime | periodRemindTime | users | 经期提醒时间（HH:mm） |
+| semester_start_date | semesterStartDate | semesterStartDate | users | 学期开始日期 |
+| end_time | endTime | endTime | reminders | 结束时间（可选） |
+| note | note | note | reminders | 备注/附加信息 |
+| execution_status | executionStatus | executionStatus | reminders | 到点执行确认状态 |
+| remind_time | remindTime | remindTime | recurring_reminders | 每天提醒时间（HH:mm:ss） |
+| start_date | startDate | startDate | recurring_reminders | 周期起始日期 |
+| end_date | endDate | endDate | recurring_reminders | 周期结束日期 |
+| repeat_type | repeatType | repeatType | recurring_reminders | 周期类型（DAILY/WEEKLY/MONTHLY） |
+| repeat_days | repeatDays | repeatDays | recurring_reminders | WEEKLY 时指定的星期几（1-7 逗号分隔） |
+| advance_minutes | advanceMinutes | advanceMinutes | recurring_reminders | 提前量（分钟） |
+| last_generated_date | lastGeneratedDate | lastGeneratedDate | recurring_reminders | 上次生成实例日期（断点续传） |
+| recurring_id | recurringId | recurringId | recurring_instances | 周期模板ID |
+| remind_date | remindDate | remindDate | recurring_instances | 实例对应日期 |
+| file_name | fileName | fileName | schedule_imports | 原始文件名 |
+| file_type | fileType | fileType | schedule_imports | 文件类型 |
+| total_count | totalCount | totalCount | schedule_imports | 解析总条目数 |
+| success_count | successCount | successCount | schedule_imports | 成功创建数 |
+| failed_count | failedCount | failedCount | schedule_imports | 失败数 |
+| total_weeks | totalWeeks | totalWeeks | schedule_imports | 学期总周数 |
+| import_id | importId | importId | schedule_import_items | 导入任务ID |
+| error_message | errorMessage | errorMessage | schedule_import_items | 失败错误描述 |
 | created_at | createdAt | createdAt | 所有表 | 创建时间 |
-| updated_at | updatedAt | updatedAt | users/reminders/confirmation_sessions | 更新时间 |
+| updated_at | updatedAt | updatedAt | users/reminders/confirmation_sessions/recurring_reminders | 更新时间 |
 
 
 ## 七、版本记录
@@ -1839,6 +2320,7 @@ public class ReminderResponse {
 |------|------|----------|------|
 | v1.0 | 2026-07-18 | 初始版本，完整数据字典 | — |
 | v1.1 | 2026-07-28 | 新增 SessionStatus/ConfirmStage 枚举、confirmation_sessions 表、确认流程 API（4.5节）、冲突检测 API（4.6节）、DTO 定义（5.7节）、ConfirmationSession 实体类（5.6节）、更新字段映射总表 | — |
+| v1.2 | 2026-08-11 | 1) users 表补 period_remind_postponed/period_confirm_count/period_remind_postponed_count/period_remind_time/semester_start_date 字段；2) reminders 表补 end_time/execution_status/note 字段；3) 新增 3.7-3.10 四张表（recurring_reminders 含 repeat_days / recurring_instances / schedule_imports / schedule_import_items）；4) 新增 5.7-5.10 四个实体类（RecurringReminder/RecurringInstance/ScheduleImport/ScheduleImportItem）；5) 原 5.7 DTO 顺延为 5.11；6) 字段映射总表同步补充上述全部新增字段 | — |
 
 ---
 

@@ -47,7 +47,7 @@ public class ReminderService {
     private final RecurringReminderService recurringReminderService;
 
     // HTTP 层创建提醒入口：校验用户后转交给 Agent 版本处理
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> createReminder(ReminderCreateRequest request) {
         User user = userRepository.findById(request.getUserId())
                 .orElseThrow(() -> new IllegalArgumentException("用户不存在"));
@@ -71,7 +71,7 @@ public class ReminderService {
     }
 
     // HTTP 层更新提醒：仅覆盖入参非 null 的字段
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public ReminderResponse updateReminder(Long id, ReminderUpdateRequest request, Long userId) {
         Reminder reminder = getReminderByIdAndUserId(id, userId);
 
@@ -108,7 +108,7 @@ public class ReminderService {
     }
 
     // 取消提醒并发布事件
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void cancelReminder(Long id, Long userId) {
         Reminder reminder = getReminderByIdAndUserId(id, userId);
         reminder.setStatus(ReminderStatus.CANCELLED);
@@ -125,7 +125,7 @@ public class ReminderService {
     }
 
     // 确认提醒：状态置为 CONFIRMED 并发布事件
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public ReminderResponse confirmReminder(Long id, Long userId) {
         Reminder reminder = getReminderByIdAndUserId(id, userId);
         reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
@@ -186,7 +186,7 @@ public class ReminderService {
     // advanceMinutes 提前提醒分钟数（可选）。当用户说'X分钟后'时传入X，说'等会/马上'时传入0，明确时间（如'明天下午3点'）时不传。
     @AgentTool(name = "create_reminder", description = "创建提醒，用户要求设置提醒时调用。"
             + "advanceMinutes: 提前提醒分钟数（可选）。当用户说'X分钟后'时传入X，说'等会/马上'时传入0，明确时间（如'明天下午3点'）时不传。")
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> createReminderForAgent(Long userId, String title, String remindTime,
             String endTime, String location, String note, String priority, Integer advanceMinutes) {
         
@@ -323,8 +323,7 @@ public class ReminderService {
             
         } catch (Exception e) {
             log.error("Agent创建提醒失败: userId={}, title={}, error={}", userId, title, e.getMessage(), e);
-            result.put("success", false);
-            result.put("error", "创建提醒失败: " + e.getMessage());
+            throw new RuntimeException("创建提醒失败: " + e.getMessage(), e);
         }
         
         return result;
@@ -390,7 +389,7 @@ public class ReminderService {
     // userId 用户ID；reminderId 提醒ID；title 标题（可选）
     // remindTime 提醒时间（可选，yyyy-MM-dd HH:mm:ss）；endTime 结束时间（可选）；location 地点（可选）；note 备注（可选）
     @AgentTool(name = "update_reminder", description = "修改提醒，用户要求更改提醒时调用")
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> updateReminderForAgent(Long userId, Long reminderId, String title,
             String remindTime, String endTime, String location, String note) {
 
@@ -437,8 +436,7 @@ public class ReminderService {
             
         } catch (Exception e) {
             log.error("Agent更新提醒失败: userId={}, reminderId={}, error={}", userId, reminderId, e.getMessage(), e);
-            result.put("success", false);
-            result.put("error", "更新提醒失败: " + e.getMessage());
+            throw new RuntimeException("更新提醒失败: " + e.getMessage(), e);
         }
         
         return result;
@@ -448,7 +446,7 @@ public class ReminderService {
     // 将指定提醒状态置为 CANCELLED
     // userId 用户ID；reminderId 提醒ID；返回取消结果
     @AgentTool(name = "cancel_reminder", description = "取消提醒，用户要求删除提醒时调用")
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> cancelReminderForAgent(Long userId, Long reminderId) {
         log.info("Agent调用取消提醒: userId={}, reminderId={}", userId, reminderId);
         
@@ -470,8 +468,7 @@ public class ReminderService {
             
         } catch (Exception e) {
             log.error("Agent取消提醒失败: userId={}, reminderId={}, error={}", userId, reminderId, e.getMessage(), e);
-            result.put("success", false);
-            result.put("error", "取消提醒失败: " + e.getMessage());
+            throw new RuntimeException("取消提醒失败: " + e.getMessage(), e);
         }
 
         return result;
@@ -525,7 +522,7 @@ public class ReminderService {
     // Agent 工具：创建周期提醒
     // 先做参数与格式校验，再委托给 RecurringReminderService 走确认卡片流程
     @AgentTool(name = "create_recurring_reminder", description = "创建周期提醒，用户输入包含日期范围时调用")
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> createRecurringReminderForAgent(Long userId, String title,
             String remindTime, String startDate, String endDate, String repeatType, String repeatDays) {
 
@@ -577,14 +574,13 @@ public class ReminderService {
             String normalizedRepeatType = (repeatType != null && !repeatType.isBlank())
                     ? repeatType.toUpperCase() : RepeatType.DAILY.name();
 
-            return recurringReminderService.createRecurringReminder(
+            result = recurringReminderService.createRecurringReminder(
                     userId, title, remindTime, startDate, endDate,
                     normalizedRepeatType, repeatDays, null, Priority.NORMAL.name());
 
         } catch (Exception e) {
             log.error("创建周期提醒失败: userId={}, error={}", userId, e.getMessage(), e);
-            result.put("success", false);
-            result.put("error", "创建周期提醒失败: " + e.getMessage());
+            throw new RuntimeException("创建周期提醒失败: " + e.getMessage(), e);
         }
 
         return result;
@@ -593,7 +589,7 @@ public class ReminderService {
     // Agent 工具：按日期（或日期范围）取消提醒
     // 命中范围内全部 PENDING 提醒，可选用 keyword 进一步过滤；keyword 为"课程/课"等时按来源=COURSE 过滤
     @AgentTool(name = "cancel_reminders_by_date", description = "取消指定日期或日期范围的提醒，用户要求取消某天/某几天/本周的提醒时调用")
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> cancelRemindersByDate(Long userId, String date, String endDate, String keyword) {
         log.info("取消提醒: userId={}, date={}, endDate={}, keyword={}", userId, date, endDate, keyword);
 
@@ -633,31 +629,33 @@ public class ReminderService {
                 return result;
             }
 
+            // 先从查询结果构建详情列表（查询时数据已完整，不依赖后续save）
             List<Map<String, Object>> cancelledList = new java.util.ArrayList<>();
             for (Reminder r : reminders) {
-                r.setStatus(ReminderStatus.CANCELLED);
-                reminderRepository.save(r);
-
                 Map<String, Object> item = new HashMap<>();
                 item.put("id", r.getId());
                 item.put("title", r.getTitle());
                 item.put("remindTime", r.getRemindTime().format(TimeUtils.FORMATTER));
                 cancelledList.add(item);
-
-                log.info("取消提醒: reminderId={}, title={}", r.getId(), r.getTitle());
+                log.info("待取消提醒: reminderId={}, title={}", r.getId(), r.getTitle());
             }
+
+            // 提取ID列表 + 原子批量更新（替代逐条 save，避免部分提交）
+            List<Long> ids = reminders.stream().map(Reminder::getId).collect(Collectors.toList());
+            int updated = reminderRepository.bulkCancelByIds(ids, userId, ReminderStatus.CANCELLED);
+            log.info("批量取消提醒完成: userId={}, 期望={}, 实际更新={}", userId, ids.size(), updated);
 
             result.put("success", true);
             result.put("cancelCount", cancelledList.size());
+            result.put("updatedCount", updated);
             result.put("cancelledReminders", cancelledList);
             result.put("message", String.format("已取消 %d 条提醒：%s",
                     cancelledList.size(),
                     cancelledList.stream().map(m -> (String) m.get("title")).collect(Collectors.joining("、"))));
 
         } catch (Exception e) {
-            log.error("取消提醒失败: userId={}, error={}", userId, e.getMessage());
-            result.put("success", false);
-            result.put("error", "取消提醒失败: " + e.getMessage());
+            log.error("取消提醒失败: userId={}, error={}", userId, e.getMessage(), e);
+            throw new RuntimeException("取消提醒失败: " + e.getMessage(), e);
         }
 
         return result;
