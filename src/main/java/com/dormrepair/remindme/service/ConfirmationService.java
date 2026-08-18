@@ -143,13 +143,12 @@ public class ConfirmationService {
     public Map<String, Object> confirm(String sessionId, Long userId, List<Long> conflictIdsToOverwrite) {
         // 在事务内执行 DB 操作（原子标记 + 创建提醒）
         Map<String, Object> result = transactionTemplate.execute(status -> {
-            int updated = confirmationRepository.markConfirmed(sessionId, userId, LocalDateTime.now());
-            if (updated == 0) {
+            AtomicMarkResult markResult = atomicMarkConfirmed(sessionId, userId);
+            if (markResult.getUpdated() == 0) {
                 return handleDuplicateConfirm(sessionId, userId);
             }
 
-            ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
-                    .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+            ConfirmationSession session = markResult.getSession();
 
             if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
                 throw new IllegalArgumentException("该会话已过期，请重新创建");
@@ -288,14 +287,15 @@ public class ConfirmationService {
     // 周期提醒-直接创建全部：不覆盖冲突，冲突日多条并存
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmRecurringDirect(String sessionId, Long userId) {
-        ConfirmationSession session = atomicMarkConfirmed(sessionId, userId);
-        if (session.getStatus() == SessionStatus.CONFIRMED) {
+        AtomicMarkResult markResult = atomicMarkConfirmed(sessionId, userId);
+        if (markResult.getUpdated() == 0 && markResult.getSession().getStatus() == SessionStatus.CONFIRMED) {
             Map<String, Object> dup = new HashMap<>();
             dup.put("success", true);
             dup.put("isDuplicate", true);
             dup.put("message", "该提醒已确认，无需重复操作～");
             return dup;
         }
+        ConfirmationSession session = markResult.getSession();
         Map<String, Object> parsedData = parseParsedData(session.getParsedData());
         Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "direct");
 
@@ -312,14 +312,15 @@ public class ConfirmationService {
     // 周期提醒-创建无冲突部分：跳过冲突日，仅生成不冲突的实例
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmRecurringSkip(String sessionId, Long userId) {
-        ConfirmationSession session = atomicMarkConfirmed(sessionId, userId);
-        if (session.getStatus() == SessionStatus.CONFIRMED) {
+        AtomicMarkResult markResult = atomicMarkConfirmed(sessionId, userId);
+        if (markResult.getUpdated() == 0 && markResult.getSession().getStatus() == SessionStatus.CONFIRMED) {
             Map<String, Object> dup = new HashMap<>();
             dup.put("success", true);
             dup.put("isDuplicate", true);
             dup.put("message", "该提醒已确认，无需重复操作～");
             return dup;
         }
+        ConfirmationSession session = markResult.getSession();
         Map<String, Object> parsedData = parseParsedData(session.getParsedData());
         Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "skip");
 
@@ -336,14 +337,15 @@ public class ConfirmationService {
     // 周期提醒-全部覆盖：删除冲突提醒后再创建全部实例
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmRecurringOverwriteAll(String sessionId, Long userId) {
-        ConfirmationSession session = atomicMarkConfirmed(sessionId, userId);
-        if (session.getStatus() == SessionStatus.CONFIRMED) {
+        AtomicMarkResult markResult = atomicMarkConfirmed(sessionId, userId);
+        if (markResult.getUpdated() == 0 && markResult.getSession().getStatus() == SessionStatus.CONFIRMED) {
             Map<String, Object> dup = new HashMap<>();
             dup.put("success", true);
             dup.put("isDuplicate", true);
             dup.put("message", "该提醒已确认，无需重复操作～");
             return dup;
         }
+        ConfirmationSession session = markResult.getSession();
         Map<String, Object> parsedData = parseParsedData(session.getParsedData());
         Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "overwrite");
 
@@ -380,8 +382,8 @@ public class ConfirmationService {
     }
 
     // 通用：原子标记会话为 CONFIRMED + 调用 AgentService 生成人性化回复
-    // 返回 { session, isDuplicate }，isDuplicate=true 表示已被处理过
-    private ConfirmationSession atomicMarkConfirmed(String sessionId, Long userId) {
+    // 返回 AtomicMarkResult，包含 updated 标记与会话实体，用于区分“本次更新成功”和“已被其他请求更新”
+    private AtomicMarkResult atomicMarkConfirmed(String sessionId, Long userId) {
         int updated = confirmationRepository.markConfirmed(sessionId, userId, LocalDateTime.now());
         if (updated == 0) {
             // 已被处理过，读取当前状态
@@ -393,11 +395,31 @@ public class ConfirmationService {
             if (existing.getStatus() == SessionStatus.EXPIRED) {
                 throw new IllegalArgumentException("该会话已过期，不能确认");
             }
-            // CONFIRMED: 直接返回（调用方判断 isDuplicate）
-            return existing;
+            // CONFIRMED: 返回 updated=0，由调用方判断 isDuplicate
+            return new AtomicMarkResult(0, existing);
         }
-        return confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
+        ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+        return new AtomicMarkResult(1, session);
+    }
+
+    // 内部类：封装 atomicMarkConfirmed 的返回结果，区分“本次更新成功(updated=1)”和“已被其他请求更新(updated=0)”
+    private static class AtomicMarkResult {
+        private final int updated;
+        private final ConfirmationSession session;
+
+        public AtomicMarkResult(int updated, ConfirmationSession session) {
+            this.updated = updated;
+            this.session = session;
+        }
+
+        public int getUpdated() {
+            return updated;
+        }
+
+        public ConfirmationSession getSession() {
+            return session;
+        }
     }
 
     // 通用：调用 AgentService 生成确认回复，注入到 result 的 message 字段
@@ -488,21 +510,15 @@ public class ConfirmationService {
     // 覆盖创建（全量）：事务内 DB 操作 + 事务外 AgentService 回复
     public Map<String, Object> handleOverwrite(String sessionId, Long userId) {
         Map<String, Object> result = transactionTemplate.execute(status -> {
-            int updated = confirmationRepository.markConfirmed(sessionId, userId, LocalDateTime.now());
-            if (updated == 0) {
-                ConfirmationSession existing = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
-                        .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
-                if (existing.getStatus() == SessionStatus.CONFIRMED) {
-                    Map<String, Object> dup = new HashMap<>();
-                    dup.put("success", true);
-                    dup.put("isDuplicate", true);
-                    dup.put("message", "该提醒已确认，无需重复操作～");
-                    return dup;
-                }
-                throw new IllegalArgumentException("会话状态异常，请重试");
+            AtomicMarkResult markResult = atomicMarkConfirmed(sessionId, userId);
+            if (markResult.getUpdated() == 0 && markResult.getSession().getStatus() == SessionStatus.CONFIRMED) {
+                Map<String, Object> dup = new HashMap<>();
+                dup.put("success", true);
+                dup.put("isDuplicate", true);
+                dup.put("message", "该提醒已确认，无需重复操作～");
+                return dup;
             }
-            ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
-                    .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+            ConfirmationSession session = markResult.getSession();
             Map<String, Object> parsedData = parseParsedData(session.getParsedData());
             List<Long> allConflictIds = getAllConflictIds(parsedData);
             List<String> overwrittenTitles = deleteConflicts(userId, allConflictIds);
@@ -538,21 +554,15 @@ public class ConfirmationService {
     // 覆盖创建（指定 ID）：事务内 DB 操作 + 事务外 AgentService 回复
     public Map<String, Object> handleOverwrite(String sessionId, Long userId, List<Long> conflictIdsToOverwrite) {
         Map<String, Object> result = transactionTemplate.execute(status -> {
-            int updated = confirmationRepository.markConfirmed(sessionId, userId, LocalDateTime.now());
-            if (updated == 0) {
-                ConfirmationSession existing = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
-                        .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
-                if (existing.getStatus() == SessionStatus.CONFIRMED) {
-                    Map<String, Object> dup = new HashMap<>();
-                    dup.put("success", true);
-                    dup.put("isDuplicate", true);
-                    dup.put("message", "该提醒已确认，无需重复操作～");
-                    return dup;
-                }
-                throw new IllegalArgumentException("会话状态异常，请重试");
+            AtomicMarkResult markResult = atomicMarkConfirmed(sessionId, userId);
+            if (markResult.getUpdated() == 0 && markResult.getSession().getStatus() == SessionStatus.CONFIRMED) {
+                Map<String, Object> dup = new HashMap<>();
+                dup.put("success", true);
+                dup.put("isDuplicate", true);
+                dup.put("message", "该提醒已确认，无需重复操作～");
+                return dup;
             }
-            ConfirmationSession session = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
-                    .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
+            ConfirmationSession session = markResult.getSession();
             Map<String, Object> parsedData = parseParsedData(session.getParsedData());
             List<String> overwrittenTitles = deleteConflicts(userId, conflictIdsToOverwrite);
             Reminder reminder = createReminder(userId, parsedData, ConfirmStatus.CONFIRMED);
