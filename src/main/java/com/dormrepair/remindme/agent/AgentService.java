@@ -922,8 +922,9 @@ public class AgentService {
     // 1. 写 create_reminder tool_result；
     // 2. 以"工具结果 + 空工具列表"再调一次 LLM，让它生成最终自然语言回复；
     // 3. LLM 失败用默认文案兜底
-    public AgentResponse handleConfirmationResult(Long userId, String sessionId, boolean confirmed) {
-        log.info("处理确认结果: userId={}, sessionId={}, confirmed={}", userId, sessionId, confirmed);
+    // contextData：周期提醒场景传 createResult（含 successCount/skippedCount/overwrittenCount/totalDays），普通场景传 null
+    public AgentResponse handleConfirmationResult(Long userId, String sessionId, boolean confirmed, Map<String, Object> contextData) {
+        log.info("处理确认结果: userId={}, sessionId={}, confirmed={}, contextData={}", userId, sessionId, confirmed, contextData);
 
         if (!agentEnabled) {
             log.debug("Agent未启用，跳过处理确认结果");
@@ -938,9 +939,44 @@ public class AgentService {
         }
 
         try {
-            String resultText = confirmed
-                    ? "用户已确认提醒创建，请回复一句自然友好的确认话术，50字内，适当使用emoji。"
-                    : "用户已取消提醒创建，请回复一句自然友好的取消话术，30字内，语气轻松。";
+            String resultText;
+            if (confirmed) {
+                StringBuilder sb = new StringBuilder();
+                sb.append("用户已确认提醒创建。");
+
+                // 周期提醒上下文：包含具体创建数量、跳过冲突数、覆盖数量等
+                if (contextData != null) {
+                    Object successCount = contextData.get("successCount");
+                    Object skippedCount = contextData.get("skippedCount");
+                    Object overwrittenCount = contextData.get("overwrittenCount");
+                    Object totalDays = contextData.get("totalDays");
+
+                    if (successCount != null && skippedCount != null) {
+                        sb.append(" 实际成功创建了 ").append(successCount).append(" 天");
+                        int skipped = ((Number) skippedCount).intValue();
+                        if (skipped > 0) {
+                            sb.append("，跳过了 ").append(skipped).append(" 天冲突");
+                        }
+                        sb.append("。");
+                    } else if (successCount != null && overwrittenCount != null) {
+                        sb.append(" 实际成功创建了 ").append(successCount).append(" 天");
+                        int overwritten = ((Number) overwrittenCount).intValue();
+                        if (overwritten > 0) {
+                            sb.append("，覆盖了 ").append(overwritten).append(" 条冲突提醒");
+                        }
+                        sb.append("。");
+                    } else if (successCount != null) {
+                        sb.append(" 实际成功创建了 ").append(successCount).append(" 天。");
+                    } else if (totalDays != null) {
+                        sb.append(" 共创建 ").append(totalDays).append(" 天。");
+                    }
+                }
+
+                sb.append(" 请根据这个结果回复一句自然友好的确认话术，50字内，适当使用emoji。");
+                resultText = sb.toString();
+            } else {
+                resultText = "用户已取消提醒创建，请回复一句自然友好的取消话术，30字内，语气轻松。";
+            }
 
             conversationMemory.addToolResult(userId, "create_reminder", resultText, confirmed);
 

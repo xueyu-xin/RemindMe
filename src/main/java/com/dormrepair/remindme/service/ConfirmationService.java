@@ -185,7 +185,19 @@ public class ConfirmationService {
         // 事务提交后，调用 AgentService 生成人性化回复（不占用数据库连接）
         if (result != null && Boolean.TRUE.equals(result.get("success"))) {
             String fallbackMsg = (String) result.remove("_llmFallback");
-            enrichWithAgentReply(result, userId, sessionId, true);
+            // 覆盖场景：向 Agent 传递覆盖标题、覆盖数量等上下文，生成准确回复
+            Map<String, Object> coverCtx = null;
+            if (result.containsKey("overwrittenTitle")) {
+                coverCtx = new HashMap<>();
+                coverCtx.put("overwrittenTitle", result.get("overwrittenTitle"));
+                // 过 result 中 overwrittenTitle 是 "、" 拼接的字符串，按分隔符拆分估算数量
+                Object ovt = result.get("overwrittenTitle");
+                if (ovt != null) {
+                    int count = ovt.toString().split("、", -1).length;
+                    coverCtx.put("overwrittenCount", count);
+                }
+            }
+            enrichWithAgentReply(result, userId, sessionId, true, coverCtx);
             if (result.get("message") == null) {
                 result.put("message", fallbackMsg != null ? fallbackMsg : "提醒已确认");
             }
@@ -268,9 +280,9 @@ public class ConfirmationService {
             result.put("conflictCount", createResult.get("conflictCount"));
         }
 
-        // 调用 AgentService 生成人性化回复
+        // 调用 AgentService 生成人性化回复，传入 createResult 作为上下文（含 successCount/skippedCount 等）
         try {
-            AgentResponse agentResponse = agentService.handleConfirmationResult(userId, session.getSessionId(), true);
+            AgentResponse agentResponse = agentService.handleConfirmationResult(userId, session.getSessionId(), true, createResult);
             if (agentResponse != null && agentResponse.getContent() != null) {
                 result.put("message", agentResponse.getContent());
             } else {
@@ -304,7 +316,7 @@ public class ConfirmationService {
         confirmationRepository.save(session);
 
         Map<String, Object> result = new HashMap<>(createResult);
-        enrichWithAgentReply(result, userId, sessionId, true);
+        enrichWithAgentReply(result, userId, sessionId, true, createResult);
         pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
         log.info("周期提醒直接创建: sessionId={}, userId={}", sessionId, userId);
         return result;
@@ -329,7 +341,7 @@ public class ConfirmationService {
         confirmationRepository.save(session);
 
         Map<String, Object> result = new HashMap<>(createResult);
-        enrichWithAgentReply(result, userId, sessionId, true);
+        enrichWithAgentReply(result, userId, sessionId, true, createResult);
         pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
         log.info("周期提醒跳过冲突创建: sessionId={}, userId={}", sessionId, userId);
         return result;
@@ -354,7 +366,7 @@ public class ConfirmationService {
         confirmationRepository.save(session);
 
         Map<String, Object> result = new HashMap<>(createResult);
-        enrichWithAgentReply(result, userId, sessionId, true);
+        enrichWithAgentReply(result, userId, sessionId, true, createResult);
         pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
         log.info("周期提醒全部覆盖创建: sessionId={}, userId={}", sessionId, userId);
         return result;
@@ -424,9 +436,10 @@ public class ConfirmationService {
     }
 
     // 通用：调用 AgentService 生成确认回复，注入到 result 的 message 字段
-    private void enrichWithAgentReply(Map<String, Object> result, Long userId, String sessionId, boolean confirmed) {
+    // contextData 可为 null（普通确认/取消场景），周期提醒传 createResult 含 successCount/skippedCount 等
+    private void enrichWithAgentReply(Map<String, Object> result, Long userId, String sessionId, boolean confirmed, Map<String, Object> contextData) {
         try {
-            AgentResponse agentResponse = agentService.handleConfirmationResult(userId, sessionId, confirmed);
+            AgentResponse agentResponse = agentService.handleConfirmationResult(userId, sessionId, confirmed, contextData);
             if (agentResponse != null && agentResponse.getContent() != null) {
                 result.put("message", agentResponse.getContent());
             }
@@ -492,7 +505,7 @@ public class ConfirmationService {
         // 事务提交后，调用 AgentService 生成人性化取消回复
         if (result != null && Boolean.TRUE.equals(result.get("success")) && !Boolean.TRUE.equals(result.get("isDuplicate"))) {
             try {
-                AgentResponse agentResponse = agentService.handleConfirmationResult(userId, sessionId, false);
+                AgentResponse agentResponse = agentService.handleConfirmationResult(userId, sessionId, false, null);
                 if (agentResponse != null && agentResponse.getContent() != null) {
                     result.put("message", agentResponse.getContent());
                 } else {
@@ -547,7 +560,18 @@ public class ConfirmationService {
             return r;
         });
         if (result != null && Boolean.TRUE.equals(result.get("success")) && !Boolean.TRUE.equals(result.get("isDuplicate"))) {
-            enrichWithAgentReply(result, userId, sessionId, true);
+            // 全量覆盖场景：向 Agent 传递覆盖标题、覆盖数量
+            Map<String, Object> coverCtx = null;
+            if (result.containsKey("overwrittenTitle")) {
+                coverCtx = new HashMap<>();
+                coverCtx.put("overwrittenTitle", result.get("overwrittenTitle"));
+                Object ovt = result.get("overwrittenTitle");
+                if (ovt != null) {
+                    int count = ovt.toString().split("、", -1).length;
+                    coverCtx.put("overwrittenCount", count);
+                }
+            }
+            enrichWithAgentReply(result, userId, sessionId, true, coverCtx);
         }
         return result;
     }
@@ -590,7 +614,18 @@ public class ConfirmationService {
             return r;
         });
         if (result != null && Boolean.TRUE.equals(result.get("success")) && !Boolean.TRUE.equals(result.get("isDuplicate"))) {
-            enrichWithAgentReply(result, userId, sessionId, true);
+            // 指定 ID 覆盖场景：向 Agent 传递覆盖标题、覆盖数量
+            Map<String, Object> coverCtx = null;
+            if (result.containsKey("overwrittenTitle")) {
+                coverCtx = new HashMap<>();
+                coverCtx.put("overwrittenTitle", result.get("overwrittenTitle"));
+                Object ovt = result.get("overwrittenTitle");
+                if (ovt != null) {
+                    int count = ovt.toString().split("、", -1).length;
+                    coverCtx.put("overwrittenCount", count);
+                }
+            }
+            enrichWithAgentReply(result, userId, sessionId, true, coverCtx);
         }
         return result;
     }
@@ -948,8 +983,12 @@ public class ConfirmationService {
                     // 超时自动确认后也让 LLM 生成一句 bot 回复（和用户手动确认/取消走同一条链路），
                     // 避免"卡片确认成功了但没有文字回复"的打断感
                     try {
+                        // 向 Agent 传递具体提醒的 title 和 remindTime，让回复更准确
+                        Map<String, Object> ctx = new HashMap<>();
+                        ctx.put("title", reminder.getTitle());
+                        ctx.put("remindTime", reminder.getRemindTime().format(TimeUtils.FORMATTER));
                         agentService.handleConfirmationResult(
-                                session.getUserId(), session.getSessionId(), true);
+                                session.getUserId(), session.getSessionId(), true, ctx);
                     } catch (Exception e) {
                         log.warn("超时自动确认后生成LLM回复失败，跳过: sessionId={}, error={}",
                                 session.getSessionId(), e.getMessage());
@@ -1028,8 +1067,12 @@ public class ConfirmationService {
         pushUserMessage(session.getUserId(), "timeout_auto_create", result);
 
         // 周期提醒超时自动确认后也走 handleConfirmationResult 统一生成 bot 回复
+        // 接收 Agent 返回值：如果 LLM 正常生成自然语言，则覆盖 result.message（与 bot 回复保持一致）
         try {
-            agentService.handleConfirmationResult(session.getUserId(), session.getSessionId(), true);
+            AgentResponse agentResponse = agentService.handleConfirmationResult(session.getUserId(), session.getSessionId(), true, createResult);
+            if (agentResponse != null && agentResponse.getContent() != null) {
+                result.put("message", agentResponse.getContent());
+            }
         } catch (Exception e) {
             log.warn("周期提醒超时自动确认后生成LLM回复失败，跳过: sessionId={}, error={}",
                     session.getSessionId(), e.getMessage());
@@ -1490,8 +1533,7 @@ public class ConfirmationService {
             return "✅ 已覆盖「" + overwrittenTitle + "」，新提醒\"" + title + "\"已创建\n" +
                    "⏰ 我将在 " + remindTime + " 提醒您";
         }
-        return "✅ 已创建提醒：\"" + title + "\"，" + remindTime + " 执行\n" +
-               "⏰ 我将在 " + remindTime + " 提醒您" + title;
+        return "✅ 已创建提醒：\"" + title + "\"，" + remindTime + " 准时提醒你～";
     }
 
     // 构建超时自动确认消息，提示用户因未及时确认已自动创建提醒
@@ -1628,7 +1670,7 @@ public class ConfirmationService {
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
-        result.put("message", "✅ 已确认全部 " + reminders.size() + " 个行程");
+        result.put("message", "✅ 已确认全部 " + reminders.size() + " 个提醒");
         result.put("count", reminders.size());
         pushUserMessage(userId, "batch_confirm_result", result);
 
@@ -1649,7 +1691,7 @@ public class ConfirmationService {
 
         Map<String, Object> result = new HashMap<>();
         result.put("success", true);
-        result.put("message", "❌ 已取消全部 " + sessions.size() + " 个行程");
+        result.put("message", "❌ 已取消全部 " + sessions.size() + " 个提醒");
         result.put("count", sessions.size());
         pushUserMessage(userId, "batch_cancel_result", result);
 
