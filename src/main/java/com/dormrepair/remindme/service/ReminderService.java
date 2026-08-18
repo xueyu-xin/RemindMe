@@ -14,6 +14,7 @@ import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.enums.ReminderSource;
 import com.dormrepair.remindme.enums.ReminderStatus;
 import com.dormrepair.remindme.enums.RepeatType;
+import com.dormrepair.remindme.exception.InvalidInputException;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.repository.UserRepository;
 import com.dormrepair.remindme.utils.TimeUtils;
@@ -66,7 +67,8 @@ public class ReminderService {
                 location,
                 note,
                 priority,
-                null
+                null,
+                null  // originalInput：HTTP 表单创建路径无自然语言原始输入，传 null 跳过倒计时检测
         );
     }
 
@@ -188,10 +190,23 @@ public class ReminderService {
             + "advanceMinutes: 提前提醒分钟数（可选）。当用户说'X分钟后'时传入X，说'等会/马上'时传入0，明确时间（如'明天下午3点'）时不传。")
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> createReminderForAgent(Long userId, String title, String remindTime,
-            String endTime, String location, String note, String priority, Integer advanceMinutes) {
-        
-        log.info("Agent调用创建提醒: userId={}, title={}, remindTime={}, endTime={}, location={}, note={}, priority={}, advanceMinutes={}",
-                userId, title, remindTime, endTime, location, note, priority, advanceMinutes);
+            String endTime, String location, String note, String priority, Integer advanceMinutes,
+            String originalInput) {
+
+        log.info("Agent调用创建提醒: userId={}, title={}, remindTime={}, endTime={}, location={}, note={}, priority={}, advanceMinutes={}, originalInput={}",
+                userId, title, remindTime, endTime, location, note, priority, advanceMinutes, originalInput);
+
+        // 倒计时场景检测：用户说"提醒我"/"提醒下我"/"等会提醒"/"等下提醒"时，应准时触发（advanceMinutes=0）
+        // 区分"30分钟后提醒我"（倒计时，准时触发）与"30分钟后我去开会"（事件预告，提前提醒）
+        boolean isCountdown = false;
+        if (originalInput != null && !originalInput.isBlank()) {
+            String lowerInput = originalInput.toLowerCase();
+            if (lowerInput.contains("提醒我") || lowerInput.contains("提醒下我")
+                    || lowerInput.contains("等会提醒") || lowerInput.contains("等下提醒")) {
+                isCountdown = true;
+                log.info("检测到倒计时场景(准时触发): originalInput={}", originalInput);
+            }
+        }
         
         Map<String, Object> result = new HashMap<>();
         
@@ -217,9 +232,12 @@ public class ReminderService {
             if (relativeTime != null) {
                 parsedTime = relativeTime;
                 remindTime = parsedTime.format(TimeUtils.FORMATTER);
+                // 相对时间（"X分钟后"）应准时触发，advanceMinutes 强制为 0
+                // 原逻辑把倒计时分钟数当作提前量，导致 triggerTime = remindTime - advanceMinutes = now 立即触发
+                // 修复后 advanceMinutes=0，triggerTime = remindTime，到点才触发
                 long relDiff = java.time.Duration.between(LocalDateTime.now(), parsedTime).toMinutes();
-                finalAdvance = relDiff > 0 && relDiff <= 1440 ? (int) relDiff : 10;
-                log.info("相对时间解析成功: remindTime={}, parsedTime={}, advanceMinutes={}", remindTime, parsedTime, finalAdvance);
+                finalAdvance = 0;
+                log.info("相对时间解析成功(准时触发): remindTime={}, parsedTime={}, 距触发{}分钟, advanceMinutes=0", remindTime, parsedTime, relDiff);
             } else {
                 // 原有逻辑：解析绝对时间，通过 diffMinutes 判断语义
                 parsedTime = LocalDateTime.parse(remindTime, TimeUtils.FORMATTER);
@@ -250,6 +268,13 @@ public class ReminderService {
                     // 明确指定的时间（如 18:30、明天下午3点）→ 使用默认提前量
                     finalAdvance = defaultAdvance;
                 }
+            }
+
+            // 倒计时场景覆盖：用户说"提醒我"时，无论上面分支算出什么 finalAdvance，强制为 0
+            // 确保触发时间 triggerTime = remindTime - 0 = remindTime，到点准时触发
+            if (isCountdown && finalAdvance > 0) {
+                log.info("倒计时场景覆盖: finalAdvance {} -> 0 (用户说'提醒我', 准时触发)", finalAdvance);
+                finalAdvance = 0;
             }
 
             LocalDateTime parsedEndTime = endTime != null ? LocalDateTime.parse(endTime, TimeUtils.FORMATTER) : null;
@@ -323,7 +348,7 @@ public class ReminderService {
             
         } catch (Exception e) {
             log.error("Agent创建提醒失败: userId={}, title={}, error={}", userId, title, e.getMessage(), e);
-            throw new RuntimeException("创建提醒失败: " + e.getMessage(), e);
+            throw new InvalidInputException("创建提醒失败: " + e.getMessage(), e);
         }
         
         return result;
@@ -436,7 +461,7 @@ public class ReminderService {
             
         } catch (Exception e) {
             log.error("Agent更新提醒失败: userId={}, reminderId={}, error={}", userId, reminderId, e.getMessage(), e);
-            throw new RuntimeException("更新提醒失败: " + e.getMessage(), e);
+            throw new InvalidInputException("更新提醒失败: " + e.getMessage(), e);
         }
         
         return result;
@@ -468,7 +493,7 @@ public class ReminderService {
             
         } catch (Exception e) {
             log.error("Agent取消提醒失败: userId={}, reminderId={}, error={}", userId, reminderId, e.getMessage(), e);
-            throw new RuntimeException("取消提醒失败: " + e.getMessage(), e);
+            throw new InvalidInputException("取消提醒失败: " + e.getMessage(), e);
         }
 
         return result;
@@ -580,7 +605,7 @@ public class ReminderService {
 
         } catch (Exception e) {
             log.error("创建周期提醒失败: userId={}, error={}", userId, e.getMessage(), e);
-            throw new RuntimeException("创建周期提醒失败: " + e.getMessage(), e);
+            throw new InvalidInputException("创建周期提醒失败: " + e.getMessage(), e);
         }
 
         return result;
@@ -655,7 +680,7 @@ public class ReminderService {
 
         } catch (Exception e) {
             log.error("取消提醒失败: userId={}, error={}", userId, e.getMessage(), e);
-            throw new RuntimeException("取消提醒失败: " + e.getMessage(), e);
+            throw new InvalidInputException("取消提醒失败: " + e.getMessage(), e);
         }
 
         return result;

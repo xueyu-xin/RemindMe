@@ -70,6 +70,25 @@
     gap: 10px;
 }
 
+/* ===== 周期冲突卡片按钮两排布局 ===== */
+/* 第一排 2 个按钮（直接创建/创建无冲突部分），第二排 3 个按钮（全部覆盖/修改/取消） */
+.confirmation-card .card-actions-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+/* 第一排（first-child）和第二排（last-child）按钮均分宽度 */
+.confirmation-card .card-actions-row .action-btn {
+    flex: 1;
+    min-width: 0;
+}
+
+/* 第一排不需要顶部 margin，避免与上方信息块间距过大 */
+.confirmation-card .card-actions-row:first-child {
+    margin-top: 0;
+}
+
 /* ===== 操作按钮 ===== */
 .confirmation-card .action-btn {
     flex: 1;

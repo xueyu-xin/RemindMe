@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
@@ -410,61 +411,90 @@ public class WeatherService {
 
     // ==================== HTTP 工具方法 ====================
 
-    // 发送 HTTP GET 请求，自动处理 gzip 解压
+    // 发送 HTTP GET 请求，自动处理 gzip 解压（带重试：仅 SocketTimeoutException，重试前重建连接）
     private String httpGet(String urlStr) {
-        try {
-            URI uri = URI.create(urlStr);
-            HttpURLConnection conn = (HttpURLConnection) uri.toURL().openConnection();
+        int maxRetries = 3;
+        int attempt = 0;
+        Exception lastException = null;
 
-            // 设置请求头
-            conn.setRequestMethod("GET");
-            conn.setConnectTimeout(10000);
-            conn.setReadTimeout(10000);
-            conn.setRequestProperty("X-QW-Api-Key", weatherConfig.getKey());
-            conn.setRequestProperty("Accept", "application/json");
-            conn.setRequestProperty("Accept-Encoding", "gzip");  // 请求 gzip 压缩，节省带宽
+        while (attempt < maxRetries) {
+            attempt++;
+            HttpURLConnection conn = null;
+            try {
+                URI uri = URI.create(urlStr);
+                conn = (HttpURLConnection) uri.toURL().openConnection();
 
-            int responseCode = conn.getResponseCode();
-            log.debug("HTTP响应码: {}", responseCode);
+                // 设置请求头
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(weatherConfig.getConnectTimeout());
+                conn.setReadTimeout(weatherConfig.getReadTimeout());
+                conn.setRequestProperty("X-QW-Api-Key", weatherConfig.getKey());
+                conn.setRequestProperty("Accept", "application/json");
+                conn.setRequestProperty("Accept-Encoding", "gzip");  // 请求 gzip 压缩，节省带宽
 
-            if (responseCode == 200 || responseCode == 304) {
-                // 读取响应，自动处理 gzip
-                String contentEncoding = conn.getHeaderField("Content-Encoding");
-                BufferedReader reader;
+                int responseCode = conn.getResponseCode();
+                log.debug("HTTP响应码: {}", responseCode);
 
-                if ("gzip".equalsIgnoreCase(contentEncoding)) {
-                    // gzip 压缩响应，需要解压
-                    reader = new BufferedReader(new InputStreamReader(
-                            new GZIPInputStream(conn.getInputStream()), "UTF-8"));
+                if (responseCode == 200 || responseCode == 304) {
+                    // 读取响应，自动处理 gzip
+                    String contentEncoding = conn.getHeaderField("Content-Encoding");
+                    BufferedReader reader;
+
+                    if ("gzip".equalsIgnoreCase(contentEncoding)) {
+                        // gzip 压缩响应，需要解压
+                        reader = new BufferedReader(new InputStreamReader(
+                                new GZIPInputStream(conn.getInputStream()), "UTF-8"));
+                    } else {
+                        // 普通响应
+                        reader = new BufferedReader(new InputStreamReader(
+                                conn.getInputStream(), "UTF-8"));
+                    }
+
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        sb.append(line);
+                    }
+                    reader.close();
+
+                    String json = sb.toString();
+                    log.debug("响应内容: {}", json);
+
+                    return json;
                 } else {
-                    // 普通响应
-                    reader = new BufferedReader(new InputStreamReader(
-                            conn.getInputStream(), "UTF-8"));
+                    // 错误响应
+                    String errorMsg = readErrorStream(conn);
+                    log.error("HTTP错误: code={}, message={}", responseCode, errorMsg);
+                    throw new RuntimeException("HTTP请求失败: " + responseCode + " - " + errorMsg);
+                }
+            } catch (SocketTimeoutException e) {
+                lastException = e;
+                log.warn("WeatherService httpGet 超时，第 {} 次重试: {}", attempt, e.getMessage());
+
+                if (attempt >= maxRetries) {
+                    break;
                 }
 
-                StringBuilder sb = new StringBuilder();
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    sb.append(line);
+                long waitMs = (long) (Math.pow(2, attempt - 1) * 100);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
                 }
-                reader.close();
-
-                String json = sb.toString();
-                log.debug("响应内容: {}", json);
-
-                return json;
-            } else {
-                // 错误响应
-                String errorMsg = readErrorStream(conn);
-                log.error("HTTP错误: code={}, message={}", responseCode, errorMsg);
-                throw new RuntimeException("HTTP请求失败: " + responseCode + " - " + errorMsg);
+            } catch (RuntimeException e) {
+                throw e;
+            } catch (Exception e) {
+                log.error("HTTP请求异常", e);
+                throw new RuntimeException("HTTP请求失败: " + e.getMessage(), e);
+            } finally {
+                if (conn != null) {
+                    conn.disconnect();
+                }
             }
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("HTTP请求异常", e);
-            throw new RuntimeException("HTTP请求失败: " + e.getMessage(), e);
         }
+
+        throw new RuntimeException("WeatherService httpGet 调用失败，已重试 " + maxRetries + " 次", lastException);
     }
 
     // 读取错误响应流，同样处理 gzip 解压

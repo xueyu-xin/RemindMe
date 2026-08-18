@@ -18,6 +18,8 @@ import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.RestClientException;
 
 import java.io.InputStream;
 import java.time.Instant;
@@ -31,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 // RAG 记忆服务：基于 Chroma 向量库管理两类知识——
@@ -114,6 +117,50 @@ public class RagService {
                 .build();
     }
 
+    // ==================== ChromaDB 重试包装器 ====================
+
+    // ChromaDB 操作重试包装器：仅对网络异常（RestClientException，含 ResourceAccessException/5xx）重试，
+    // 4xx 不重试，指数退避 100ms→200ms→400ms，重试耗尽抛 RuntimeException（由调用方外层 catch 兜底返回默认值）。
+    // Spring AI 的网络超时已被包装为 ResourceAccessException（RestClientException 子类），故直接 catch
+    // RestClientException 即可覆盖 SocketTimeoutException 等底层网络异常。
+    private <T> T callWithRetry(Supplier<T> action, String operation) {
+        int maxRetries = 3;
+        int attempt = 0;
+        RuntimeException lastException = null;
+
+        while (attempt < maxRetries) {
+            attempt++;
+            try {
+                return action.get();
+            } catch (RuntimeException e) {
+                // 仅对网络异常（RestClientException，包含 ResourceAccessException/HttpStatusCodeException）重试
+                if (!(e instanceof RestClientException)) {
+                    throw e;
+                }
+                // 4xx 客户端错误不重试
+                if (e instanceof HttpStatusCodeException) {
+                    int statusCode = ((HttpStatusCodeException) e).getStatusCode().value();
+                    if (statusCode >= 400 && statusCode < 500) {
+                        throw e;
+                    }
+                }
+                lastException = e;
+                log.warn("ChromaDB {} 调用失败，第 {} 次重试: {}", operation, attempt, e.getMessage());
+                if (attempt >= maxRetries) {
+                    break;
+                }
+                long waitMs = (long) (Math.pow(2, attempt - 1) * 100);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        throw new RuntimeException("ChromaDB " + operation + " 调用失败，已重试 " + maxRetries + " 次", lastException);
+    }
+
     // ==================== 私有记忆管理 ====================
 
     // 新增一条私有记忆，写入用户独立 collection，返回生成的文档 ID；失败返回 null
@@ -129,7 +176,7 @@ public class RagService {
             metadata.put("createTime", Instant.now().toString());
 
             Document document = new Document(docId, content, metadata);
-            userStore.add(List.of(document));
+            callWithRetry(() -> { userStore.add(List.of(document)); return true; }, "添加私有记忆");
 
             log.info("私有记忆添加成功: docId={}, userId={}", docId, userId);
             return docId;
@@ -149,7 +196,7 @@ public class RagService {
         log.info("删除私人记忆: memoryId={}, userId={}", memoryId, userId);
         try {
             ChromaVectorStore userStore = getUserVectorStore(userId);
-            userStore.delete(List.of(memoryId));
+            callWithRetry(() -> { userStore.delete(List.of(memoryId)); return true; }, "删除私有记忆");
             log.info("私人记忆删除成功: memoryId={}, userId={}", memoryId, userId);
             return true;
         } catch (Exception e) {
@@ -234,7 +281,8 @@ public class RagService {
                     .query("的")
                     .topK(1000)
                     .build();
-            List<Document> documents = userStore.similaritySearch(searchRequest);
+            List<Document> documents = callWithRetry(
+                    () -> userStore.similaritySearch(searchRequest), "获取所有私有记忆");
 
             if (documents == null || documents.isEmpty()) {
                 log.debug("用户私有库为空: userId={}", userId);
@@ -271,7 +319,8 @@ public class RagService {
                     .query(query)
                     .topK(actualTopK)
                     .build();
-            List<Document> documents = userStore.similaritySearch(searchRequest);
+            List<Document> documents = callWithRetry(
+                    () -> userStore.similaritySearch(searchRequest), "检索私有记忆");
 
             if (documents == null || documents.isEmpty()) {
                 log.debug("私有记忆检索无结果: userId={}, query={}", userId, query);
@@ -305,7 +354,8 @@ public class RagService {
                     .query(query)
                     .topK(actualTopK)
                     .build();
-            List<Document> documents = vectorStore.similaritySearch(searchRequest);
+            List<Document> documents = callWithRetry(
+                    () -> vectorStore.similaritySearch(searchRequest), "检索公共知识");
 
             if (documents == null || documents.isEmpty()) {
                 log.debug("公共知识检索无结果: query={}", query);

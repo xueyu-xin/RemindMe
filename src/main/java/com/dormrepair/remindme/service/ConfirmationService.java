@@ -16,6 +16,7 @@ import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.enums.ReminderSource;
 import com.dormrepair.remindme.enums.ReminderStatus;
 import com.dormrepair.remindme.enums.RepeatType;
+import com.dormrepair.remindme.exception.InvalidInputException;
 import com.dormrepair.remindme.repository.ConfirmationRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.utils.TimeUtils;
@@ -151,7 +152,7 @@ public class ConfirmationService {
             ConfirmationSession session = markResult.getSession();
 
             if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
-                throw new IllegalArgumentException("该会话已过期，请重新创建");
+                throw new InvalidInputException("该会话已过期，请重新创建");
             }
 
             Map<String, Object> parsedData = parseParsedData(session.getParsedData());
@@ -200,10 +201,10 @@ public class ConfirmationService {
 
         SessionStatus status = session.getStatus();
         if (status == SessionStatus.CANCELLED) {
-            throw new IllegalArgumentException("该会话已取消，不能确认");
+            throw new InvalidInputException("该会话已取消，不能确认");
         }
         if (status == SessionStatus.EXPIRED) {
-            throw new IllegalArgumentException("该会话已过期，不能确认");
+            throw new InvalidInputException("该会话已过期，不能确认");
         }
 
         // 已经是 CONFIRMED：返回已创建的提醒信息
@@ -225,7 +226,7 @@ public class ConfirmationService {
             return result;
         }
 
-        throw new IllegalArgumentException("会话状态异常，请重试");
+        throw new InvalidInputException("会话状态异常，请重试");
     }
 
     // 周期提醒确认分支：调用周期生成实例，更新会话状态，不再发布事件（由统一回复流程处理）
@@ -365,18 +366,18 @@ public class ConfirmationService {
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
         SessionStatus status = session.getStatus();
         if (status == SessionStatus.CONFIRMED) {
-            throw new IllegalArgumentException("该会话已确认，不能重复操作");
+            throw new InvalidInputException("该会话已确认，不能重复操作");
         }
         if (status == SessionStatus.CANCELLED) {
-            throw new IllegalArgumentException("该会话已取消");
+            throw new InvalidInputException("该会话已取消");
         }
         if (status == SessionStatus.EXPIRED) {
-            throw new IllegalArgumentException("该会话已过期，请重新创建");
+            throw new InvalidInputException("该会话已过期，请重新创建");
         }
         if (session.getExpiresAt() != null && session.getExpiresAt().isBefore(LocalDateTime.now())) {
             session.setStatus(SessionStatus.EXPIRED);
             confirmationRepository.save(session);
-            throw new IllegalArgumentException("该会话已过期，请重新创建");
+            throw new InvalidInputException("该会话已过期，请重新创建");
         }
         return session;
     }
@@ -390,10 +391,10 @@ public class ConfirmationService {
             ConfirmationSession existing = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                     .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
             if (existing.getStatus() == SessionStatus.CANCELLED) {
-                throw new IllegalArgumentException("该会话已取消，不能确认");
+                throw new InvalidInputException("该会话已取消，不能确认");
             }
             if (existing.getStatus() == SessionStatus.EXPIRED) {
-                throw new IllegalArgumentException("该会话已过期，不能确认");
+                throw new InvalidInputException("该会话已过期，不能确认");
             }
             // CONFIRMED: 返回 updated=0，由调用方判断 isDuplicate
             return new AtomicMarkResult(0, existing);
@@ -458,7 +459,7 @@ public class ConfirmationService {
                     userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority);
             case "overwrite" -> recurringReminderService.generateWithOverwrite(
                     userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority);
-            default -> throw new IllegalArgumentException("未知的创建模式: " + mode);
+            default -> throw new InvalidInputException("未知的创建模式: " + mode);
         };
     }
 
@@ -470,7 +471,7 @@ public class ConfirmationService {
                 ConfirmationSession existing = confirmationRepository.findBySessionIdAndUserId(sessionId, userId)
                         .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
                 if (existing.getStatus() == SessionStatus.CONFIRMED) {
-                    throw new IllegalArgumentException("该会话已确认，不能取消");
+                    throw new InvalidInputException("该会话已确认，不能取消");
                 }
                 if (existing.getStatus() == SessionStatus.CANCELLED) {
                     Map<String, Object> dup = new HashMap<>();
@@ -480,7 +481,7 @@ public class ConfirmationService {
                     return dup;
                 }
                 if (existing.getStatus() == SessionStatus.EXPIRED) {
-                    throw new IllegalArgumentException("该会话已过期，不能取消");
+                    throw new InvalidInputException("该会话已过期，不能取消");
                 }
             }
             Map<String, Object> r = new HashMap<>();
@@ -1552,7 +1553,7 @@ public class ConfirmationService {
                         ExecutionStatus.PENDING);
         
         if (pendingReminders.isEmpty()) {
-            throw new IllegalArgumentException("当前没有待确认的行程");
+            throw new InvalidInputException("当前没有待确认的行程");
         }
 
         Reminder targetReminder;
@@ -1618,7 +1619,7 @@ public class ConfirmationService {
     public List<Reminder> confirmAll(Long userId) {
         List<ConfirmationSession> sessions = getPendingSessions(userId);
         if (sessions.isEmpty()) {
-            throw new IllegalArgumentException("当前没有待确认的行程");
+            throw new InvalidInputException("当前没有待确认的行程");
         }
 
         List<Reminder> reminders = sessions.stream()

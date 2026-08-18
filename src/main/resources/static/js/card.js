@@ -118,12 +118,51 @@ var CardSystem = (function() {
         html += '</div>';
 
         // 操作按钮
-        html += '<div class="card-actions">';
-        for (var i = 0; i < card.actions.length; i++) {
-            var action = card.actions[i];
-            html += '<button class="action-btn ' + (action.style || '') + '" data-action-id="' + action.id + '" data-session-id="' + sessionId + '">' + escapeHtml(action.label) + '</button>';
+        // 周期冲突卡片（含 confirm_direct/confirm_skip/overwrite_all）拆分为两排：
+        // 第一排：confirm_direct + confirm_skip（2 个，各占一半）
+        // 第二排：overwrite_all + edit + cancel（3 个，各占三分之一）
+        // 非周期卡片保持原单排 card-actions 布局
+        var isRecurringConflictCard = card.actions.some(function(a) {
+            return a.id === 'confirm_direct' || a.id === 'confirm_skip' || a.id === 'overwrite_all';
+        });
+
+        if (isRecurringConflictCard) {
+            // 按 ID 分组：第一排 confirm_direct/confirm_skip，第二排 overwrite_all/edit/cancel
+            var firstRowIds = ['confirm_direct', 'confirm_skip'];
+            var firstRowActions = [];
+            var secondRowActions = [];
+            for (var i = 0; i < card.actions.length; i++) {
+                if (firstRowIds.indexOf(card.actions[i].id) >= 0) {
+                    firstRowActions.push(card.actions[i]);
+                } else {
+                    secondRowActions.push(card.actions[i]);
+                }
+            }
+
+            // 第一排
+            html += '<div class="card-actions-row">';
+            for (var i = 0; i < firstRowActions.length; i++) {
+                var action = firstRowActions[i];
+                html += '<button class="action-btn ' + (action.style || '') + '" data-action-id="' + action.id + '" data-session-id="' + sessionId + '">' + escapeHtml(action.label) + '</button>';
+            }
+            html += '</div>';
+
+            // 第二排
+            html += '<div class="card-actions-row">';
+            for (var i = 0; i < secondRowActions.length; i++) {
+                var action = secondRowActions[i];
+                html += '<button class="action-btn ' + (action.style || '') + '" data-action-id="' + action.id + '" data-session-id="' + sessionId + '">' + escapeHtml(action.label) + '</button>';
+            }
+            html += '</div>';
+        } else {
+            // 非周期卡片：保持原单排布局
+            html += '<div class="card-actions">';
+            for (var i = 0; i < card.actions.length; i++) {
+                var action = card.actions[i];
+                html += '<button class="action-btn ' + (action.style || '') + '" data-action-id="' + action.id + '" data-session-id="' + sessionId + '">' + escapeHtml(action.label) + '</button>';
+            }
+            html += '</div>';
         }
-        html += '</div>';
 
         // 倒计时显示
         html += '<div class="card-timer" id="timer-' + sessionId + '"></div>';

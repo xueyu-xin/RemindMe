@@ -5,6 +5,7 @@ import com.dormrepair.remindme.dto.request.LoginRequest;
 import com.dormrepair.remindme.dto.request.RegisterRequest;
 import com.dormrepair.remindme.dto.response.LoginResponse;
 import com.dormrepair.remindme.entity.User;
+import com.dormrepair.remindme.exception.InvalidInputException;
 import com.dormrepair.remindme.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,7 +31,7 @@ public class UserService {
     @Transactional
     public User register(RegisterRequest request) {
         if (userRepository.existsByPhone(request.getPhone())) {
-            throw new IllegalArgumentException("该手机号已注册");
+            throw new InvalidInputException("该手机号已注册");
         }
 
         verificationCodeService.verifyCode(request.getPhone(), request.getCode());
@@ -49,7 +50,7 @@ public class UserService {
                 .orElseThrow(() -> new IllegalArgumentException("账号或密码错误"));
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
-            throw new IllegalArgumentException("账号或密码错误");
+            throw new InvalidInputException("账号或密码错误");
         }
 
         LoginResponse response = new LoginResponse();

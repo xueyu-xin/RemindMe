@@ -205,7 +205,7 @@ public class AgentService {
                     // 执行工具并落盘
                     log.info("LLM决定调用工具({}/{}) : {}", toolCallCount + 1, MAX_TOOL_CALLS, llmToolCall.getToolName());
                     ToolCall toolCall = ToolCall.of(llmToolCall.getToolName(), llmToolCall.getArguments());
-                    String toolResult = executeToolCall(userId, toolCall);
+                    String toolResult = executeToolCall(userId, toolCall, userInput);
                     toolCallCount++;
                     executedSignatures.add(signature);
                     toolHistory.add(llmToolCall.getToolName());
@@ -343,10 +343,14 @@ public class AgentService {
     // - 第 2 次去除地点末尾"市"；
     // - 第 3 次替换用户默认城市；
     // 失败时构建 fallback JSON 供 LLM 拿到友好描述
-    public String executeToolCall(Long userId, ToolCall toolCall) {
+    public String executeToolCall(Long userId, ToolCall toolCall, String userInput) {
         String toolName = toolCall.getToolName();
         Map<String, Object> arguments = new HashMap<>(toolCall.getArguments());
         arguments.put("userId", userId);
+        // 传递用户原始输入，供 create_reminder 工具检测"提醒我"等倒计时场景关键词
+        if (userInput != null && !userInput.isBlank()) {
+            arguments.put("originalInput", userInput);
+        }
 
         int maxRetries = 3;
         int attempt = 0;

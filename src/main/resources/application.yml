@@ -70,6 +70,8 @@ weather:
   api:
     key: ${WEATHER_API_KEY:your-weather-api-key}
     host: ${WEATHER_API_HOST:https://your-weather-api-host}
+    connect-timeout: 10000
+    read-timeout: 10000
 
 logging:
   level:

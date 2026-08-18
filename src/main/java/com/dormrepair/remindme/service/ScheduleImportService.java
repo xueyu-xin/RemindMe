@@ -17,6 +17,8 @@ import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.enums.ReminderSource;
 import com.dormrepair.remindme.enums.ReminderStatus;
 import com.dormrepair.remindme.enums.RepeatType;
+import com.dormrepair.remindme.exception.AccessForbiddenException;
+import com.dormrepair.remindme.exception.InvalidInputException;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.repository.ScheduleImportItemRepository;
 import com.dormrepair.remindme.repository.ScheduleImportRepository;
@@ -60,10 +62,10 @@ public class ScheduleImportService {
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> processUpload(MultipartFile file, Long userId) {
         if (file == null || file.isEmpty()) {
-            throw new IllegalArgumentException("文件不能为空");
+            throw new InvalidInputException("文件不能为空");
         }
         if (userId == null) {
-            throw new IllegalArgumentException("用户ID不能为空");
+            throw new InvalidInputException("用户ID不能为空");
         }
 
         String fileName = file.getOriginalFilename();
@@ -298,18 +300,18 @@ public class ScheduleImportService {
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> batchCreateReminders(Long importId, Long userId, String action) {
         if (userId == null) {
-            throw new IllegalArgumentException("用户ID不能为空");
+            throw new InvalidInputException("用户ID不能为空");
         }
 
         ScheduleImport importRecord = importRepository.findById(importId)
                 .orElseThrow(() -> new IllegalArgumentException("导入记录不存在：" + importId));
 
         if (!importRecord.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("无权操作此导入记录");
+            throw new AccessForbiddenException("无权操作此导入记录");
         }
 
         if ("CONFIRMED".equals(importRecord.getStatus()) || "CANCELLED".equals(importRecord.getStatus())) {
-            throw new IllegalArgumentException("该导入记录已处理，无法再次确认");
+            throw new InvalidInputException("该导入记录已处理，无法再次确认");
         }
 
         // 优先使用缓存中的课表数据生成日程
@@ -582,11 +584,11 @@ public class ScheduleImportService {
                 .orElseThrow(() -> new IllegalArgumentException("导入记录不存在：" + importId));
 
         if (!importRecord.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("无权操作此导入记录");
+            throw new AccessForbiddenException("无权操作此导入记录");
         }
 
         if ("CONFIRMED".equals(importRecord.getStatus())) {
-            throw new IllegalArgumentException("已确认的导入无法取消");
+            throw new InvalidInputException("已确认的导入无法取消");
         }
 
         importRecord.setStatus("CANCELLED");
@@ -612,7 +614,7 @@ public class ScheduleImportService {
                 .orElseThrow(() -> new IllegalArgumentException("导入记录不存在：" + importId));
 
         if (!importRecord.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("无权查看此导入记录");
+            throw new AccessForbiddenException("无权查看此导入记录");
         }
 
         List<ScheduleImportItem> items = importItemRepository.findByImportId(importId);
@@ -784,7 +786,7 @@ public class ScheduleImportService {
                 userId, config.getSemesterStartDate(), config.getLinkMode());
 
         if (config.getSemesterStartDate() == null || config.getSemesterStartDate().isEmpty()) {
-            throw new IllegalArgumentException("学期开始日期不能为空");
+            throw new InvalidInputException("学期开始日期不能为空");
         }
 
         LocalDate semesterStart = LocalDate.parse(config.getSemesterStartDate(), TimeUtils.DATE_FORMATTER);
@@ -828,7 +830,7 @@ public class ScheduleImportService {
         log.info("根据手动输入生成日程：userId={}, courseCount={}", userId, courses != null ? courses.size() : 0);
 
         if (courses == null || courses.isEmpty()) {
-            throw new IllegalArgumentException("课程列表不能为空");
+            throw new InvalidInputException("课程列表不能为空");
         }
 
         User user = userRepository.findById(userId)

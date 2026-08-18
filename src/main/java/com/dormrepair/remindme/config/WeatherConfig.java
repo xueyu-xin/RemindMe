@@ -15,4 +15,10 @@ public class WeatherConfig {
 
     // 和风天气 API 主机完整地址
     private String host;
+
+    // HTTP 连接超时时间（毫秒），默认 10 秒
+    private int connectTimeout = 10000;
+
+    // HTTP 读取超时时间（毫秒），默认 10 秒
+    private int readTimeout = 10000;
 }

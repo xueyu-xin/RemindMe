@@ -12,9 +12,11 @@ import com.alibaba.dashscope.aigc.multimodalconversation.MultiModalConversationR
 import com.alibaba.dashscope.aigc.multimodalconversation.MultiModalMessageItemImage;
 import com.alibaba.dashscope.aigc.multimodalconversation.MultiModalMessageItemText;
 import com.alibaba.dashscope.common.Message;
+import com.alibaba.dashscope.exception.ApiException;
 import com.dormrepair.remindme.config.QwenConfig;
 import com.dormrepair.remindme.dto.ScheduleItemDTO;
 import com.dormrepair.remindme.dto.ScheduleTableDTO;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -23,6 +25,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -116,7 +120,7 @@ public class QwenRecognitionService {
                     .resultFormat(GenerationParam.ResultFormat.MESSAGE)
                     .build();
 
-            GenerationResult result = gen.call(param);
+            GenerationResult result = callWithRetry(() -> gen.call(param), "通义千问识别");
             String responseText = extractText(result);
 
             log.info("通义千问识别完成：fileType={}, responseLength={}", fileType, responseText.length());
@@ -157,7 +161,7 @@ public class QwenRecognitionService {
                             .build())
                     .build();
 
-            MultiModalConversationResult result = conv.call(param);
+            MultiModalConversationResult result = callWithRetry(() -> conv.call(param), "通义千问图片识别");
             String responseText = extractMultiModalText(result);
 
             log.info("通义千问图片识别完成：responseLength={}", responseText.length());
@@ -393,7 +397,7 @@ public class QwenRecognitionService {
                     .resultFormat(GenerationParam.ResultFormat.MESSAGE)
                     .build();
 
-            GenerationResult result = gen.call(param);
+            GenerationResult result = callWithRetry(() -> gen.call(param), "课表识别");
             String responseText = extractText(result);
 
             log.info("课表识别完成：fileType={}, responseLength={}", fileType, responseText.length());
@@ -545,7 +549,7 @@ public class QwenRecognitionService {
                             .build())
                     .build();
 
-            MultiModalConversationResult result = conv.call(param);
+            MultiModalConversationResult result = callWithRetry(() -> conv.call(param), "图片课表识别");
             String responseText = extractMultiModalText(result);
 
             log.info("图片课表识别完成：responseLength={}", responseText.length());
@@ -560,5 +564,64 @@ public class QwenRecognitionService {
                     .courses(Collections.emptyList())
                     .build();
         }
+    }
+
+    // ==================== API 调用重试 ====================
+
+    // 可抛受检异常的 Supplier，用于包装 DashScope SDK 的 call()（其声明 throws 受检异常）
+    @FunctionalInterface
+    private interface ThrowingSupplier<T> {
+        T get() throws Exception;
+    }
+
+    // 通义千问 API 调用重试包装器：仅对网络异常重试，4xx/JSON 解析错误不重试，
+    // 指数退避 100ms→200ms→400ms，重试耗尽抛 RuntimeException（由调用方外层 catch 兜底，保持现有行为）。
+    private <T> T callWithRetry(ThrowingSupplier<T> action, String operation) throws Exception {
+        int maxRetries = 3;
+        int attempt = 0;
+        Exception lastException = null;
+
+        while (attempt < maxRetries) {
+            attempt++;
+            try {
+                return action.get();
+            } catch (Exception e) {
+                if (!isRetryableNetworkException(e)) {
+                    throw e;
+                }
+                lastException = e;
+                log.warn("{} 调用失败，第 {} 次重试: {}", operation, attempt, e.getMessage());
+                if (attempt >= maxRetries) {
+                    break;
+                }
+                long waitMs = (long) (Math.pow(2, attempt - 1) * 100);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        throw new RuntimeException(operation + " 调用失败，已重试 " + maxRetries + " 次", lastException);
+    }
+
+    // 判断异常是否可重试：DashScope ApiException（无 Status 为网络错误/有 Status 5xx 重试、4xx 不重试）、
+    // SocketTimeoutException、非 JsonProcessingException 的 IOException 视为可重试网络异常
+    private static boolean isRetryableNetworkException(Exception e) {
+        if (e instanceof ApiException) {
+            ApiException apiEx = (ApiException) e;
+            if (apiEx.getStatus() != null) {
+                int statusCode = apiEx.getStatus().getStatusCode();
+                // 4xx 客户端错误不重试
+                return statusCode < 400 || statusCode >= 500;
+            }
+            return true;  // 无 Status，纯网络错误，重试
+        }
+        if (e instanceof SocketTimeoutException) {
+            return true;
+        }
+        // IO 异常（网络层），排除 JSON 解析错误
+        return e instanceof IOException && !(e instanceof JsonProcessingException);
     }
 }

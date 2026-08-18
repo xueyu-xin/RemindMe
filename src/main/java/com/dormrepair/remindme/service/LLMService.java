@@ -19,6 +19,8 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.RestClientException;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -89,18 +91,59 @@ public class LLMService {
         }
     }
 
-    // 带工具调用的对话：拼装系统提示词、历史消息和当前输入，调用 LLM 返回响应文本
+    // 带工具调用的对话：拼装系统提示词、历史消息和当前输入，调用 LLM 返回响应文本（带重试）
     public String chatWithTools(String userInput, List<ToolDefinition> tools, List<Message> history) {
         log.info("开始带工具调用的对话: userInput={}, toolCount={}, historySize={}", userInput, tools.size(), history.size());
-        
+
         List<org.springframework.ai.chat.messages.Message> messages = buildMessagesWithTools(userInput, tools, history);
-        
         Prompt prompt = new Prompt(messages);
-        ChatResponse response = chatModel.call(prompt);
-        
+
+        int maxRetries = 3;
+        int attempt = 0;
+        Exception lastException = null;
+        ChatResponse response = null;
+
+        while (attempt < maxRetries) {
+            attempt++;
+            try {
+                response = chatModel.call(prompt);
+                break;
+            } catch (RestClientException e) {
+                boolean is4xx = false;
+                if (e instanceof HttpStatusCodeException) {
+                    int statusCode = ((HttpStatusCodeException) e).getStatusCode().value();
+                    if (statusCode >= 400 && statusCode < 500) {
+                        is4xx = true;
+                    }
+                }
+                if (is4xx) {
+                    lastException = e;
+                    break;
+                }
+                lastException = e;
+                log.warn("chatWithTools 调用失败，第 {} 次重试: {}", attempt, e.getMessage());
+
+                if (attempt >= maxRetries) {
+                    break;
+                }
+
+                long waitMs = (long) (Math.pow(2, attempt - 1) * 100);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+
+        if (response == null) {
+            throw new RuntimeException("chatWithTools 调用失败，已重试 " + maxRetries + " 次", lastException);
+        }
+
         String content = response.getResult().getOutput().getText();
         log.info("工具调用对话响应: {}", content);
-        
+
         if (content == null || content.isBlank()) {
             log.warn("LLM返回空响应！finishReason={}, tokensUsed={}",
                     response.getResult().getMetadata() != null ? response.getResult().getMetadata().getFinishReason() : "unknown",
@@ -111,7 +154,7 @@ public class LLMService {
         return content;
     }
 
-    // 纯文本对话：不携带任何工具定义，用于引导语、总结等不需要工具调用的场景
+    // 纯文本对话：不携带任何工具定义，用于引导语、总结等不需要工具调用的场景（带重试）
     // 使用最小化的系统提示词，避免 LLM 误判为需要调用工具
     public String chatWithoutTools(String userInput, List<Message> history) {
         log.info("开始纯文本对话: userInputLength={}, historySize={}", userInput.length(), history == null ? 0 : history.size());
@@ -136,7 +179,49 @@ public class LLMService {
         messages.add(new UserMessage(userInput));
 
         Prompt prompt = new Prompt(messages);
-        ChatResponse response = chatModel.call(prompt);
+
+        int maxRetries = 3;
+        int attempt = 0;
+        Exception lastException = null;
+        ChatResponse response = null;
+
+        while (attempt < maxRetries) {
+            attempt++;
+            try {
+                response = chatModel.call(prompt);
+                break;
+            } catch (RestClientException e) {
+                boolean is4xx = false;
+                if (e instanceof HttpStatusCodeException) {
+                    int statusCode = ((HttpStatusCodeException) e).getStatusCode().value();
+                    if (statusCode >= 400 && statusCode < 500) {
+                        is4xx = true;
+                    }
+                }
+                if (is4xx) {
+                    lastException = e;
+                    break;
+                }
+                lastException = e;
+                log.warn("chatWithoutTools 调用失败，第 {} 次重试: {}", attempt, e.getMessage());
+
+                if (attempt >= maxRetries) {
+                    break;
+                }
+
+                long waitMs = (long) (Math.pow(2, attempt - 1) * 100);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+
+        if (response == null) {
+            throw new RuntimeException("chatWithoutTools 调用失败，已重试 " + maxRetries + " 次", lastException);
+        }
 
         String content = response.getResult().getOutput().getText();
         log.info("纯文本对话响应: {}", content);
@@ -1684,24 +1769,24 @@ public class LLMService {
             ================================================
             当用户使用以下模糊时间表达时，请自动解析为具体时间：
             1. "等会"、"待会"、"过一会儿"、"一会儿"、"等一下" → 当前时间（advanceMinutes留空，后端会使用用户设置的默认提前量）
-            2. "1分钟后"、"一分钟后"、"1分后" → 当前时间+1分钟，advanceMinutes=1
-            3. "5分钟后"、"5分后" → 当前时间+5分钟，advanceMinutes=5
-            4. "10分钟后" → 当前时间+10分钟，advanceMinutes=10
-            5. "30分钟后" → 当前时间+30分钟，advanceMinutes=30
-            6. "1小时后"、"1个小时后" → 当前时间+60分钟，advanceMinutes=60
-            7. "半小时后" → 当前时间+30分钟，advanceMinutes=30
+            2. "1分钟后"、"一分钟后"、"1分后" → 当前时间+1分钟，advanceMinutes=0（相对时间准时触发，无需提前量）
+            3. "5分钟后"、"5分后" → 当前时间+5分钟，advanceMinutes=0
+            4. "10分钟后" → 当前时间+10分钟，advanceMinutes=0
+            5. "30分钟后" → 当前时间+30分钟，advanceMinutes=0
+            6. "1小时后"、"1个小时后" → 当前时间+60分钟，advanceMinutes=0
+            7. "半小时后" → 当前时间+30分钟，advanceMinutes=0
             8. "现在"、"马上"、"立刻" → 当前时间，advanceMinutes=0
-            9. "几分钟后" → 当前时间+5分钟，advanceMinutes=5
+            9. "几分钟后" → 当前时间+5分钟，advanceMinutes=0
             
             示例：
             用户输入："等会提醒我拿快递"
             你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "拿快递", "remindTime": "当前时间"}}}
             
             用户输入："1分钟后提醒我喝水"
-            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "喝水", "remindTime": "当前时间+1分钟", "advanceMinutes": 1}}}
-            
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "喝水", "remindTime": "当前时间+1分钟", "advanceMinutes": 0}}}
+
             用户输入："5分钟后提醒我喝水"
-            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "喝水", "remindTime": "当前时间+5分钟", "advanceMinutes": 5}}}
+            你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "喝水", "remindTime": "当前时间+5分钟", "advanceMinutes": 0}}}
             
             用户输入："1小时后提醒我开会"
             你的输出：{"tool_call": {"name": "create_reminder", "arguments": {"title": "开会", "remindTime": "当前时间+60分钟"}}}
@@ -1827,19 +1912,19 @@ public class LLMService {
                - location: 地点（字符串，可选）
                - priority: 优先级（LOW/NORMAL/HIGH，默认NORMAL）
                - note: 备注（字符串，可选，用户对提醒的补充说明，如"记得带学生证"、"带礼物"等）
-               - advanceMinutes: 默认提前量（整数，可选。注意：对于"等会"/"等一下"等模糊时间不要设置此字段，后端会使用用户的默认提前量。只有明确说了X分钟/小时才设置）
-            
+               - advanceMinutes: 默认提前量（整数，可选。注意：对于"等会"/"等一下"等模糊时间不要设置此字段，后端会使用用户的默认提前量。相对时间"X分钟后/小时后"统一设为0，准时触发）
+
             时间解析规则：
             - "明天下午3点" → 当前日期+1天，15:00:00
             - "后天早上9点" → 当前日期+2天，09:00:00
             - "本周六晚上8点" → 本周六，20:00:00
             - "周一上午10点" → 最近的周一，10:00:00
             - "每天早上7点" → 今天，07:00:00（重复提醒）
-            - "1分钟后"、"一分钟后"、"1分后" → 当前时间+1分钟，advanceMinutes=1
-            - "5分钟后" → 当前时间+5分钟，advanceMinutes=5
+            - "1分钟后"、"一分钟后"、"1分后" → 当前时间+1分钟，advanceMinutes=0（相对时间准时触发）
+            - "5分钟后" → 当前时间+5分钟，advanceMinutes=0
             - "等会"、"待会"、"过一会儿"、"一会儿"、"等一下" → 当前时间，advanceMinutes不设置
-            - "30分钟后" → 当前时间+30分钟，advanceMinutes=30
-            - "1小时后" → 当前时间+60分钟，advanceMinutes=60
+            - "30分钟后" → 当前时间+30分钟，advanceMinutes=0
+            - "1小时后" → 当前时间+60分钟，advanceMinutes=0
             - "现在"、"马上" → 当前时间，advanceMinutes=0
             - 如果无法解析时间，返回当前时间，advanceMinutes不设置（后端使用用户默认提前量）
             
