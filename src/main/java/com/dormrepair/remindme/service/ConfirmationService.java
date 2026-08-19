@@ -300,67 +300,30 @@ public class ConfirmationService {
     // 周期提醒-直接创建全部：不覆盖冲突，冲突日多条并存
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmRecurringDirect(String sessionId, Long userId) {
-        AtomicMarkResult markResult = atomicMarkConfirmed(sessionId, userId);
-        if (markResult.getUpdated() == 0 && markResult.getSession().getStatus() == SessionStatus.CONFIRMED) {
-            Map<String, Object> dup = new HashMap<>();
-            dup.put("success", true);
-            dup.put("isDuplicate", true);
-            dup.put("message", "该提醒已确认，无需重复操作～");
-            return dup;
-        }
-        ConfirmationSession session = markResult.getSession();
-        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
-        Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "direct");
-
-        session.setStage("REMINDER_EXECUTE");
-        confirmationRepository.save(session);
-
-        Map<String, Object> result = new HashMap<>(createResult);
-        enrichWithAgentReply(result, userId, sessionId, true, createResult);
-        pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
-        log.info("周期提醒直接创建: sessionId={}, userId={}", sessionId, userId);
-        return result;
+        return executeRecurringConfirm(sessionId, userId, "direct", "直接");
     }
 
     // 周期提醒-创建无冲突部分：跳过冲突日，仅生成不冲突的实例
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmRecurringSkip(String sessionId, Long userId) {
-        AtomicMarkResult markResult = atomicMarkConfirmed(sessionId, userId);
-        if (markResult.getUpdated() == 0 && markResult.getSession().getStatus() == SessionStatus.CONFIRMED) {
-            Map<String, Object> dup = new HashMap<>();
-            dup.put("success", true);
-            dup.put("isDuplicate", true);
-            dup.put("message", "该提醒已确认，无需重复操作～");
-            return dup;
-        }
-        ConfirmationSession session = markResult.getSession();
-        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
-        Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "skip");
-
-        session.setStage("REMINDER_EXECUTE");
-        confirmationRepository.save(session);
-
-        Map<String, Object> result = new HashMap<>(createResult);
-        enrichWithAgentReply(result, userId, sessionId, true, createResult);
-        pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
-        log.info("周期提醒跳过冲突创建: sessionId={}, userId={}", sessionId, userId);
-        return result;
+        return executeRecurringConfirm(sessionId, userId, "skip", "跳过冲突");
     }
 
     // 周期提醒-全部覆盖：删除冲突提醒后再创建全部实例
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmRecurringOverwriteAll(String sessionId, Long userId) {
+        return executeRecurringConfirm(sessionId, userId, "overwrite", "全部覆盖");
+    }
+
+    // 通用周期确认流程：原子标记 → 重复判断 → 解析数据 → 调用周期生成 → 更新会话 → 注入回复 → 推送卡片
+    private Map<String, Object> executeRecurringConfirm(String sessionId, Long userId, String mode, String logLabel) {
         AtomicMarkResult markResult = atomicMarkConfirmed(sessionId, userId);
         if (markResult.getUpdated() == 0 && markResult.getSession().getStatus() == SessionStatus.CONFIRMED) {
-            Map<String, Object> dup = new HashMap<>();
-            dup.put("success", true);
-            dup.put("isDuplicate", true);
-            dup.put("message", "该提醒已确认，无需重复操作～");
-            return dup;
+            return buildDuplicateResponse();
         }
         ConfirmationSession session = markResult.getSession();
         Map<String, Object> parsedData = parseParsedData(session.getParsedData());
-        Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, "overwrite");
+        Map<String, Object> createResult = callRecurringGenerate(parsedData, userId, mode);
 
         session.setStage("REMINDER_EXECUTE");
         confirmationRepository.save(session);
@@ -368,7 +331,7 @@ public class ConfirmationService {
         Map<String, Object> result = new HashMap<>(createResult);
         enrichWithAgentReply(result, userId, sessionId, true, createResult);
         pushCardConfirmed(userId, sessionId, (String) parsedData.get("title"), null);
-        log.info("周期提醒全部覆盖创建: sessionId={}, userId={}", sessionId, userId);
+        log.info("周期提醒{}创建: sessionId={}, userId={}", logLabel, sessionId, userId);
         return result;
     }
 
@@ -526,11 +489,7 @@ public class ConfirmationService {
         Map<String, Object> result = transactionTemplate.execute(status -> {
             AtomicMarkResult markResult = atomicMarkConfirmed(sessionId, userId);
             if (markResult.getUpdated() == 0 && markResult.getSession().getStatus() == SessionStatus.CONFIRMED) {
-                Map<String, Object> dup = new HashMap<>();
-                dup.put("success", true);
-                dup.put("isDuplicate", true);
-                dup.put("message", "该提醒已确认，无需重复操作～");
-                return dup;
+                return buildDuplicateResponse();
             }
             ConfirmationSession session = markResult.getSession();
             Map<String, Object> parsedData = parseParsedData(session.getParsedData());
@@ -581,11 +540,7 @@ public class ConfirmationService {
         Map<String, Object> result = transactionTemplate.execute(status -> {
             AtomicMarkResult markResult = atomicMarkConfirmed(sessionId, userId);
             if (markResult.getUpdated() == 0 && markResult.getSession().getStatus() == SessionStatus.CONFIRMED) {
-                Map<String, Object> dup = new HashMap<>();
-                dup.put("success", true);
-                dup.put("isDuplicate", true);
-                dup.put("message", "该提醒已确认，无需重复操作～");
-                return dup;
+                return buildDuplicateResponse();
             }
             ConfirmationSession session = markResult.getSession();
             Map<String, Object> parsedData = parseParsedData(session.getParsedData());
@@ -1119,27 +1074,55 @@ public class ConfirmationService {
                 .orElseThrow(() -> new IllegalArgumentException("会话不存在或已过期"));
     }
 
-    // 根据解析数据创建并保存提醒，默认提前量取用户配置
-    private Reminder createReminder(Long userId, Map<String, Object> parsedData, com.dormrepair.remindme.enums.ConfirmStatus confirmStatus) {
+    // 构建 Reminder 实体并填充通用字段（状态、执行状态、来源、时区），不执行 save
+    private Reminder buildReminderEntity(Long userId, String title, LocalDateTime remindTime,
+            LocalDateTime endTime, String priorityStr, String location, String note,
+            Integer advanceMinutes, com.dormrepair.remindme.enums.ConfirmStatus confirmStatus) {
         Reminder reminder = new Reminder();
         reminder.setUserId(userId);
-        reminder.setTitle((String) parsedData.get("title"));
-        reminder.setRemindTime(parseTimeFlexible((String) parsedData.get("remindTime")));
-        reminder.setEndTime(parseTimeFlexible((String) parsedData.get("endTime")));
-        reminder.setPriority(Priority.valueOf(
-                ((String) parsedData.getOrDefault("priority", Priority.NORMAL.name())).toUpperCase()));
-        reminder.setLocation((String) parsedData.get("location"));
-        reminder.setNote((String) parsedData.get("note"));
-        int defaultAdvance = userService.getUserById(userId)
-                .map(u -> u.getDefaultAdvanceMinutes())
-                .orElse(10);
-        reminder.setAdvanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", defaultAdvance));
+        reminder.setTitle(title);
+        reminder.setRemindTime(remindTime);
+        reminder.setEndTime(endTime);
+        reminder.setPriority(parsePrioritySafe(priorityStr));
+        reminder.setLocation(location);
+        reminder.setNote(note);
+        reminder.setAdvanceMinutes(advanceMinutes);
         reminder.setStatus(ReminderStatus.PENDING);
         reminder.setConfirmStatus(confirmStatus);
         reminder.setExecutionStatus(ExecutionStatus.PENDING);
         reminder.setSource(ReminderSource.USER_INPUT);
         reminder.setTimezone("Asia/Shanghai");
+        return reminder;
+    }
 
+    // 安全解析优先级字符串：空值或非法值回退为 NORMAL
+    private Priority parsePrioritySafe(String priorityStr) {
+        if (priorityStr == null || priorityStr.isBlank()) {
+            return Priority.NORMAL;
+        }
+        try {
+            return Priority.valueOf(priorityStr.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            log.warn("无效的优先级值: {}, 使用默认值 NORMAL", priorityStr);
+            return Priority.NORMAL;
+        }
+    }
+
+    // 根据解析数据创建并保存提醒，默认提前量取用户配置
+    private Reminder createReminder(Long userId, Map<String, Object> parsedData, com.dormrepair.remindme.enums.ConfirmStatus confirmStatus) {
+        int defaultAdvance = userService.getUserById(userId)
+                .map(u -> u.getDefaultAdvanceMinutes())
+                .orElse(10);
+        Reminder reminder = buildReminderEntity(
+                userId,
+                (String) parsedData.get("title"),
+                parseTimeFlexible((String) parsedData.get("remindTime")),
+                parseTimeFlexible((String) parsedData.get("endTime")),
+                (String) parsedData.getOrDefault("priority", Priority.NORMAL.name()),
+                (String) parsedData.get("location"),
+                (String) parsedData.get("note"),
+                (Integer) parsedData.getOrDefault("advanceMinutes", defaultAdvance),
+                confirmStatus);
         return reminderRepository.save(reminder);
     }
 
@@ -1520,6 +1503,15 @@ public class ConfirmationService {
                 .orElse(new HashMap<>());
     }
 
+    // 构建重复确认响应：会话已被确认时返回，提示无需重复操作
+    private Map<String, Object> buildDuplicateResponse() {
+        Map<String, Object> dup = new HashMap<>();
+        dup.put("success", true);
+        dup.put("isDuplicate", true);
+        dup.put("message", "该提醒已确认，无需重复操作～");
+        return dup;
+    }
+
     // 构建确认成功消息（无覆盖标题）
     private String buildConfirmSuccessMessage(Reminder reminder) {
         return buildConfirmSuccessMessage(reminder, null);
@@ -1746,40 +1738,29 @@ public class ConfirmationService {
     
     // 从会话创建提醒但不推送（超时自动确认场景），更新会话为已确认并进入执行阶段
     private Reminder createReminderFromSessionWithoutPush(ConfirmationSession session) {
-        Reminder reminder = new Reminder();
-        reminder.setUserId(session.getUserId());
-        reminder.setTitle(session.getParsedTitle());
-        reminder.setRemindTime(session.getParsedTime());
-        reminder.setEndTime(session.getParsedEndTime());
-        
-        String priorityStr = session.getParsedPriority();
-        if (priorityStr == null || priorityStr.isBlank()) {
-            priorityStr = Priority.NORMAL.name();
-        }
-        try {
-            reminder.setPriority(Priority.valueOf(priorityStr.toUpperCase()));
-        } catch (IllegalArgumentException e) {
-            log.warn("无效的优先级值: {}, 使用默认值 NORMAL", priorityStr);
-            reminder.setPriority(Priority.NORMAL);
-        }
-        
-        reminder.setLocation(session.getParsedLocation());
         // 从 parsedData JSON 中提取 note 字段（ConfirmationSession 未单独建列）
+        String note = null;
         try {
             Map<String, Object> parsedData = parseParsedData(session.getParsedData());
             if (parsedData != null) {
                 Object noteObj = parsedData.get("note");
                 if (noteObj != null) {
-                    reminder.setNote(String.valueOf(noteObj));
+                    note = String.valueOf(noteObj);
                 }
             }
         } catch (Exception e) {
             log.warn("解析 parsedData 提取 note 失败: sessionId={}, error={}", session.getSessionId(), e.getMessage());
         }
-        reminder.setAdvanceMinutes(session.getParsedAdvanceMinutes() != null ? session.getParsedAdvanceMinutes() : 10);
-        reminder.setStatus(ReminderStatus.PENDING);
-        reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
-        reminder.setSource(ReminderSource.USER_INPUT);
+        Reminder reminder = buildReminderEntity(
+                session.getUserId(),
+                session.getParsedTitle(),
+                session.getParsedTime(),
+                session.getParsedEndTime(),
+                session.getParsedPriority(),
+                session.getParsedLocation(),
+                note,
+                session.getParsedAdvanceMinutes() != null ? session.getParsedAdvanceMinutes() : 10,
+                ConfirmStatus.CONFIRMED);
 
         Reminder savedReminder = reminderRepository.save(reminder);
 
