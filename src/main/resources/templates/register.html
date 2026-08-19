@@ -358,6 +358,136 @@
             transform: translateY(0);
             box-shadow: 0 2px 8px rgba(255, 181, 167, 0.3);
         }
+
+        /* ===== 响应式 ===== */
+        @media (max-width: 600px) {
+            body {
+                padding: 16px;
+            }
+            .auth-container {
+                padding: 32px 24px 28px;
+                border-radius: 24px;
+            }
+            .auth-container h1 {
+                font-size: 22px;
+                letter-spacing: 1.5px;
+            }
+            .auth-container .subtitle {
+                margin-bottom: 24px;
+                font-size: 13px;
+            }
+            .auth-container .form-group {
+                margin-bottom: 16px;
+            }
+            .auth-container input {
+                height: 46px;
+                padding: 10px 16px;
+                border-radius: 12px;
+                font-size: 14px;
+            }
+            .auth-container .submit-btn {
+                height: 46px;
+                border-radius: 12px;
+                font-size: 15px;
+                letter-spacing: 1.5px;
+            }
+            .auth-container .code-group button {
+                flex: 0 0 100px;
+                height: 46px;
+                padding: 10px 12px;
+                border-radius: 12px;
+                font-size: 13px;
+            }
+            #codeModalMask .code-modal {
+                padding: 28px 24px 22px;
+                border-radius: 24px;
+            }
+            #codeModalMask .code-modal-title {
+                font-size: 18px;
+                letter-spacing: 1px;
+            }
+            #codeModalMask .code-display {
+                font-size: 32px;
+                letter-spacing: 8px;
+                padding: 18px 14px;
+            }
+            #codeModalMask .code-modal-btn {
+                height: 46px;
+                border-radius: 12px;
+                font-size: 15px;
+            }
+        }
+
+        @media (max-width: 420px) {
+            body {
+                padding: 12px;
+            }
+            .auth-container {
+                padding: 24px 18px 22px;
+                border-radius: 20px;
+            }
+            .auth-container h1 {
+                font-size: 18px;
+                letter-spacing: 1px;
+            }
+            .auth-container .subtitle {
+                margin-bottom: 20px;
+                font-size: 12px;
+            }
+            .auth-container .form-group {
+                margin-bottom: 14px;
+            }
+            .auth-container label {
+                font-size: 14px;
+                margin-bottom: 8px;
+            }
+            .auth-container input {
+                height: 44px;
+                padding: 10px 14px;
+                border-radius: 12px;
+                font-size: 14px;
+            }
+            .auth-container .submit-btn {
+                height: 44px;
+                border-radius: 12px;
+                font-size: 14px;
+                letter-spacing: 1px;
+            }
+            .auth-container .code-group button {
+                flex: 0 0 90px;
+                height: 44px;
+                padding: 8px 10px;
+                border-radius: 12px;
+                font-size: 12px;
+            }
+            .auth-container .links {
+                font-size: 13px;
+                margin-top: 20px;
+            }
+            #codeModalMask .code-modal {
+                padding: 24px 20px 20px;
+                border-radius: 20px;
+            }
+            #codeModalMask .code-modal-title {
+                font-size: 16px;
+                letter-spacing: 1px;
+            }
+            #codeModalMask .code-modal-tip {
+                font-size: 12px;
+                margin-bottom: 18px;
+            }
+            #codeModalMask .code-display {
+                font-size: 26px;
+                letter-spacing: 6px;
+                padding: 16px 12px;
+                border-radius: 14px;
+            }
+            #codeModalMask .code-modal-btn {
+                height: 44px;
+                border-radius: 12px;
+                font-size: 14px;
+            }
+        }
     </style>
 </head>
 <body>

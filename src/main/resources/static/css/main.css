@@ -34,6 +34,19 @@
     --shadow-card: 0 6px 24px rgba(255, 181, 167, 0.18);
     --shadow-hover: 0 10px 32px rgba(255, 181, 167, 0.28);
     --shadow-strong: 0 12px 40px rgba(255, 181, 167, 0.35);
+    /* 冲突色 */
+    --conflict-warning: #FFA500;
+    --conflict-bg: #FFF8E7;
+    --conflict-border: #FFE4B5;
+    --conflict-text: #8B4513;
+    --conflict-suggest: #228B22;
+    --conflict-row-bg: #FFF9F0;
+    /* 按钮渐变 */
+    --btn-success-start: #4CAF50;
+    --btn-success-end: #66BB6A;
+    --btn-danger-start: #FF6B6B;
+    --btn-danger-end: #FF8E8E;
+    --btn-danger-border: #FFB3B3;
 }
 
 /* ===== 全局重置 ===== */
@@ -62,6 +75,7 @@ html, body {
     background: linear-gradient(135deg, #FFFFFF 0%, #FFF5F5 100%);
     color: var(--brown-deep);
     padding: 0 20px;
+    padding-top: env(safe-area-inset-top, 0);
     text-align: center;
     font-size: 22px;
     position: fixed;
@@ -70,6 +84,7 @@ html, body {
     right: 0;
     z-index: 1000;
     height: 64px;
+    height: calc(64px + env(safe-area-inset-top, 0));
     line-height: 64px;
     border-bottom: 2px solid var(--peach-pale);
     box-shadow: 0 2px 16px rgba(255, 181, 167, 0.15);
@@ -402,6 +417,17 @@ button:disabled {
     animation: toastIn 0.35s ease-out;
 }
 
+/* Toast 背景色 class */
+.toast-success {
+    background: var(--success) !important;
+    color: var(--brown-deep) !important;
+}
+
+.toast-error {
+    background: var(--danger) !important;
+    color: var(--cream-card) !important;
+}
+
 @keyframes toastIn {
     from { opacity: 0; transform: translateX(-50%) translateY(-12px); }
     to { opacity: 1; transform: translateX(-50%) translateY(0); }
@@ -414,6 +440,7 @@ button:disabled {
 .toggle-switch.active .toggle-knob { left: 26px; }
 
 /* ===== 响应式 ===== */
+/* 平板 */
 @media (max-width: 768px) {
     .content-area {
         padding: 0 16px;
@@ -436,10 +463,48 @@ button:disabled {
     }
 }
 
-@media (max-width: 480px) {
+/* 手机 */
+@media (max-width: 600px) {
+    .content-area {
+        padding: 0 12px;
+        padding-top: 72px;
+        padding-bottom: 76px;
+    }
+
+    .card {
+        padding: 16px;
+        border-radius: 18px;
+    }
+
+    h2 {
+        font-size: 18px;
+        margin-bottom: 14px;
+    }
+
+    .form-group {
+        margin-bottom: 18px;
+    }
+
+    input, textarea, select {
+        padding: 12px 16px;
+        height: 46px;
+        border-radius: 14px;
+        font-size: 15px;
+    }
+
+    button {
+        height: 46px;
+        padding: 8px 22px;
+        border-radius: 14px;
+        font-size: 15px;
+    }
+}
+
+/* 小屏手机 */
+@media (max-width: 420px) {
     .app-header {
         font-size: 18px;
-        height: 56px;
+        height: calc(56px + env(safe-area-inset-top, 0));
         line-height: 56px;
         letter-spacing: 1px;
     }
@@ -463,5 +528,29 @@ button:disabled {
     .modal-content {
         padding: 24px 20px 20px;
         border-radius: 20px;
+    }
+
+    .card {
+        padding: 14px;
+        border-radius: 16px;
+    }
+
+    h2 {
+        font-size: 16px;
+        margin-bottom: 12px;
+    }
+
+    input, textarea, select {
+        padding: 10px 14px;
+        height: 44px;
+        border-radius: 12px;
+        font-size: 14px;
+    }
+
+    button {
+        height: 44px;
+        padding: 6px 18px;
+        border-radius: 12px;
+        font-size: 14px;
     }
 }

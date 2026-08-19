@@ -235,12 +235,16 @@ window.saveMessageToBackend = saveMessageToBackend;
         function showToast(message, isSuccess) {
             var toast = document.getElementById('toast');
             toast.textContent = message;
+            // 清除内联样式和旧 class，改用 CSS class
+            toast.style.background = '';
+            toast.style.color = '';
+            toast.classList.remove('toast-success', 'toast-error');
+            toast.classList.add(isSuccess ? 'toast-success' : 'toast-error');
             toast.style.display = 'block';
-            toast.style.background = isSuccess ? '#8ED4A6' : '#FF7B89';
-            toast.style.color = '#fff';
             if (toastTimer) clearTimeout(toastTimer);
             toastTimer = setTimeout(function() {
                 toast.style.display = 'none';
+                toast.classList.remove('toast-success', 'toast-error');
             }, 3000);
         }
 

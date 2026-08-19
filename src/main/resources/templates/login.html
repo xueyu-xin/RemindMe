@@ -205,6 +205,81 @@
             from { opacity: 0; transform: translateX(-50%) translateY(-12px); }
             to { opacity: 1; transform: translateX(-50%) translateY(0); }
         }
+
+        /* ===== 响应式 ===== */
+        @media (max-width: 600px) {
+            body {
+                padding: 16px;
+            }
+            .auth-container {
+                padding: 32px 24px 28px;
+                border-radius: 24px;
+            }
+            .auth-container h1 {
+                font-size: 22px;
+                letter-spacing: 1.5px;
+            }
+            .auth-container .subtitle {
+                margin-bottom: 24px;
+                font-size: 13px;
+            }
+            .auth-container .form-group {
+                margin-bottom: 16px;
+            }
+            .auth-container input {
+                height: 46px;
+                padding: 10px 16px;
+                border-radius: 12px;
+                font-size: 14px;
+            }
+            .auth-container .submit-btn {
+                height: 46px;
+                border-radius: 12px;
+                font-size: 15px;
+                letter-spacing: 1.5px;
+            }
+        }
+
+        @media (max-width: 420px) {
+            body {
+                padding: 12px;
+            }
+            .auth-container {
+                padding: 24px 18px 22px;
+                border-radius: 20px;
+            }
+            .auth-container h1 {
+                font-size: 18px;
+                letter-spacing: 1px;
+            }
+            .auth-container .subtitle {
+                margin-bottom: 20px;
+                font-size: 12px;
+            }
+            .auth-container .form-group {
+                margin-bottom: 14px;
+            }
+            .auth-container label {
+                font-size: 14px;
+                margin-bottom: 8px;
+            }
+            .auth-container input {
+                height: 44px;
+                padding: 10px 14px;
+                border-radius: 12px;
+                font-size: 14px;
+            }
+            .auth-container .submit-btn {
+                height: 44px;
+                border-radius: 12px;
+                font-size: 14px;
+                letter-spacing: 1px;
+            }
+            .auth-container .links {
+                font-size: 13px;
+                margin-top: 20px;
+            }
+        }
     </style>
 </head>
 <body>

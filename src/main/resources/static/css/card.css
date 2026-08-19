@@ -110,8 +110,8 @@
 /* 主按钮 */
 .confirmation-card .action-btn.primary {
     background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
-    color: #FFFFFF !important;
-    -webkit-text-fill-color: #FFFFFF !important;
+    color: var(--cream-card) !important;
+    -webkit-text-fill-color: var(--cream-card) !important;
     border-color: transparent;
     box-shadow: 0 4px 12px rgba(255, 159, 122, 0.35);
 }
@@ -137,8 +137,8 @@
 
 /* 成功按钮 */
 .confirmation-card .action-btn.success {
-    background: linear-gradient(135deg, #4CAF50 0%, #66BB6A 100%);
-    color: #FFFFFF;
+    background: linear-gradient(135deg, var(--btn-success-start) 0%, var(--btn-success-end) 100%);
+    color: var(--cream-card);
     border-color: transparent;
     box-shadow: 0 4px 12px rgba(76, 175, 80, 0.35);
 }
@@ -163,13 +163,13 @@
 /* 危险按钮 */
 .confirmation-card .action-btn.danger {
     color: var(--danger);
-    border-color: #FFB3B3;
-    background: #FFF5F5;
+    border-color: var(--btn-danger-border);
+    background: var(--cream-bg);
 }
 
 .confirmation-card .action-btn.danger:hover {
     background: var(--danger);
-    color: #FFFFFF;
+    color: var(--cream-card);
     border-color: transparent;
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(255, 107, 107, 0.35);
@@ -204,17 +204,17 @@
 
 /* ===== 冲突模式卡片 ===== */
 .confirmation-card.conflict-mode {
-    border: 2px solid #FFE4B5;
-    border-left: 4px solid #FFA500;
+    border: 2px solid var(--conflict-border);
+    border-left: 4px solid var(--conflict-warning);
 }
 
 .confirmation-card.conflict-mode .card-title {
-    color: #D2691E;
+    color: var(--conflict-text);
 }
 
 /* 冲突区块 */
 .conflict-section {
-    background: #FFF8E7;
+    background: var(--conflict-bg);
     border-radius: 12px;
     padding: 12px;
     margin-bottom: 14px;
@@ -222,7 +222,7 @@
 
 .conflict-section-title {
     font-size: 14px;
-    color: #8B4513;
+    color: var(--conflict-text);
     margin-bottom: 8px;
     font-weight: 600;
 }
@@ -265,7 +265,7 @@
 
 .conflict-select-all label {
     font-size: 13px;
-    color: #8B4513;
+    color: var(--conflict-text);
     cursor: pointer;
 }
 
@@ -274,10 +274,10 @@
     align-items: center;
     gap: 10px;
     font-size: 13px;
-    color: #8B4513;
+    color: var(--conflict-text);
     padding: 8px 10px;
     margin: 4px 0;
-    background: #FFF9F0;
+    background: var(--conflict-row-bg);
     border-radius: 8px;
     border: 1px solid var(--peach-pale);
     transition: all 0.2s;
@@ -310,10 +310,10 @@
 
 .suggested-time-inline {
     font-size: 13px;
-    color: #228B22;
+    color: var(--conflict-suggest);
     margin-top: 8px;
     padding-top: 8px;
-    border-top: 1px dashed #FFE4B5;
+    border-top: 1px dashed var(--conflict-border);
 }
 
 /* ===== 课表确认卡片 ===== */
@@ -422,7 +422,7 @@
 
 .time-config-card .link-mode-btn.active {
     background: var(--peach);
-    color: #FFFFFF;
+    color: var(--cream-card);
     border-color: var(--peach);
 }
 
@@ -579,7 +579,7 @@
     height: 28px;
     border: 1px solid var(--danger);
     border-radius: 6px;
-    background: #FFF5F5;
+    background: var(--cream-bg);
     color: var(--danger);
     cursor: pointer;
     font-size: 14px;
@@ -588,7 +588,7 @@
 
 .manual-course-row .remove-row-btn:hover {
     background: var(--danger);
-    color: white;
+    color: var(--cream-card);
 }
 
 /* ===== 预览卡片 ===== */
@@ -649,8 +649,8 @@
 }
 
 .mini-btn.confirm {
-    background: linear-gradient(135deg, #6BCB77 0%, #8DD996 100%);
-    color: #FFFFFF;
+    background: linear-gradient(135deg, var(--btn-success-start) 0%, var(--btn-success-end) 100%);
+    color: var(--cream-card);
     box-shadow: 0 2px 6px rgba(107, 203, 119, 0.3);
 }
 
@@ -660,8 +660,8 @@
 }
 
 .mini-btn.cancel {
-    background: linear-gradient(135deg, #FF6B6B 0%, #FF8E8E 100%);
-    color: #FFFFFF;
+    background: linear-gradient(135deg, var(--btn-danger-start) 0%, var(--btn-danger-end) 100%);
+    color: var(--cream-card);
     box-shadow: 0 2px 6px rgba(255, 107, 107, 0.3);
 }
 
@@ -699,7 +699,7 @@
 .card-edit-form select {
     width: 100%;
     padding: 8px 12px;
-    background: #FFFFFF;
+    background: var(--cream-card);
     color: var(--brown-deep);
     border: 2px solid var(--peach-pale);
     border-radius: 10px;

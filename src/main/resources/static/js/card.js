@@ -219,12 +219,9 @@ var CardSystem = (function() {
     function confirm(sessionId, userId) {
         stopCountdown(sessionId);
 
-        // 禁用所有操作按钮防止重复点击
+        // 禁用所有操作按钮防止重复点击（显示 loading 文案）
         var cardEl = document.getElementById('card-' + sessionId);
-        if (cardEl) {
-            var btns = cardEl.querySelectorAll('.action-btn');
-            btns.forEach(function(btn) { btn.disabled = true; btn.style.pointerEvents = 'none'; });
-        }
+        setCardButtonsLoading(cardEl);
 
         fetch('/api/confirmations/' + sessionId + '/confirm?userId=' + userId, {
             method: 'POST',
@@ -254,18 +251,12 @@ var CardSystem = (function() {
                 removeCard(sessionId);
             } else {
                 // 恢复按钮
-                if (cardEl) {
-                    var btns = cardEl.querySelectorAll('.action-btn');
-                    btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
-                }
+                restoreCardButtons(cardEl);
                 showError(result.message || '确认失败');
             }
         }).catch(function(err) {
             // 恢复按钮
-            if (cardEl) {
-                var btns = cardEl.querySelectorAll('.action-btn');
-                btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
-            }
+            restoreCardButtons(cardEl);
             showError('请求失败: ' + err.message);
         });
     }
@@ -276,12 +267,9 @@ var CardSystem = (function() {
     function cancel(sessionId, userId) {
         stopCountdown(sessionId);
 
-        // 禁用所有操作按钮防止重复点击
+        // 禁用所有操作按钮防止重复点击（显示 loading 文案）
         var cardEl = document.getElementById('card-' + sessionId);
-        if (cardEl) {
-            var btns = cardEl.querySelectorAll('.action-btn');
-            btns.forEach(function(btn) { btn.disabled = true; btn.style.pointerEvents = 'none'; });
-        }
+        setCardButtonsLoading(cardEl);
 
         fetch('/api/confirmations/' + sessionId + '/cancel?userId=' + userId, {
             method: 'POST',
@@ -310,17 +298,11 @@ var CardSystem = (function() {
 
                 removeCard(sessionId);
             } else {
-                if (cardEl) {
-                    var btns = cardEl.querySelectorAll('.action-btn');
-                    btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
-                }
+                restoreCardButtons(cardEl);
                 showError(result.message || '取消失败');
             }
         }).catch(function(err) {
-            if (cardEl) {
-                var btns = cardEl.querySelectorAll('.action-btn');
-                btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
-            }
+            restoreCardButtons(cardEl);
             showError('请求失败: ' + err.message);
         });
     }
@@ -593,12 +575,9 @@ var CardSystem = (function() {
             : actionId === 'overwrite_all' ? 'recurring/overwrite-all'
             : actionId;
 
-        // 禁用按钮
+        // 禁用按钮（显示 loading 文案）
         var cardEl = document.getElementById('card-' + sessionId);
-        if (cardEl) {
-            var btns = cardEl.querySelectorAll('.action-btn');
-            btns.forEach(function(btn) { btn.disabled = true; btn.style.pointerEvents = 'none'; });
-        }
+        setCardButtonsLoading(cardEl);
 
         fetch('/api/confirmations/' + sessionId + '/' + endpoint + '?userId=' + userId, {
             method: 'POST',
@@ -633,17 +612,11 @@ var CardSystem = (function() {
                     fetchCardData(sessionId, userId);
                 }
             } else {
-                if (cardEl) {
-                    var btns = cardEl.querySelectorAll('.action-btn');
-                    btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
-                }
+                restoreCardButtons(cardEl);
                 showError(result.message || '操作失败');
             }
         }).catch(function(err) {
-            if (cardEl) {
-                var btns = cardEl.querySelectorAll('.action-btn');
-                btns.forEach(function(btn) { btn.disabled = false; btn.style.pointerEvents = ''; });
-            }
+            restoreCardButtons(cardEl);
             showError('请求失败: ' + err.message);
         });
     }
@@ -695,6 +668,39 @@ var CardSystem = (function() {
     function clear() {
         Object.keys(cards).forEach(function(sessionId) {
             removeCard(sessionId);
+        });
+    }
+
+    /**
+     * 设置卡片按钮 loading 状态（禁用 + 显示 ⏳ 文案 + 半透明）
+     */
+    function setCardButtonsLoading(cardEl) {
+        if (!cardEl) return;
+        var btns = cardEl.querySelectorAll('.action-btn');
+        btns.forEach(function(btn) {
+            btn.disabled = true;
+            btn.style.pointerEvents = 'none';
+            btn.style.opacity = '0.6';
+            if (!btn.dataset.originalText) {
+                btn.dataset.originalText = btn.textContent;
+            }
+            btn.textContent = '⏳ ' + (btn.dataset.originalText || '处理中...');
+        });
+    }
+
+    /**
+     * 恢复卡片按钮状态（启用 + 恢复原文案）
+     */
+    function restoreCardButtons(cardEl) {
+        if (!cardEl) return;
+        var btns = cardEl.querySelectorAll('.action-btn');
+        btns.forEach(function(btn) {
+            btn.disabled = false;
+            btn.style.pointerEvents = '';
+            btn.style.opacity = '';
+            if (btn.dataset.originalText) {
+                btn.textContent = btn.dataset.originalText;
+            }
         });
     }
 
