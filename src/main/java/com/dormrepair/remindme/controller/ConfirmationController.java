@@ -306,14 +306,27 @@ public class ConfirmationController {
             parsedData.put("intentType", "REMINDER");
             parsedData.put("confidence", 0.95);
 
-            // 周期提醒相关字段（可选，仅 isRecurring=true 时写入）
-            if (body.get("isRecurring") != null) {
-                parsedData.put("isRecurring", body.get("isRecurring"));
+            // 周期提醒相关字段（明确 isRecurring=true 才覆盖；否则从旧会话 merge，防止周期信息丢失）
+            Object isRecurringBody = body.get("isRecurring");
+            boolean bodyIsRecurring = Boolean.TRUE.equals(isRecurringBody)
+                    || "true".equalsIgnoreCase(String.valueOf(isRecurringBody));
+            if (bodyIsRecurring) {
+                parsedData.put("isRecurring", true);
                 parsedData.put("startDate", body.get("startDate"));
                 parsedData.put("endDate", body.get("endDate"));
                 parsedData.put("repeatType", body.get("repeatType"));
                 if (body.get("recurringRemindTime") != null) {
                     parsedData.put("recurringRemindTime", body.get("recurringRemindTime"));
+                }
+            } else {
+                // 非周期显式提交：从旧会话中恢复周期字段（如仅改标题不改时间时，不能把周期信息丢了）
+                Map<String, Object> oldData = confirmationService.getSessionData(sessionId);
+                if (Boolean.TRUE.equals(oldData.get("isRecurring"))) {
+                    parsedData.put("isRecurring", true);
+                    parsedData.put("startDate", oldData.get("startDate"));
+                    parsedData.put("endDate", oldData.get("endDate"));
+                    parsedData.put("repeatType", oldData.get("repeatType"));
+                    parsedData.put("recurringRemindTime", oldData.get("recurringRemindTime"));
                 }
             }
 

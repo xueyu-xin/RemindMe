@@ -14,6 +14,8 @@ import com.dormrepair.remindme.repository.RecurringInstanceRepository;
 import com.dormrepair.remindme.repository.RecurringReminderRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.utils.TimeUtils;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -510,6 +512,21 @@ public class RecurringReminderService {
         LocalDate end = template.getEndDate();
         if (date.isBefore(start) || date.isAfter(end)) {
             return false;
+        }
+
+        // 例外日期判断：该日期在排除列表中则不生成
+        if (template.getExcludedDates() != null && !template.getExcludedDates().isEmpty()) {
+            try {
+                ObjectMapper mapper = new ObjectMapper();
+                List<String> excludedList = mapper.readValue(template.getExcludedDates(),
+                        new TypeReference<List<String>>() {});
+                if (excludedList.contains(date.toString())) {
+                    return false;
+                }
+            } catch (Exception e) {
+                log.warn("解析例外日期失败: {}", template.getExcludedDates());
+                // 解析失败时，按正常处理（兜底）
+            }
         }
 
         RepeatType repeatType = template.getRepeatType();

@@ -884,7 +884,17 @@ public class ConfirmationService {
 
         session.setOriginalInput(newInput);
         session.setParsedData(parsedDataJson);
-        session.setParsedTitle((String) newParsedData.get("title"));
+
+        // 周期提醒：清理标题中的显示格式（📅 周期提醒：前缀 + （每天/每周/每月）后缀）
+        // 防止装饰字符串被再次保存为原始标题，导致二次 build 时拼接重复
+        String title = (String) newParsedData.get("title");
+        boolean reparseIsRecurring = Boolean.TRUE.equals(newParsedData.get("isRecurring"));
+        if (reparseIsRecurring && title != null) {
+            title = title.replaceAll("^📅\\s*周期提醒：", "");
+            title = title.replaceAll("（(每天|每周|每月)）$", "");
+            newParsedData.put("title", title);
+        }
+        session.setParsedTitle(title);
         session.setParsedTime(parsedTime);
         session.setParsedLocation((String) newParsedData.get("location"));
         session.setParsedPriority((String) newParsedData.getOrDefault("priority", Priority.NORMAL.name()));
@@ -1150,6 +1160,11 @@ public class ConfirmationService {
                 .conflictMessage((String) parsedData.get("conflictMessage"))
                 .conflictId(parsedData.get("conflictId") != null ? Long.valueOf(String.valueOf(parsedData.get("conflictId"))) : null)
                 .suggestedTime((String) parsedData.get("suggestedTime"))
+                .isRecurring(isRecurring)
+                .startDate((String) parsedData.get("startDate"))
+                .endDate((String) parsedData.get("endDate"))
+                .recurringRemindTime((String) parsedData.get("recurringRemindTime"))
+                .repeatType((String) parsedData.get("repeatType"))
                 .build();
 
         log.info("buildConfirmationCard: sessionId={}, title={}, remindTime={}, location={}, note={}, parsedData.keys={}",

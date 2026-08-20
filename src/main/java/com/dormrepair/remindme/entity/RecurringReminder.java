@@ -86,6 +86,10 @@ public class RecurringReminder {
     @Column(nullable = false)
     private String timezone = "Asia/Shanghai";
 
+    // 例外日期列表，JSON 数组格式，如 ["2026-08-21","2026-08-22"]，这些日期将跳过生成提醒
+    @Column(name = "excluded_dates", columnDefinition = "TEXT")
+    private String excludedDates;
+
     // 创建时间，JPA Auditing 自动写入
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)

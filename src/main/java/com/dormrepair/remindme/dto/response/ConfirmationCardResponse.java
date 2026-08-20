@@ -1,6 +1,7 @@
 package com.dormrepair.remindme.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -69,6 +70,21 @@ public class ConfirmationCardResponse {
         private List<ConflictResponse.ConflictItem> conflictList;
         // 系统建议的空闲时间
         private String suggestedTime;
+        // 是否为周期提醒：前端通过此字段判断渲染时间控件类型，无需从显示文本反推
+        @JsonProperty("isRecurring")
+        private Boolean isRecurring;
+        // 周期提醒起始日期（yyyy-MM-dd）
+        @JsonProperty("startDate")
+        private String startDate;
+        // 周期提醒结束日期（yyyy-MM-dd）
+        @JsonProperty("endDate")
+        private String endDate;
+        // 周期提醒纯时间（HH:mm:ss），用于编辑表单回填 type=time
+        @JsonProperty("recurringRemindTime")
+        private String recurringRemindTime;
+        // 周期提醒重复类型：DAILY/WEEKLY/MONTHLY
+        @JsonProperty("repeatType")
+        private String repeatType;
 
         // ===== 批量导入场景字段 =====
 

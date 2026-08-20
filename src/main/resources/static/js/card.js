@@ -311,6 +311,8 @@ var CardSystem = (function() {
      * 切换编辑模式
      */
     function toggleEditMode(sessionId) {
+        stopCountdown(sessionId);
+        
         var cardEntry = cards[sessionId];
         if (!cardEntry || !cardEntry.card.element) return;
 
@@ -332,18 +334,96 @@ var CardSystem = (function() {
         if (!cardEntry || !cardEntry.card.element) return;
 
         var card = cardEntry.card;
+        var data = card.data;
+
+        // 先构造原始 remindTime（单提醒的完整时间）
+        var originalRemindTime = data.remindTime || '';
+        if (data.startDate && data.recurringRemindTime) {
+            var rtime = data.recurringRemindTime;
+            if (rtime.length === 5) rtime += ':00';
+            originalRemindTime = data.startDate + ' ' + rtime;
+        } else {
+            var origMatch = /^[\u4e00-\u9fa5]+\s+(\d{2}:\d{2})\s+\|\s+(\d{4}-\d{2}-\d{2})\s+至/.exec(originalRemindTime);
+            if (origMatch) {
+                originalRemindTime = origMatch[2] + ' ' + origMatch[1] + ':00';
+            }
+        }
+
+        // 判断是否是周期提醒：优先 isRecurring 字段，兜底从 remindTime 显示文本推断
+        var isRecurring = data.isRecurring === true;
+        if (!isRecurring) {
+            var rt = data.remindTime || '';
+            if (/^[\u4e00-\u9fa5]/.test(rt) && rt.indexOf('|') >= 0) {
+                isRecurring = true;
+            }
+        }
+
         var formHtml = '';
         formHtml += '<div class="card-edit-form">';
-        formHtml += '<div class="form-group"><label>标题</label><input type="text" class="edit-title" value="' + escapeHtml(card.data.title || '') + '"></div>';
-        formHtml += '<div class="form-group"><label>时间</label><input type="text" class="edit-remindTime" value="' + escapeHtml(card.data.remindTime || '') + '"></div>';
-        formHtml += '<div class="form-group"><label>地点</label><input type="text" class="edit-location" value="' + escapeHtml(card.data.location || '') + '"></div>';
-        formHtml += '<div class="form-group"><label>备注</label><textarea class="edit-note" rows="2">' + escapeHtml(card.data.note || '') + '</textarea></div>';
+        formHtml += '<input type="hidden" class="edit-is-recurring" value="' + (isRecurring ? '1' : '0') + '">';
+        formHtml += '<div class="form-group"><label>标题</label><input type="text" class="edit-title" value="' + escapeHtml(data.title || '') + '"></div>';
+
+        if (!isRecurring) {
+            // 普通提醒：datetime-local
+            var dtLocalVal = '';
+            if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(originalRemindTime)) {
+                dtLocalVal = originalRemindTime.replace(' ', 'T').slice(0, 16); // yyyy-MM-ddTHH:mm
+            }
+            formHtml += '<div class="form-group"><label>时间</label><input type="datetime-local" class="edit-remindTime-single" value="' + escapeHtml(dtLocalVal) + '"></div>';
+        } else {
+            // 周期提醒：time + 2 * date + repeatType
+
+            // 提取 HH:mm
+            var timeHHmm = '';
+            if (data.recurringRemindTime) {
+                timeHHmm = data.recurringRemindTime.length >= 5
+                    ? data.recurringRemindTime.slice(0, 5)
+                    : data.recurringRemindTime;
+            } else if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(originalRemindTime)) {
+                timeHHmm = originalRemindTime.split(' ')[1].slice(0, 5);
+            } else {
+                var tMatch = /^[\u4e00-\u9fa5]+\s+(\d{2}:\d{2})/.exec(data.remindTime || '');
+                if (tMatch) timeHHmm = tMatch[1];
+            }
+
+            // 开始日期
+            var startDateVal = data.startDate || '';
+            if (!startDateVal && /^\d{4}-\d{2}-\d{2} /.test(originalRemindTime)) {
+                startDateVal = originalRemindTime.split(' ')[0];
+            }
+            if (!startDateVal) {
+                var sMatch = /^[\u4e00-\u9fa5]+\s+\d{2}:\d{2}\s+\|\s+(\d{4}-\d{2}-\d{2})\s+至/.exec(data.remindTime || '');
+                if (sMatch) startDateVal = sMatch[1];
+            }
+
+            // 结束日期
+            var endDateVal = data.endDate || '';
+            if (!endDateVal) {
+                var eMatch = /至\s+(\d{4}-\d{2}-\d{2})/.exec(data.remindTime || '');
+                if (eMatch) endDateVal = eMatch[1];
+            }
+
+            var repeatTypeVal = data.repeatType || 'DAILY';
+
+            formHtml += '<div class="form-group"><label>时间</label><input type="time" class="edit-recurring-time" value="' + escapeHtml(timeHHmm) + '"></div>';
+            formHtml += '<div class="form-group"><label>开始日期</label><input type="date" class="edit-recurring-start" value="' + escapeHtml(startDateVal) + '"></div>';
+            formHtml += '<div class="form-group"><label>结束日期</label><input type="date" class="edit-recurring-end" value="' + escapeHtml(endDateVal) + '"></div>';
+            formHtml += '<div class="form-group"><label>重复类型</label>';
+            formHtml += '<select class="edit-recurring-repeat">';
+            formHtml += '<option value="DAILY"' + (repeatTypeVal === 'DAILY' ? ' selected' : '') + '>每天</option>';
+            formHtml += '<option value="WEEKLY"' + (repeatTypeVal === 'WEEKLY' ? ' selected' : '') + '>每周</option>';
+            formHtml += '<option value="MONTHLY"' + (repeatTypeVal === 'MONTHLY' ? ' selected' : '') + '>每月</option>';
+            formHtml += '</select></div>';
+        }
+
+        formHtml += '<div class="form-group"><label>地点</label><input type="text" class="edit-location" value="' + escapeHtml(data.location || '') + '"></div>';
+        formHtml += '<div class="form-group"><label>备注</label><textarea class="edit-note" rows="2">' + escapeHtml(data.note || '') + '</textarea></div>';
         formHtml += '<div class="form-group"><label>优先级</label>';
         formHtml += '<select class="edit-priority">';
-        formHtml += '<option value="LOW"' + (card.data.priority === 'LOW' ? ' selected' : '') + '>低</option>';
-        formHtml += '<option value="NORMAL"' + (card.data.priority === 'NORMAL' ? ' selected' : '') + '>普通</option>';
-        formHtml += '<option value="HIGH"' + (card.data.priority === 'HIGH' ? ' selected' : '') + '>高</option>';
-        formHtml += '<option value="URGENT"' + (card.data.priority === 'URGENT' ? ' selected' : '') + '>紧急</option>';
+        formHtml += '<option value="LOW"' + (data.priority === 'LOW' ? ' selected' : '') + '>低</option>';
+        formHtml += '<option value="NORMAL"' + (data.priority === 'NORMAL' ? ' selected' : '') + '>普通</option>';
+        formHtml += '<option value="HIGH"' + (data.priority === 'HIGH' ? ' selected' : '') + '>高</option>';
+        formHtml += '<option value="URGENT"' + (data.priority === 'URGENT' ? ' selected' : '') + '>紧急</option>';
         formHtml += '</select></div>';
         formHtml += '<div class="form-actions">';
         formHtml += '<button class="action-btn primary edit-submit" data-session-id="' + sessionId + '">修改</button>';
@@ -394,13 +474,49 @@ var CardSystem = (function() {
         var card = cardEntry.card;
         var userId = localStorage.getItem('userId');
 
+        var flagInput = card.element.querySelector('.edit-is-recurring');
+        var isRecurring = flagInput && flagInput.value === '1';
+
+        var titleVal = card.element.querySelector('.edit-title').value;
+        var locationVal = card.element.querySelector('.edit-location').value;
+        var noteVal = card.element.querySelector('.edit-note').value;
+        var priorityVal = card.element.querySelector('.edit-priority').value;
+
         var editData = {
-            title: card.element.querySelector('.edit-title').value,
-            remindTime: card.element.querySelector('.edit-remindTime').value,
-            location: card.element.querySelector('.edit-location').value,
-            note: card.element.querySelector('.edit-note').value,
-            priority: card.element.querySelector('.edit-priority').value
+            title: titleVal,
+            location: locationVal,
+            note: noteVal,
+            priority: priorityVal
         };
+
+        if (!isRecurring) {
+            // 普通提醒：datetime-local -> yyyy-MM-dd HH:mm:ss
+            var dtInput = card.element.querySelector('.edit-remindTime-single');
+            var dtVal = dtInput ? dtInput.value : '';
+            editData.remindTime = dtVal ? (dtVal.replace('T', ' ') + ':00') : '';
+        } else {
+            // 周期提醒：time + 2 * date + repeatType
+            var timeInput = card.element.querySelector('.edit-recurring-time');
+            var startInput = card.element.querySelector('.edit-recurring-start');
+            var endInput = card.element.querySelector('.edit-recurring-end');
+            var repeatInput = card.element.querySelector('.edit-recurring-repeat');
+
+            var timeVal = (timeInput && timeInput.value) ? timeInput.value : '';   // HH:mm
+            var startVal = (startInput && startInput.value) ? startInput.value : ''; // yyyy-MM-dd
+            var endVal = (endInput && endInput.value) ? endInput.value : '';
+            var repeatVal = (repeatInput && repeatInput.value) ? repeatInput.value : 'DAILY';
+
+            // recurringRemindTime：补成 HH:mm:ss
+            var recurringTimeFull = timeVal;
+            if (recurringTimeFull.length === 5) recurringTimeFull += ':00';
+
+            editData.remindTime = (startVal && recurringTimeFull) ? (startVal + ' ' + recurringTimeFull) : '';
+            editData.recurringRemindTime = recurringTimeFull;
+            editData.startDate = startVal;
+            editData.endDate = endVal;
+            editData.repeatType = repeatVal;
+            editData.isRecurring = true;
+        }
 
         fetch('/api/confirmations/' + sessionId + '/reparse?userId=' + userId, {
             method: 'POST',
