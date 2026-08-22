@@ -1,4 +1,4 @@
-﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿﻿<!DOCTYPE html>
+﻿﻿<!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -1996,5 +1996,273 @@
             </div>
         </div>
     </div>
+
+    <!-- ===== Agent 状态流气泡样式 ===== -->
+    <style>
+        .as-flow-wrapper {
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            align-self: flex-start;
+            max-width: 78%;
+            width: fit-content;
+            width: -moz-fit-content;
+        }
+
+        .as-flow-bubble {
+            background: linear-gradient(180deg, #FFFFFF 0%, #FFF9F7 100%) !important;
+            border: 2px solid #FFDFD7 !important;
+            border-left: 4px solid #FFB5A7 !important;
+            border-radius: 20px 20px 20px 6px !important;
+            padding: 14px 18px !important;
+            max-width: 100% !important;
+            width: 100% !important;
+            box-shadow: 0 4px 18px rgba(255, 181, 167, 0.18) !important;
+            color: #5C4033 !important;
+        }
+        .as-flow-bubble.as-flow-finished {
+            border-left-color: #8ED4A6 !important;
+        }
+        .as-flow-bubble.as-flow-error {
+            border-left-color: #FF7B89 !important;
+        }
+
+        .as-flow-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding-bottom: 10px;
+            margin-bottom: 4px;
+            border-bottom: 1px dashed #FFDFD7;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.2s ease;
+            border-radius: 8px;
+            padding: 6px 8px;
+            margin: -4px -6px 6px;
+        }
+        .as-flow-header:hover {
+            background: #FFF0EC;
+        }
+        .as-flow-title {
+            font-family: 'MaoKenShiJinHei', -apple-system, sans-serif;
+            font-size: 15px;
+            color: #5C4033;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .as-flow-summary {
+            flex: 1;
+            text-align: right;
+            font-size: 13px;
+            color: #8B7355;
+            font-family: inherit;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .as-summary-text {
+            background: #FFF0EC;
+            padding: 3px 10px;
+            border-radius: 999px;
+            color: #8B7355;
+        }
+        .as-summary-error {
+            background: #FFF0F1 !important;
+            color: #FF7B89 !important;
+        }
+        .as-flow-toggle {
+            font-size: 11px;
+            color: #B59D85;
+            flex-shrink: 0;
+            padding: 2px 6px;
+            border-radius: 8px;
+            transition: transform 0.25s ease;
+        }
+        .as-flow-bubble.as-flow-collapsed .as-flow-toggle {
+            transform: rotate(180deg);
+        }
+
+        .as-flow-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding-top: 6px;
+            animation: asFadeIn 0.25s ease;
+        }
+        @keyframes asFadeIn {
+            from { opacity: 0; max-height: 0; }
+            to   { opacity: 1; max-height: 1000px; }
+        }
+
+        .as-step-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 8px 10px;
+            border-radius: 14px;
+            background: #FFF9F7;
+            border: 1px solid #FFF0EC;
+            transition: all 0.25s ease;
+            position: relative;
+        }
+        .as-step-row.as-step-pending {
+            background: #FFF9F7;
+        }
+        .as-step-row.as-step-done {
+            background: #F7FFFA;
+            border-color: #D6F1E0;
+        }
+        .as-step-row.as-step-error {
+            background: #FFF2F3 !important;
+            border-color: #FFD1D5 !important;
+        }
+
+        /* 新步骤入场动画：向上滑入 + 淡入 */
+        .as-step-row.as-step-enter {
+            animation: asStepEnter 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        @keyframes asStepEnter {
+            0%   { opacity: 0; transform: translateY(8px) scale(0.98); }
+            60%  { transform: translateY(-2px) scale(1.01); }
+            100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
+        .as-step-icon {
+            font-size: 17px;
+            width: 28px;
+            height: 28px;
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: #FFFFFF;
+            border-radius: 50%;
+            border: 1.5px solid #FFDFD7;
+            box-shadow: 0 2px 6px rgba(255, 181, 167, 0.15);
+        }
+        .as-step-done .as-step-icon {
+            border-color: #C6EBD2;
+            background: #EEFBF2;
+        }
+        .as-step-error .as-step-icon {
+            border-color: #FFC9CD !important;
+            background: #FFEEF0 !important;
+        }
+
+        /* pending 状态的图标呼吸动画 */
+        .as-step-pending .as-step-icon {
+            animation: asPulse 1.3s ease-in-out infinite;
+        }
+        @keyframes asPulse {
+            0%, 100% { transform: scale(1);   box-shadow: 0 2px 6px rgba(255, 181, 167, 0.25); }
+            50%      { transform: scale(1.08); box-shadow: 0 4px 14px rgba(255, 181, 167, 0.4); }
+        }
+
+        .as-step-body {
+            flex: 1;
+            min-width: 0;
+            padding-top: 3px;
+        }
+        .as-step-label-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        .as-step-label {
+            font-size: 14px;
+            color: #5C4033;
+            font-family: 'MaoKenShiJinHei', inherit;
+            letter-spacing: 0.3px;
+        }
+        .as-step-pending .as-step-label {
+            color: #8B7355;
+        }
+        .as-step-duration {
+            font-size: 11px;
+            color: #B59D85;
+            background: #FFF0EC;
+            padding: 2px 8px;
+            border-radius: 999px;
+            flex-shrink: 0;
+            white-space: nowrap;
+        }
+        .as-step-done .as-step-duration {
+            background: #EEFBF2;
+            color: #7BAE8D;
+        }
+        .as-step-detail {
+            margin-top: 3px;
+            font-size: 12.5px;
+            color: #8B7355;
+            line-height: 1.6;
+            padding-left: 2px;
+            word-break: break-all;
+            white-space: pre-wrap;
+        }
+        .as-error-detail {
+            color: #FF7B89 !important;
+        }
+
+        .as-step-check {
+            flex-shrink: 0;
+            width: 20px;
+            height: 20px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-top: 4px;
+            font-size: 13px;
+            color: transparent;
+            transition: all 0.25s ease;
+        }
+        .as-step-done .as-step-check {
+            color: #8ED4A6;
+            background: #EEFBF2;
+            border-radius: 50%;
+            font-weight: bold;
+            animation: asCheckPop 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .as-step-error .as-step-check {
+            color: #FF7B89 !important;
+            background: #FFEEF0 !important;
+        }
+        @keyframes asCheckPop {
+            0%   { transform: scale(0);   opacity: 0; }
+            60%  { transform: scale(1.3); opacity: 1; }
+            100% { transform: scale(1);   opacity: 1; }
+        }
+
+        /* 折叠模式下的气泡更紧凑 */
+        .as-flow-bubble.as-flow-collapsed .as-flow-header {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+
+        /* ===== 移动端适配 ===== */
+        @media (max-width: 640px) {
+            .as-flow-wrapper {
+                max-width: 90%;
+            }
+            .as-flow-bubble {
+                padding: 12px 14px !important;
+                border-radius: 18px 18px 18px 6px !important;
+            }
+            .as-step-label {
+                font-size: 13.5px;
+            }
+            .as-step-detail {
+                font-size: 12px;
+            }
+            .as-flow-title {
+                font-size: 14px;
+            }
+        }
+    </style>
 </body>
 </html>

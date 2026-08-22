@@ -7,25 +7,38 @@ import com.dormrepair.remindme.dto.response.LoginResponse;
 import com.dormrepair.remindme.entity.User;
 import com.dormrepair.remindme.exception.InvalidInputException;
 import com.dormrepair.remindme.repository.UserRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 // 用户业务：注册、登录、资料维护，以及供 Agent 调用的偏好设置读写工具
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class UserService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final VerificationCodeService verificationCodeService;
+    private final LocationService locationService;
+
+    @Autowired
+    public UserService(UserRepository userRepository,
+                      PasswordEncoder passwordEncoder,
+                      VerificationCodeService verificationCodeService,
+                      @Lazy LocationService locationService) {
+        this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.verificationCodeService = verificationCodeService;
+        this.locationService = locationService;
+    }
 
     // 注册：校验手机号唯一 + 验证码，密码加密入库，昵称默认取手机号后 4 位
     @Transactional
@@ -115,7 +128,7 @@ public class UserService {
     // userId     用户ID，由系统自动填充
     // preference 偏好项：city / defaultAdvanceMinutes / nickname
     // value      新值
-    @AgentTool(name = "set_user_preferences", description = "修改用户偏好设置，用户要求更改默认城市、默认提前量、昵称时调用")
+    @AgentTool(name = "set_user_preferences", description = "修改用户偏好设置，用户要求更改默认城市、默认提前量、昵称时调用。注意：修改默认城市(city)时建议先调 city_search 工具查看候选城市，传入不明确的城市名可能被拒绝")
     @Transactional
     public Map<String, Object> setUserPreferences(Long userId, String preference, String value) {
         log.info("Agent调用修改用户偏好: userId={}, preference={}, value={}", userId, preference, value);
@@ -152,8 +165,22 @@ public class UserService {
                     result.put("error", "城市名称不能为空");
                     return result;
                 }
-                user.setCity(value.trim());
-                fieldDisplayName = "默认城市";
+                // 调和风城市搜索 + 覆盖率算法统一城市格式
+                Map<String, Object> cityMatch = locationService.selectBestCityMatch(value.trim());
+                if (Boolean.TRUE.equals(cityMatch.get("success"))) {
+                    String standardCity = (String) cityMatch.get("displayName");
+                    user.setCity(standardCity);
+                    fieldDisplayName = "默认城市";
+                    value = standardCity;
+                } else {
+                    result.put("success", false);
+                    result.put("error", cityMatch.get("message"));
+                    Object candidates = cityMatch.get("candidates");
+                    if (candidates != null) {
+                        result.put("candidates", candidates);
+                    }
+                    return result;
+                }
                 break;
 
             case "defaultAdvanceMinutes":
@@ -208,16 +235,6 @@ public class UserService {
         result.put("message", "已修改" + fieldDisplayName + "为：" + value);
         result.put("field", preference);
         return result;
-    }
-
-    // 更新默认城市
-    @Transactional
-    public void updateDefaultCity(Long userId, String city) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("用户不存在: " + userId));
-        user.setCity(city);
-        userRepository.save(user);
-        log.info("已更新用户 {} 的默认城市为: {}", userId, city);
     }
 
     // 更新头像：写入新路径后尝试删除旧头像文件，仅清理 avatars/ 前缀的自定义头像

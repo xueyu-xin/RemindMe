@@ -24,8 +24,7 @@ public class CitySearchResult {
     // 经度字符串
     private String lon;
 
-    // 返回拼装好的「省-市-区」显示名称，自动跳过与上级同名的层级
-    // 规则：直辖市（如 adm1=北京，adm2=北京）不重复显示；区县与市同名的区县也不重复显示，避免「北京-北京-北京」
+    // 拼装「省-市-区」显示名称，自动跳过与上级同名的层级（如 name==adm2 时不再重复显示"广州-广州"）
     public String getDisplayName() {
         StringBuilder sb = new StringBuilder();
 
@@ -33,12 +32,12 @@ public class CitySearchResult {
             sb.append(adm1);
         }
 
-        if (adm2 != null && !adm2.isBlank() && !adm2.equals(adm1)) {
+        if (adm2 != null && !adm2.isBlank()) {
             if (sb.length() > 0) sb.append("-");
             sb.append(adm2);
         }
 
-        if (name != null && !name.isBlank() && !name.equals(adm2) && !name.equals(adm1)) {
+        if (name != null && !name.isBlank() && !name.equals(adm2)) {
             if (sb.length() > 0) sb.append("-");
             sb.append(name);
         }

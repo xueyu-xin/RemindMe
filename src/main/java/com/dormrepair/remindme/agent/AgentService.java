@@ -1,6 +1,9 @@
 package com.dormrepair.remindme.agent;
 
 import com.dormrepair.remindme.agent.ConversationMemory.Message;
+import com.dormrepair.remindme.agent.event.AgentStatus;
+import com.dormrepair.remindme.agent.event.AgentStatusMapper;
+import com.dormrepair.remindme.agent.event.EventPublisher;
 import com.dormrepair.remindme.agent.event.ReminderCancelledEvent;
 import com.dormrepair.remindme.agent.event.ReminderConfirmedEvent;
 import com.dormrepair.remindme.agent.event.ReminderCreatedEvent;
@@ -16,9 +19,11 @@ import org.springframework.stereotype.Service;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 // Agent 核心调度器。实现 ReAct（思考-行动-观察）循环：解析用户输入→调用 LLM→决定是否执行工具→收集结果→再次迭代，
-// 直至生成最终回复；集成空响应降级、演戏格式拦截、重复调用去重+卡死兜底、确认卡片生成、事件监听等能力
+// 直至生成最终回复；集成空响应降级、演戏格式拦截、重复调用去重+卡死兜底、确认卡片生成、事件监听等能力；
+// 同时通过 EventPublisher 异步发布 AgentStatusEvent，驱动前端状态流显示。
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -29,6 +34,7 @@ public class AgentService {
     private final ConversationMemory conversationMemory;
     private final ObjectMapper objectMapper;
     private final UserService userService;
+    private final EventPublisher eventPublisher;
 
     // 启动开关：可通过配置 agent.enabled=false 临时关闭 Agent
     @Value("${agent.enabled:false}")
@@ -39,6 +45,29 @@ public class AgentService {
 
     // 最大工具调用次数：单次请求最多执行 5 次工具，避免长链路
     private static final int MAX_TOOL_CALLS = 5;
+
+    // 统一发布 DONE 终态事件并返回结果，每个 return 调用它避免重复代码；
+    // 事件发布失败静默吞异常，不影响正常业务返回（保障回复速度优先）
+    private AgentResponse finishWith(String flowId, long startTime, int stepCount, Long userId, AgentResponse resp) {
+        try {
+            long dur = System.currentTimeMillis() - startTime;
+            eventPublisher.publishAgentStatusTerminal(userId, AgentStatus.DONE, flowId, stepCount, dur, stepCount);
+        } catch (Exception ignore) {
+            log.warn("finishWith发布DONE事件失败(忽略): flowId={}, error={}", flowId, ignore.getMessage());
+        }
+        return resp;
+    }
+
+    // 发布 ERROR 终态事件并返回错误响应（异常出口调用）
+    private AgentResponse finishWithError(String flowId, long startTime, int stepCount, Long userId, String errorMsg) {
+        try {
+            long dur = System.currentTimeMillis() - startTime;
+            eventPublisher.publishAgentStatusTerminal(userId, AgentStatus.ERROR, flowId, stepCount, dur, errorMsg);
+        } catch (Exception ignore) {
+            log.warn("finishWithError发布ERROR事件失败(忽略): flowId={}, error={}", flowId, ignore.getMessage());
+        }
+        return AgentResponse.error(errorMsg);
+    }
 
     // 主入口：无上下文时直接调用带上下文重载
     public AgentResponse processRequest(Long userId, String userInput) {
@@ -51,6 +80,27 @@ public class AgentService {
     // 3) 达到 MAX_ITERATIONS 仍未出最终回复时走兜底总结模块。
     public AgentResponse processRequest(Long userId, String userInput, Map<String, Object> context) {
         log.info("Agent开始处理请求: userId={}, userInput={}", userId, userInput);
+
+        // ---------- 状态流上下文初始化 ----------
+        // flowId：同一次对话共享，前端用来把所有步骤聚合到一个状态流气泡
+        final String flowId = UUID.randomUUID().toString();
+        final long startTime = System.currentTimeMillis();
+        // step 计数器（数组包装以便 lambda/内部类访问）
+        final int[] stepHolder = { 0 };
+        // 每次调用 +1 返回新序号
+        java.util.function.Supplier<Integer> nextStep = () -> { stepHolder[0] += 1; return stepHolder[0]; };
+
+        // Agent 未启用时仍发布 START + DONE（极简两步：开始→直接返回），保持前端状态流一致可观测
+        if (!agentEnabled) {
+            eventPublisher.publishAgentStatus(userId, AgentStatus.START_THINKING, flowId, nextStep.get());
+            String fallback = "收到：" + userInput;
+            conversationMemory.addUserMessage(userId, userInput);
+            conversationMemory.addAssistantMessage(userId, fallback);
+            return finishWith(flowId, startTime, stepHolder[0], userId, AgentResponse.text(fallback));
+        }
+
+        // 入口：发布 START_THINKING
+        eventPublisher.publishAgentStatus(userId, AgentStatus.START_THINKING, flowId, nextStep.get());
 
         try {
             conversationMemory.addUserMessage(userId, userInput);
@@ -91,6 +141,9 @@ public class AgentService {
                 iteration++;
                 log.info("Agent执行进度: 第 {}/{} 步, 已调用工具: {}", iteration, MAX_ITERATIONS, toolHistory);
 
+                // ---------- 状态流：正在思考（理解意图/生成下一步）----------
+                eventPublisher.publishAgentStatus(userId, AgentStatus.THINKING, flowId, nextStep.get());
+
                 // 思考：LLM 生成响应或 tool_call JSON
                 llmResponse = llmService.chatWithTools(userInput, tools, history);
 
@@ -107,7 +160,7 @@ public class AgentService {
                         log.error("LLM两次返回空响应，返回降级错误");
                         String fallbackMsg = "抱歉，处理请求时出现问题，请稍后重试或换一种方式描述。";
                         conversationMemory.addAssistantMessage(userId, fallbackMsg);
-                        return AgentResponse.text(fallbackMsg);
+                        return finishWith(flowId, startTime, stepHolder[0], userId, AgentResponse.text(fallbackMsg));
                     }
                     log.info("简化重试成功，LLM返回响应");
                 }
@@ -140,19 +193,23 @@ public class AgentService {
                     // 无工具调用 → 作为最终自然语言回复
                     log.info("LLM直接回复，结束循环（迭代次数: {}, 工具调用次数: {}）", iteration, toolCallCount);
 
+                    // ---------- 状态流：正在生成最终回复 ----------
+                    eventPublisher.publishAgentStatus(userId, AgentStatus.GENERATING_REPLY, flowId, nextStep.get());
+
                     // 如果最终回复里残留"tool_call" JSON 片段，替换为友好提示
                     if (containsToolCallFragment(llmResponse)) {
                         log.warn("LLM输出包含未解析的tool_call JSON片段，过滤后返回友好提示");
                         String friendlyMsg = "操作失败，请重试或换一种方式描述。";
                         conversationMemory.addAssistantMessage(userId, friendlyMsg);
-                        return AgentResponse.text(friendlyMsg);
+                        return finishWith(flowId, startTime, stepHolder[0], userId, AgentResponse.text(friendlyMsg));
                     }
 
                     // 清理过程语+演戏段，保存最终回复并返回
                     String finalReply = cleanFinalResponse(llmResponse);
                     log.info("Agent执行完成: userId={}, 总步骤={}, 调用工具={}", userId, iteration, toolHistory);
                     conversationMemory.addAssistantMessage(userId, finalReply);
-                    return buildAgentResponse(finalReply, lastToolResult, userId);
+                    return finishWith(flowId, startTime, stepHolder[0], userId,
+                            buildAgentResponse(finalReply, lastToolResult, userId));
                 }
 
                 // 真正解析到 ToolCall，重置演戏拦截计数
@@ -176,6 +233,10 @@ public class AgentService {
                         if (duplicateCallCount >= 2) {
                             // 连续 2 次 → 视为 LLM 卡死，强制调用兜底总结退出循环
                             log.warn("连续{}次重复调用，强制触发兜底总结退出循环", duplicateCallCount);
+
+                            // ---------- 状态流：正在生成最终回复（兜底总结）----------
+                            eventPublisher.publishAgentStatus(userId, AgentStatus.GENERATING_REPLY, flowId, nextStep.get());
+
                             List<Message> currentTurnHistory = extractCurrentTurnHistory(history, currentTurnStartIndex);
                             String summary = llmService.generateSummaryFromHistory(currentTurnHistory);
                             if (summary == null || summary.isBlank()) {
@@ -184,7 +245,8 @@ public class AgentService {
                             summary = cleanFinalResponse(summary);
                             log.info("重复调用兜底总结完成: userId={}, 总步骤={}, 调用工具={}", userId, iteration, toolHistory);
                             conversationMemory.addAssistantMessage(userId, summary);
-                            return buildAgentResponse(summary, lastToolResult, userId);
+                            return finishWith(flowId, startTime, stepHolder[0], userId,
+                                    buildAgentResponse(summary, lastToolResult, userId));
                         }
 
                         // 注入提示让 LLM 直接出最终回复或处理尚未完成的子任务
@@ -202,6 +264,11 @@ public class AgentService {
                         duplicateCallCount = 0;
                     }
 
+                    // ---------- 状态流：正在调用工具 ----------
+                    eventPublisher.publishAgentStatusWithTool(userId, AgentStatus.CALLING_TOOL, flowId, nextStep.get(),
+                            llmToolCall.getToolName(), AgentStatusMapper.toChinese(llmToolCall.getToolName()),
+                            AgentStatusMapper.extractToolDetail(llmToolCall.getToolName(), llmToolCall.getArguments()));
+
                     // 执行工具并落盘
                     log.info("LLM决定调用工具({}/{}) : {}", toolCallCount + 1, MAX_TOOL_CALLS, llmToolCall.getToolName());
                     ToolCall toolCall = ToolCall.of(llmToolCall.getToolName(), llmToolCall.getArguments());
@@ -210,6 +277,11 @@ public class AgentService {
                     executedSignatures.add(signature);
                     toolHistory.add(llmToolCall.getToolName());
                     log.info("工具调用记录: {} → {}", toolCallCount, llmToolCall.getToolName());
+
+                    // ---------- 状态流：工具执行完成（返回结果）----------
+                    eventPublisher.publishAgentStatusWithTool(userId, AgentStatus.TOOL_RESULT, flowId, nextStep.get(),
+                            llmToolCall.getToolName(), AgentStatusMapper.toChinese(llmToolCall.getToolName()),
+                            AgentStatusMapper.formatToolResultBrief(toolResult));
 
                     conversationMemory.addToolCall(userId, llmToolCall.getToolName(), llmToolCall.getArguments());
 
@@ -252,19 +324,23 @@ public class AgentService {
                         if (confirmationResponse.getContent() != null && !confirmationResponse.getContent().isBlank()) {
                             conversationMemory.addAssistantMessage(userId, confirmationResponse.getContent());
                         }
-                        return confirmationResponse;
+                        // ---------- 状态流：生成最终回复（确认卡片）----------
+                        eventPublisher.publishAgentStatus(userId, AgentStatus.GENERATING_REPLY, flowId, nextStep.get());
+                        return finishWith(flowId, startTime, stepHolder[0], userId, confirmationResponse);
                     }
 
                     // shouldStop=true 标记任务完成（周期提醒会用到）；若附带 sessionId 走确认卡片
                     if (isTaskCompleted(toolResult)) {
                         log.info("工具结果标记任务完成（shouldStop=true），结束循环: toolName={}", llmToolCall.getToolName());
+                        // ---------- 状态流：生成最终回复 ----------
+                        eventPublisher.publishAgentStatus(userId, AgentStatus.GENERATING_REPLY, flowId, nextStep.get());
                         AgentResponse confirmResp = buildConfirmationResponse(toolResult, userId);
                         if (confirmResp != null) {
                             log.info("shouldStop分支二次检测到sessionId，返回CONFIRMATION响应: toolName={}", llmToolCall.getToolName());
                             if (confirmResp.getContent() != null && !confirmResp.getContent().isBlank()) {
                                 conversationMemory.addAssistantMessage(userId, confirmResp.getContent());
                             }
-                            return confirmResp;
+                            return finishWith(flowId, startTime, stepHolder[0], userId, confirmResp);
                         }
                         conversationMemory.addAssistantMessage(userId, "周期提醒确认卡片已生成，请确认。");
                         // 兜底手工构造 CONFIRMATION，避免误返回 TEXT 导致确认卡片丢失
@@ -282,12 +358,14 @@ public class AgentService {
                                 confirmData.put("title", title);
                                 confirmData.put("remindTime", remindTime);
                                 confirmData.put("location", location);
-                                return AgentResponse.confirmation(sessionId, "📅 周期提醒请确认：", confirmData);
+                                return finishWith(flowId, startTime, stepHolder[0], userId,
+                                        AgentResponse.confirmation(sessionId, "📅 周期提醒请确认：", confirmData));
                             }
                         } catch (Exception e) {
                             log.warn("shouldStop分支解析失败: {}", e.getMessage());
                         }
-                        return buildAgentResponse("周期提醒确认卡片已生成，请确认。", toolResult, userId);
+                        return finishWith(flowId, startTime, stepHolder[0], userId,
+                                buildAgentResponse("周期提醒确认卡片已生成，请确认。", toolResult, userId));
                     }
 
                     // 工具失败 → 不退出，让下一轮 LLM 拿到失败结果后自行降级
@@ -304,6 +382,10 @@ public class AgentService {
 
             // 达到 MAX_ITERATIONS：调用"本次对话切片"的兜底总结，给出已完成/未完成/需询问三类结果
             log.warn("达到最大迭代次数 {}，触发兜底总结（工具调用次数: {}）", MAX_ITERATIONS, toolCallCount);
+
+            // ---------- 状态流：正在生成最终回复（兜底总结）----------
+            eventPublisher.publishAgentStatus(userId, AgentStatus.GENERATING_REPLY, flowId, nextStep.get());
+
             log.info("Agent执行完成: userId={}, 总步骤={}, 调用工具={}", userId, iteration, toolHistory);
             List<Message> currentTurnHistory = extractCurrentTurnHistory(history, currentTurnStartIndex);
             String finalReply = llmService.generateSummaryFromHistory(currentTurnHistory);
@@ -318,11 +400,12 @@ public class AgentService {
                 finalReply = cleanFinalResponse(finalReply);
             }
             conversationMemory.addAssistantMessage(userId, finalReply);
-            return buildAgentResponse(finalReply, lastToolResult, userId);
+            return finishWith(flowId, startTime, stepHolder[0], userId,
+                    buildAgentResponse(finalReply, lastToolResult, userId));
 
         } catch (Exception e) {
             log.error("Agent处理请求失败: userId={}, error={}", userId, e.getMessage(), e);
-            return AgentResponse.error("处理请求时发生错误: " + e.getMessage());
+            return finishWithError(flowId, startTime, stepHolder[0], userId, "处理请求时发生错误: " + e.getMessage());
         }
     }
 

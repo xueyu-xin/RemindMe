@@ -183,8 +183,8 @@ public class UserController {
                 .orElse(ResponseEntity.notFound().build());
     }
 
-    // 根据经纬度更新默认城市：调用反向地理编码拿到地址后回填 user.city，
-    // 后续天气、经期建议等都以该地址作为默认位置
+    // 根据经纬度获取标准格式地址：用和风城市搜索反查经纬度对应的城市，
+    // 返回 displayName 给前端填充城市选择输入框，用户点保存后才写库
     @PutMapping("/location")
     public ResponseEntity<Map<String, Object>> updateLocation(
             @RequestParam Long userId,
@@ -194,14 +194,21 @@ public class UserController {
             Double latitude = ((Number) body.get("latitude")).doubleValue();
             Double longitude = ((Number) body.get("longitude")).doubleValue();
 
-            String address = locationService.reverseGeocode(latitude, longitude);
-            userService.updateDefaultCity(userId, address);
+            // 用和风城市搜索反查经纬度对应的标准格式地址（不写库，仅返回给前端）
+            String coord = longitude + "," + latitude;
+            var hits = locationService.searchCities(coord);
+            if (hits.isEmpty()) {
+                response.put("success", false);
+                response.put("message", "无法解析当前位置对应的城市");
+                return ResponseEntity.badRequest().body(response);
+            }
+            String displayName = hits.get(0).getDisplayName();
 
             response.put("success", true);
-            response.put("address", address);
+            response.put("address", displayName);
             return ResponseEntity.ok(response);
         } catch (Exception e) {
-            log.error("更新用户位置失败: userId={}", userId, e);
+            log.error("获取当前位置失败: userId={}", userId, e);
             response.put("success", false);
             response.put("message", e.getMessage());
             return ResponseEntity.badRequest().body(response);

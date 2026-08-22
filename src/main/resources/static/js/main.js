@@ -45,6 +45,13 @@ function handleWebSocketMessageV2(msg) {
     if (!msg || !msg.type) {
         return false;
     }
+    // Agent 状态流事件（状态流气泡优先处理，不参与普通消息）
+    if (msg.type === 'AGENT_STATUS') {
+        if (window.AgentStatusFlow) {
+            window.AgentStatusFlow.onStatusEvent(msg);
+        }
+        return true;
+    }
     if (msg.type === 'confirmation_card' || msg.type === 'single_confirm_card') {
         // 清理临时消息
         if (typeof removeTempMessages === 'function') removeTempMessages();
@@ -200,6 +207,8 @@ function handleConfirmationActionV2(actionId, sessionId) {
 // ===== 导出全局接口 =====
 window.initApp = initApp;
 window.handleWebSocketMessageV2 = handleWebSocketMessageV2;
+// 兼容：WS订阅处调用 handleWebSocketMessage
+window.handleWebSocketMessage = handleWebSocketMessageV2;
 window.handleConfirmationActionV2 = handleConfirmationActionV2;
 window.removeTempMessages = removeTempMessages;
 window.removeMessagesByGroup = removeMessagesByGroup;
@@ -286,7 +295,22 @@ window.saveMessageToBackend = saveMessageToBackend;
                     } catch (e) {
                         msg = { type: 'text', message: message.body };
                     }
-                    handleWebSocketMessage(msg);
+                    // 优先调用增强版V2（包含AGENT_STATUS状态流处理、卡片处理等）
+                    var handled = false;
+                    if (typeof handleWebSocketMessageV2 === 'function') {
+                        handled = handleWebSocketMessageV2(msg) === true;
+                    }
+                    // V2未处理 → 按普通bot文本消息显示
+                    if (!handled && typeof addMessage === 'function') {
+                        var text = msg.message || msg.content || msg.text || '';
+                        if (!text && typeof msg === 'string') text = msg;
+                        if (text) {
+                            // 跳过WS推送来的重复最终回复（HTTP响应已经显示过了）
+                            if (msg.type === 'text' || !msg.type) {
+                                addMessage('bot', text, { skipSave: msg.type != null });
+                            }
+                        }
+                    }
                 });
             }, function(error) {
                 console.error('WebSocket连接失败:', error);
@@ -1309,6 +1333,11 @@ window.saveMessageToBackend = saveMessageToBackend;
             } else if (msg.type === 'import_result') {
                 addMessage('bot', msg.message);
                 renderCalendar();
+            } else if (msg.type === 'AGENT_STATUS') {
+                // 兜底：如果 V2 没命中，由 AgentStatusFlow 统一处理
+                if (window.AgentStatusFlow) {
+                    window.AgentStatusFlow.onStatusEvent(msg);
+                }
             } else {
                 addMessage('bot', msg.message || JSON.stringify(msg));
             }
@@ -2696,7 +2725,6 @@ window.saveMessageToBackend = saveMessageToBackend;
                     return;
                 }
 
-                addMessage('bot', '📍 正在获取你的位置...');
                 navigator.geolocation.getCurrentPosition(
                     async function(position) {
                         var lat = position.coords.latitude;
@@ -2985,6 +3013,11 @@ window.saveMessageToBackend = saveMessageToBackend;
             }
 
             history.scrollTop = history.scrollHeight;
+
+            // Bot 正式回复出现 → 标记状态流气泡已结束（防止被 removeTempMessages 误删）
+            if (role === 'bot' && !opts.isTemp && window.AgentStatusFlow) {
+                window.AgentStatusFlow.onFinalBotMessageArrived();
+            }
 
             // 非跳过存储场景：异步保存消息到后端
             if (!opts.skipSave && text && text.trim().length > 0 && currentUserId) {
@@ -4972,3 +5005,340 @@ window.saveMessageToBackend = saveMessageToBackend;
 
         // 绑定日历标题点击
         document.getElementById('calendarTitle').addEventListener('click', showJumpDateModal);
+
+        // ====================================================================
+        // AgentStatusFlow - Agent 状态流气泡渲染与生命周期管理
+        // 功能：
+        //   1) 收到 START_THINKING 时创建「状态流气泡」
+        //   2) 按步骤序号追加 THINKING / CALLING_* / TOOL_RESULT / GENERATING_REPLY 行
+        //   3) 终态 DONE：折叠为摘要行（如「3 步 · 2.4 秒」）；点击可展开回看
+        //   4) 终态 ERROR：保留最后一条，显示错误文案；高亮红色
+        //   5) 300ms 跳过阈值：若从 START 到 DONE 时长 < 300ms，直接销毁气泡不展示
+        //   6) 最终回复（普通 TEXT 消息）到达后，把状态流气泡标记为「已结束」
+        // ====================================================================
+        (function() {
+            var STATUS_DISPLAY_MAP = {
+                START_THINKING:     { icon: '🧠', label: '开始处理请求' },
+                THINKING:           { icon: '💭', label: '正在理解意图' },
+                GENERATING_REPLY:   { icon: '✍️', label: '正在生成回复' },
+                DONE:               { icon: '✨', label: '处理完成' },
+                CALLING_WEATHER:            { icon: '🌤️', label: '查询天气' },
+                CALLING_REMINDER_CREATE:    { icon: '📝', label: '创建提醒' },
+                CALLING_REMINDER_QUERY:     { icon: '📋', label: '查询提醒' },
+                CALLING_REMINDER_CANCEL:    { icon: '🗑️', label: '取消提醒' },
+                CALLING_REMINDER_UPDATE:    { icon: '✏️', label: '修改提醒' },
+                CALLING_RECURRING_CREATE:   { icon: '📅', label: '创建周期提醒' },
+                CALLING_MEMORY_RETRIEVE:    { icon: '🔍', label: '检索个人记忆' },
+                CALLING_MEMORY_ADD:         { icon: '🧺', label: '添加个人记忆' },
+                CALLING_MEMORY_UPDATE:      { icon: '🔧', label: '更新个人记忆' },
+                CALLING_MEMORY_DELETE:      { icon: '🧹', label: '删除个人记忆' },
+                CALLING_PREFERENCES_GET:    { icon: '⚙️', label: '读取用户偏好' },
+                CALLING_PREFERENCES_SET:    { icon: '💾', label: '保存用户偏好' },
+                CALLING_LOCATION:           { icon: '📍', label: '解析位置信息' },
+                CALLING_TIME:               { icon: '🕒', label: '获取当前时间' },
+                CALLING_DATE_CALC:          { icon: '📆', label: '日期计算' },
+                CALLING_SCHEDULE_IMPORT:    { icon: '📚', label: '导入课表' },
+                CALLING_PERIOD_STATUS:         { icon: '🌸', label: '查询经期状态' },
+                CALLING_PERIOD_NEXT:           { icon: '🌷', label: '预测下次经期' },
+                CALLING_PERIOD_UPDATE_START:   { icon: '🌹', label: '记录经期开始' },
+                CALLING_PERIOD_UPDATE_SETTINGS:{ icon: '🌺', label: '更新经期设置' },
+                CALLING_TOOL:       { icon: '🔧', label: '执行工具' },
+                TOOL_RESULT:        { icon: '✅', label: '工具执行完成' },
+                ERROR:              { icon: '⚠️', label: '处理失败' }
+            };
+
+            var SKIP_THRESHOLD_MS = 300; // 小于 300ms 视为秒回，不展示状态流
+
+            // 单个 flow 的运行状态
+            var activeFlow = null;
+            // flowId -> msgId（气泡 DOM 的 id，也用于折叠/展开查找）
+            var flowMsgMap = {};
+
+            // 返回 STATUS 的显示配置；找不到则走通用兜底
+            function getDisplay(status) {
+                return STATUS_DISPLAY_MAP[status] || { icon: '⚙️', label: status || '处理中' };
+            }
+
+            // 构造单个步骤的 HTML 行
+            function buildStepRow(stepIdx, status, extra, isTerminal) {
+                var disp = getDisplay(status);
+                var icon = disp.icon;
+                var label = disp.label;
+                // 工具名优先使用 extra.toolCnName（中文）
+                if (status === 'CALLING_TOOL' || status === 'TOOL_RESULT') {
+                    if (extra && extra.toolCnName) {
+                        label = (status === 'TOOL_RESULT' ? '' : '') + extra.toolCnName + (status === 'TOOL_RESULT' ? ' 完成' : '');
+                    }
+                }
+                // 对 CALLING_* / TOOL_RESULT：附加 detail 详情
+                var detailHtml = '';
+                if (extra && extra.detail) {
+                    detailHtml = '<div class="as-step-detail">' + escapeHtml(extra.detail) + '</div>';
+                }
+                // ERROR：附加 message
+                if (status === 'ERROR' && extra && extra.message) {
+                    detailHtml = '<div class="as-step-detail as-error-detail">' + escapeHtml(extra.message) + '</div>';
+                }
+                // 终态 TOOL_RESULT / DONE：右侧耗时显示
+                var durHtml = '';
+                if ((status === 'TOOL_RESULT' || status === 'DONE' || status === 'ERROR') && extra && extra.durationMs != null) {
+                    var ms = Number(extra.durationMs);
+                    if (!isNaN(ms) && ms >= 0) {
+                        durHtml = '<span class="as-step-duration">' + formatDuration(ms) + '</span>';
+                    }
+                }
+                var cls = 'as-step-row' + (isTerminal ? ' as-step-done' : ' as-step-pending');
+                if (status === 'ERROR') cls += ' as-step-error';
+                // 用 data-step 便于按顺序重排（其实事件本身已有序，但保留方便扩展）
+                return '<div class="' + cls + '" data-step="' + stepIdx + '">' +
+                    '<span class="as-step-icon">' + icon + '</span>' +
+                    '<div class="as-step-body">' +
+                        '<div class="as-step-label-row">' +
+                            '<span class="as-step-label">' + escapeHtml(label) + '</span>' +
+                            durHtml +
+                        '</div>' +
+                        detailHtml +
+                    '</div>' +
+                    '<span class="as-step-check">' + (isTerminal ? (status === 'ERROR' ? '✕' : '✓') : '') + '</span>' +
+                '</div>';
+            }
+
+            function formatDuration(ms) {
+                if (ms < 1000) return ms + ' ms';
+                var s = Math.round(ms / 100) / 10;
+                return s + ' 秒';
+            }
+
+            function escapeHtml(s) {
+                if (s == null) return '';
+                return String(s).replace(/[&<>"']/g, function(c) {
+                    return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]);
+                });
+            }
+
+            // 在聊天区创建状态流气泡（作为 bot 临时消息气泡，但带特殊 class）
+            function createFlowBubble(flowId) {
+                var history = document.getElementById('chatHistory');
+                if (!history) return null;
+                var msgId = 'flow-' + flowId + '-' + Date.now();
+                var wrapper = document.createElement('div');
+                wrapper.className = 'error-msg-wrapper as-flow-wrapper';
+                wrapper.id = 'wrap-' + msgId;
+
+                var msg = document.createElement('div');
+                msg.className = 'chat-message bot as-flow-bubble';
+                msg.id = msgId;
+                msg.setAttribute('data-temp', 'true');
+                msg.setAttribute('data-flow-id', flowId);
+
+                // 头部：标题 + 最终摘要（折叠模式）
+                var html = '';
+                html += '<div class="as-flow-header" data-flow-toggle="' + flowId + '">';
+                html += '  <span class="as-flow-title">✨ 正在为你处理</span>';
+                html += '  <span class="as-flow-summary" style="display:none;"></span>';
+                html += '  <span class="as-flow-toggle">▼</span>';
+                html += '</div>';
+                html += '<div class="as-flow-steps" id="as-steps-' + flowId + '"></div>';
+
+                msg.innerHTML = html;
+                wrapper.appendChild(msg);
+                history.appendChild(wrapper);
+                history.scrollTop = history.scrollHeight;
+
+                // 点击头部：折叠/展开
+                var headerEl = msg.querySelector('.as-flow-header');
+                if (headerEl) {
+                    headerEl.addEventListener('click', function() {
+                        var stepsEl = document.getElementById('as-steps-' + flowId);
+                        var summaryEl = msg.querySelector('.as-flow-summary');
+                        var toggleEl = msg.querySelector('.as-flow-toggle');
+                        if (!stepsEl) return;
+                        if (stepsEl.style.display === 'none') {
+                            stepsEl.style.display = '';
+                            if (summaryEl) summaryEl.style.display = 'none';
+                            if (toggleEl) toggleEl.textContent = '▼';
+                            msg.classList.remove('as-flow-collapsed');
+                        } else {
+                            stepsEl.style.display = 'none';
+                            if (summaryEl) summaryEl.style.display = '';
+                            if (toggleEl) toggleEl.textContent = '▲';
+                            msg.classList.add('as-flow-collapsed');
+                        }
+                    });
+                }
+
+                return { msgId: msgId, wrapper: wrapper, msgEl: msg };
+            }
+
+            // 更新 / 追加步骤行
+            function appendOrUpdateStep(flowId, stepIdx, status, extra, isTerminal) {
+                var stepsEl = document.getElementById('as-steps-' + flowId);
+                if (!stepsEl) return;
+                // 按 stepIdx 查找是否已存在（如 TOOL_RESULT 不需要替换 CALLING，直接追加新行即可）
+                var rowHtml = buildStepRow(stepIdx, status, extra, isTerminal);
+                stepsEl.insertAdjacentHTML('beforeend', rowHtml);
+                // 给最后一行加轻微的进入动画
+                var rows = stepsEl.querySelectorAll('.as-step-row');
+                if (rows.length > 0) {
+                    var last = rows[rows.length - 1];
+                    last.classList.add('as-step-enter');
+                    setTimeout(function() { last && last.classList.remove('as-step-enter'); }, 350);
+                }
+                // 如果该 status 是终态（DONE/ERROR/TOOL_RESULT），需要把对应步骤 pending → done
+                // 这里简化策略：所有旧 pending 行都视为已完成（因为后端事件不会乱序）
+                var pendingRows = stepsEl.querySelectorAll('.as-step-pending');
+                // 最后一行保留 pending，除非该事件本身就是终态
+                if (isTerminal) {
+                    pendingRows.forEach(function(r) { r.classList.remove('as-step-pending'); r.classList.add('as-step-done'); });
+                } else {
+                    for (var i = 0; i < pendingRows.length - 1; i++) {
+                        pendingRows[i].classList.remove('as-step-pending');
+                        pendingRows[i].classList.add('as-step-done');
+                    }
+                }
+                // 滚动到底
+                var history = document.getElementById('chatHistory');
+                if (history) history.scrollTop = history.scrollHeight;
+            }
+
+            // 终态处理：生成摘要、自动折叠、若 < 300ms 则销毁
+            function handleTerminal(flowId, status, extra) {
+                var info = flowMsgMap[flowId];
+                if (!info) return;
+                var msgEl = info.msgEl;
+                var wrapperEl = info.wrapper;
+
+                // 计算总耗时：优先用事件自带 durationMs，否则用 startTs 估算
+                var durMs = (extra && extra.durationMs != null) ? Number(extra.durationMs) : (Date.now() - info.startTs);
+                var totalSteps = (extra && extra.totalSteps) ? Number(extra.totalSteps) : info.totalStepsSeen;
+                if (!totalSteps) {
+                    var stepsEl = document.getElementById('as-steps-' + flowId);
+                    totalSteps = stepsEl ? stepsEl.querySelectorAll('.as-step-row').length : 0;
+                }
+
+                // < 阈值：静默销毁
+                if (durMs < SKIP_THRESHOLD_MS && status === 'DONE') {
+                    destroyFlow(flowId);
+                    return;
+                }
+
+                // 更新所有还在 pending 的步骤为 done
+                var stepsEl = document.getElementById('as-steps-' + flowId);
+                if (stepsEl) {
+                    stepsEl.querySelectorAll('.as-step-pending').forEach(function(r) {
+                        r.classList.remove('as-step-pending');
+                        r.classList.add('as-step-done');
+                    });
+                }
+
+                // 生成摘要 & 更新标题
+                var titleEl = msgEl.querySelector('.as-flow-title');
+                var summaryEl = msgEl.querySelector('.as-flow-summary');
+                var durStr = formatDuration(durMs);
+                if (status === 'DONE') {
+                    if (titleEl) titleEl.innerHTML = '✨ 处理完成';
+                    if (summaryEl) summaryEl.innerHTML = '<span class="as-summary-text">' +
+                        totalSteps + ' 步 · 用时 ' + durStr + '</span>';
+                    msgEl.classList.add('as-flow-finished');
+                } else if (status === 'ERROR') {
+                    if (titleEl) titleEl.innerHTML = '⚠️ 处理失败';
+                    if (summaryEl) summaryEl.innerHTML = '<span class="as-summary-text as-summary-error">' +
+                        '用时 ' + durStr + ' · 点击查看详情</span>';
+                    msgEl.classList.add('as-flow-error');
+                }
+
+                // 自动折叠（给用户看到完成后 700ms 再折叠，有确认感）
+                setTimeout(function() {
+                    if (!flowMsgMap[flowId]) return;
+                    if (stepsEl) stepsEl.style.display = 'none';
+                    if (summaryEl) summaryEl.style.display = '';
+                    var toggleEl = msgEl.querySelector('.as-flow-toggle');
+                    if (toggleEl) toggleEl.textContent = '▲';
+                    msgEl.classList.add('as-flow-collapsed');
+                }, status === 'ERROR' ? 1500 : 700);
+
+                // 不再追踪 activeFlow，但保留 flowMsgMap 引用（后续收到 TEXT 回复会从 chatHistory 移除临时标记）
+                if (activeFlow && activeFlow.flowId === flowId) {
+                    activeFlow = null;
+                }
+            }
+
+            // 静默销毁整个气泡（<300ms 秒回场景）
+            function destroyFlow(flowId) {
+                var info = flowMsgMap[flowId];
+                if (!info) return;
+                try {
+                    if (info.wrapper && info.wrapper.parentNode) {
+                        info.wrapper.parentNode.removeChild(info.wrapper);
+                    }
+                } catch (e) {}
+                delete flowMsgMap[flowId];
+                if (activeFlow && activeFlow.flowId === flowId) activeFlow = null;
+                var history = document.getElementById('chatHistory');
+                if (history) history.scrollTop = history.scrollHeight;
+            }
+
+            // 对外：收到一条 AGENT_STATUS 事件
+            function onStatusEvent(msg) {
+                if (!msg || !msg.status) return;
+                var flowId = msg.flowId;
+                var stepIdx = msg.stepIndex || 0;
+                var status = msg.status;
+                var extra = msg.extra || {};
+                // durationMs 直接从顶层取（终态事件）
+                if (msg.durationMs != null) extra.durationMs = msg.durationMs;
+                if (msg.totalSteps != null) extra.totalSteps = msg.totalSteps;
+
+                // START_THINKING：创建气泡
+                if (status === 'START_THINKING' && !flowMsgMap[flowId]) {
+                    var created = createFlowBubble(flowId);
+                    if (!created) return;
+                    flowMsgMap[flowId] = {
+                        flowId: flowId,
+                        startTs: Date.now(),
+                        msgId: created.msgId,
+                        wrapper: created.wrapper,
+                        msgEl: created.msgEl,
+                        totalStepsSeen: stepIdx
+                    };
+                    activeFlow = flowMsgMap[flowId];
+                    // 追加起始步骤行
+                    appendOrUpdateStep(flowId, stepIdx, status, extra, false);
+                    return;
+                }
+
+                // 非 START 且气泡不存在：忽略（例如来自另一个标签页/过期事件）
+                if (!flowMsgMap[flowId]) return;
+
+                // 更新总步骤数估计
+                if (flowMsgMap[flowId].totalStepsSeen < stepIdx) {
+                    flowMsgMap[flowId].totalStepsSeen = stepIdx;
+                }
+
+                var isTerminal = (status === 'DONE' || status === 'ERROR' || status === 'TOOL_RESULT');
+                appendOrUpdateStep(flowId, stepIdx, status, extra, isTerminal);
+
+                // 终态
+                if (status === 'DONE' || status === 'ERROR') {
+                    handleTerminal(flowId, status, extra);
+                }
+            }
+
+            // 对外：当普通 bot 文本消息出现时，把所有状态流气泡从「临时消息」升级为已结束的占位气泡
+            // 这样 removeTempMessages 不会误删；但状态流本身是临时视觉，仍保留显示（用户可折叠）
+            function onFinalBotMessageArrived() {
+                Object.keys(flowMsgMap).forEach(function(flowId) {
+                    var info = flowMsgMap[flowId];
+                    if (info && info.msgEl) {
+                        info.msgEl.setAttribute('data-temp', 'finalized');
+                    }
+                });
+            }
+
+            // 暴露到全局
+            window.AgentStatusFlow = {
+                onStatusEvent: onStatusEvent,
+                onFinalBotMessageArrived: onFinalBotMessageArrived,
+                _destroyFlow: destroyFlow
+            };
+        })();

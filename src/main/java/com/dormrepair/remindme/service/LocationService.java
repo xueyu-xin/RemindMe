@@ -8,9 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestTemplate;
 
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -22,91 +20,48 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.zip.GZIPInputStream;
 
-// 位置服务：封装高德逆地理编码与和风天气城市搜索，
+// 位置服务：封装和风天气城市搜索，
 // 对 Agent 暴露 get_location（当前定位）和 geocode_city（城市名转坐标）两个工具。
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class LocationService {
 
-    private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
     private final UserService userService;
     private final WeatherConfig weatherConfig;
 
-    // 高德地图 API Key，未配置时逆地理编码会回退到默认地址
-    @Value("${amap.api.key:}")
-    private String amapKey;
-
-    // 逆地理编码：经纬度转成"省-市-区"格式地址
-    public String reverseGeocode(Double latitude, Double longitude) {
-        // 检查 Key 是否配置
-        if (amapKey == null || amapKey.isBlank()) {
-            log.warn("高德地图 API Key 未配置，返回默认地址");
-            return "广东省-广州市-天河区";
-        }
-
-        // 拼接请求地址（高德要求：经度在前，纬度在后）
-        String url = String.format(
-                "https://restapi.amap.com/v3/geocode/regeo?location=%f,%f&key=%s&output=json",
-                longitude, latitude, amapKey
-        );
-
-        try {
-            String response = restTemplate.getForObject(url, String.class);
-            JsonNode root = objectMapper.readTree(response);
-
-            // 检查高德返回状态
-            int status = root.path("status").asInt(0);
-            if (status != 1) {
-                log.error("高德逆地理编码失败: status={}, info={}", status, root.path("info").asText());
-                throw new RuntimeException("逆地理编码失败: " + root.path("info").asText());
-            }
-
-            JsonNode regeo = root.path("regeocode").path("addressComponent");
-            String province = regeo.path("province").asText("");
-            String city = regeo.path("city").asText("");
-            String district = regeo.path("district").asText("");
-
-            // 直辖市 city 可能为空，用 province 代替
-            if (city.isBlank()) {
-                city = province;
-            }
-
-            String address = province + "-" + city + "-" + district;
-            log.info("逆地理编码结果: ({},{}) -> {}", latitude, longitude, address);
-            return address;
-
-        } catch (RuntimeException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("逆地理编码异常: latitude={}, longitude={}", latitude, longitude, e);
-            throw new RuntimeException("逆地理编码异常: " + e.getMessage(), e);
-        }
-    }
-
-    // 获取用户当前地理位置：有 GPS 就逆地理编码并刷新默认城市，
+    // 获取用户当前地理位置：有 GPS 就用和风城市搜索反查标准格式地址+经纬度（不修改用户默认城市），
     // 没有 GPS 则回退到数据库里的默认城市，并尽量通过城市搜索补出经纬度，
     // 保证返回结果能直接喂给天气、空气质量等后续工具。
     @AgentTool(name = "get_location", description = "获取用户当前地理位置。有GPS时返回实时定位地址+经纬度；没GPS时返回我的页面设置的默认城市+默认城市的经纬度。只在用户问【我在哪】、【当前位置是哪】、以及任何提到「当前位置」的查询时调用。用户没提到当前位置就不要调这个工具。")
     public Map<String, Object> getLocation(Long userId, Double latitude, Double longitude) {
         Map<String, Object> result = new HashMap<>();
 
-        // 有GPS坐标：逆地理编码 + 更新默认城市 + 直接返回 GPS 经纬度
+        // 有GPS坐标：用和风城市搜索反查标准格式地址 + 直接返回 GPS 经纬度（不修改用户默认城市设置）
         if (latitude != null && longitude != null) {
             try {
-                String address = reverseGeocode(latitude, longitude);
-                userService.updateDefaultCity(userId, address);
-                result.put("success", true);
-                result.put("address", address);
-                result.put("source", "gps");
-                result.put("latitude", latitude);
-                result.put("longitude", longitude);
-                log.info("GPS定位成功: userId={}, address={}, coord=({}, {})", userId, address, latitude, longitude);
+                // 和风城市搜索支持传经纬度（格式：经度,纬度）
+                String coord = longitude + "," + latitude;
+                List<CitySearchResult> hits = searchCities(coord);
+                if (hits.isEmpty()) {
+                    result.put("success", false);
+                    result.put("message", "无法解析当前位置对应的城市");
+                } else {
+                    String displayName = hits.get(0).getDisplayName();
+                    result.put("success", true);
+                    result.put("address", displayName);
+                    result.put("source", "gps");
+                    result.put("latitude", latitude);
+                    result.put("longitude", longitude);
+                    log.info("GPS定位成功: userId={}, address={}, coord=({}, {})", userId, displayName, latitude, longitude);
+                }
             } catch (Exception e) {
                 log.error("GPS定位失败: userId={}", userId, e);
                 result.put("success", false);
@@ -243,9 +198,8 @@ public class LocationService {
 
     // 城市名转经纬度（WeatherService 也会调）：
     // 1. 入参已是经纬度格式 → 原样返回；
-    // 2. "省-市-区"格式 → 取市部分去搜索；
-    // 3. 其他城市名 → 调和风城市搜索取第一条结果的经纬度；
-    // 4. 都拿不到 → 返回原值，交给和风天气 API 自行兜底。
+    // 2. 其他格式（城市名、"省-市-区"等）→ 直接调和风城市搜索取第一条结果的经纬度（和风API支持模糊搜索）；
+    // 3. 都拿不到 → 返回原值，交给和风天气 API 自行兜底。
     // 返回格式为"经度,纬度"。
     public String resolveLocationToCoord(String location) {
         // 1. null/空 → 返回默认城市"广州"
@@ -259,17 +213,8 @@ public class LocationService {
             return location;
         }
 
-        // 3. "省-市-区"格式 → 提取市部分
-        String query = location;
-        if (query.contains("-")) {
-            String[] parts = query.split("-");
-            if (parts.length >= 2) {
-                query = parts[1];
-            }
-        }
-
-        // 4. 调用城市搜索API，取第一条结果的经纬度
-        List<CitySearchResult> results = searchCities(query);
+        // 3. 直接用原始字符串调用城市搜索API（和风API支持模糊搜索，能处理各种格式输入）
+        List<CitySearchResult> results = searchCities(location);
         if (!results.isEmpty()) {
             CitySearchResult first = results.get(0);
             if (!first.getLon().isBlank() && !first.getLat().isBlank()) {
@@ -279,7 +224,7 @@ public class LocationService {
             }
         }
 
-        // 5. 转换失败，返回原值（降级处理）
+        // 4. 转换失败，返回原值（降级处理）
         log.warn("城市名转换失败，使用原值: {}", location);
         return location;
     }
@@ -419,5 +364,98 @@ public class LocationService {
         } catch (Exception e) {
             return value;
         }
+    }
+
+    // ==================== 城市匹配（覆盖率算法） ====================
+
+    // 从城市搜索结果中选择最佳匹配。覆盖率算法：
+    // 1. 计算 keyword 与每个候选 displayName 的字符集覆盖率（去除"省/市/区/县"等后缀字符后比较）
+    // 2. 取覆盖率最高的候选
+    // 3. 如果最高覆盖率 < 100% → 返回失败（未完全匹配，调用方应反问用户）
+    // 4. 如果最高覆盖率 = 100%：在所有 100% 覆盖的候选中按段数升序（市级优先于区县级）
+    //    - 段数最短唯一 → 返回该候选
+    //    - 段数最短多个 → 返回失败（歧义，调用方应反问用户）
+    // 返回 Map：成功时 { success: true, displayName: "广东省-广州" }
+    //          失败时 { success: false, message: "...", candidates: ["...", "..."] }
+    public Map<String, Object> selectBestCityMatch(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            Map<String, Object> r = new HashMap<>();
+            r.put("success", false);
+            r.put("message", "城市名不能为空");
+            return r;
+        }
+
+        List<CitySearchResult> candidates = searchCities(keyword);
+        if (candidates.isEmpty()) {
+            Map<String, Object> r = new HashMap<>();
+            r.put("success", false);
+            r.put("message", "未找到城市：" + keyword + "，请确认城市名");
+            return r;
+        }
+
+        // 去除后缀字符集（"省/市/区/县"等）
+        Set<Character> keywordChars = stripSuffixToCharSet(keyword);
+
+        // 找出所有 100% 覆盖的候选，按段数分组
+        int bestSegments = Integer.MAX_VALUE;
+        List<CitySearchResult> bestMatches = new ArrayList<>();
+
+        for (CitySearchResult c : candidates) {
+            Set<Character> candidateChars = stripSuffixToCharSet(c.getDisplayName());
+            int intersectionSize = 0;
+            for (Character ch : keywordChars) {
+                if (candidateChars.contains(ch)) intersectionSize++;
+            }
+            double coverage = keywordChars.isEmpty() ? 0 : (double) intersectionSize / keywordChars.size();
+
+            if (coverage < 1.0) continue;  // 只看 100% 覆盖的
+
+            int segments = c.getDisplayName().split("-").length;
+            if (segments < bestSegments) {
+                bestSegments = segments;
+                bestMatches.clear();
+                bestMatches.add(c);
+            } else if (segments == bestSegments) {
+                bestMatches.add(c);
+            }
+        }
+
+        if (bestMatches.isEmpty()) {
+            // 没有 100% 覆盖的候选
+            Map<String, Object> r = new HashMap<>();
+            r.put("success", false);
+            r.put("message", "未完全匹配「" + keyword + "」，请确认城市名或更明确地指出");
+            r.put("candidates", candidates.stream().map(CitySearchResult::getDisplayName).toList());
+            return r;
+        }
+
+        if (bestMatches.size() > 1) {
+            // 段数最短的有多个，歧义
+            Map<String, Object> r = new HashMap<>();
+            r.put("success", false);
+            r.put("message", "找到多个匹配的城市，请明确指出");
+            r.put("candidates", bestMatches.stream().map(CitySearchResult::getDisplayName).toList());
+            return r;
+        }
+
+        // 唯一最佳匹配
+        Map<String, Object> r = new HashMap<>();
+        r.put("success", true);
+        r.put("displayName", bestMatches.get(0).getDisplayName());
+        return r;
+    }
+
+    // 把字符串转为字符集，去除"-"分隔符和"省/市/区/县/自治州/盟/旗"等行政区划后缀字符
+    private Set<Character> stripSuffixToCharSet(String s) {
+        Set<Character> chars = new HashSet<>();
+        for (char c : s.toCharArray()) {
+            // 跳过分隔符和常见行政区划后缀字符
+            if (c == '-' || c == '省' || c == '市' || c == '区' || c == '县'
+                    || c == '自' || c == '治' || c == '州' || c == '盟' || c == '旗') {
+                continue;
+            }
+            chars.add(c);
+        }
+        return chars;
     }
 }
