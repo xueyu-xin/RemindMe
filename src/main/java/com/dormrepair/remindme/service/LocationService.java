@@ -65,7 +65,7 @@ public class LocationService {
             } catch (Exception e) {
                 log.error("GPS定位失败: userId={}", userId, e);
                 result.put("success", false);
-                result.put("message", "定位失败: " + e.getMessage());
+                result.put("message", "定位失败，请稍后再试。");
             }
             return result;
         }
@@ -98,7 +98,7 @@ public class LocationService {
         } catch (Exception e) {
             log.error("查询用户默认城市失败: userId={}", userId, e);
             result.put("success", false);
-            result.put("message", "查询失败: " + e.getMessage());
+            result.put("message", "城市查询失败，请稍后再试。");
         }
         return result;
     }
@@ -113,31 +113,84 @@ public class LocationService {
             return result;
         }
         try {
-            String coord = resolveLocationToCoord(city);
-            if (coord == null || !coord.contains(",")) {
+            List<CitySearchResult> hits = searchCities(city);
+            if (hits == null || hits.isEmpty()) {
                 result.put("success", false);
-                result.put("message", "找不到该城市的坐标: " + city);
+                result.put("message", "未找到城市「" + city + "」，请确认城市名是否正确");
                 return result;
             }
-            String[] parts = coord.split(",");
-            double lon = Double.parseDouble(parts[0].trim());
-            double lat = Double.parseDouble(parts[1].trim());
 
-            List<CitySearchResult> hits = searchCities(city);
-            String displayName = (hits != null && !hits.isEmpty()) ? hits.get(0).getDisplayName() : city;
+            // 基于 name 字段匹配
+            Set<Character> inputChars = stripSuffixToCharSet(city);
+            List<CitySearchResult> matches = new ArrayList<>();
+            Set<String> matchedIds = new HashSet<>();
 
-            result.put("success", true);
-            result.put("city", displayName);
-            result.put("latitude", lat);
-            result.put("longitude", lon);
-            log.info("geocode_city: {} -> ({}, {})", city, lat, lon);
-            return result;
+            // displayName 完全匹配优先：输入 == 候选 displayName
+            for (CitySearchResult c : hits) {
+                if (city.equals(c.getDisplayName()) && !matchedIds.contains(c.getId())) {
+                    matches.add(c);
+                    matchedIds.add(c.getId());
+                }
+            }
+
+            // name 完全匹配：输入 == 候选 name
+            for (CitySearchResult c : hits) {
+                if (matchedIds.contains(c.getId())) continue;
+                if (city.equals(c.getName())) {
+                    matches.add(c);
+                    matchedIds.add(c.getId());
+                }
+            }
+
+            // name 覆盖率匹配：输入字符都在候选 name 去后缀字符集中
+            for (CitySearchResult c : hits) {
+                if (matchedIds.contains(c.getId())) continue;
+                Set<Character> nameChars = stripSuffixToCharSet(c.getName());
+                int matchCount = 0;
+                for (Character ch : inputChars) {
+                    if (nameChars.contains(ch)) matchCount++;
+                }
+                double coverage = inputChars.isEmpty() ? 0 : (double) matchCount / inputChars.size();
+                if (coverage >= 1.0) {
+                    matches.add(c);
+                    matchedIds.add(c.getId());
+                }
+            }
+
+            if (matches.isEmpty()) {
+                result.put("success", false);
+                result.put("message", "未找到城市「" + city + "」，请确认城市名是否正确");
+                return result;
+            }
+
+            // 歧义检测：多条匹配 → 返回候选列表让用户选择
+            if (matches.size() > 1) {
+                result.put("success", false);
+                result.put("message", "「" + city + "」匹配到多个城市，请明确指出");
+                result.put("candidates", matches.stream().map(CitySearchResult::getDisplayName).toList());
+                return result;
+            }
+
+            return buildGeocodeSuccess(matches.get(0));
         } catch (Exception e) {
             log.warn("geocode_city 转换失败: city={}, error={}", city, e.getMessage(), e);
             result.put("success", false);
-            result.put("message", "城市坐标转换失败: " + e.getMessage());
+            result.put("message", "城市坐标转换失败，请稍后再试。");
             return result;
         }
+    }
+
+    // 构造 geocode_city 成功返回结果
+    private Map<String, Object> buildGeocodeSuccess(CitySearchResult c) {
+        Map<String, Object> result = new HashMap<>();
+        double lon = Double.parseDouble(c.getLon().trim());
+        double lat = Double.parseDouble(c.getLat().trim());
+        result.put("success", true);
+        result.put("city", c.getDisplayName());
+        result.put("latitude", lat);
+        result.put("longitude", lon);
+        log.info("geocode_city: {} -> ({}, {})", c.getDisplayName(), lat, lon);
+        return result;
     }
 
     // ==================== 和风天气城市搜索 ====================
@@ -153,7 +206,8 @@ public class LocationService {
             String url = buildWeatherUrl("/geo/v2/city/lookup")
                     + "?location=" + encode(keyword)
                     + "&range=cn"
-                    + "&number=5";
+                    + "&number=5"
+                    + "&lang=zh-hans";
 
             log.debug("调用和风城市搜索API: keyword={}, url={}", keyword, url);
             String response = httpGet(url);
@@ -216,11 +270,20 @@ public class LocationService {
         // 3. 直接用原始字符串调用城市搜索API（和风API支持模糊搜索，能处理各种格式输入）
         List<CitySearchResult> results = searchCities(location);
         if (!results.isEmpty()) {
-            CitySearchResult first = results.get(0);
-            if (!first.getLon().isBlank() && !first.getLat().isBlank()) {
-                String coord = first.getLon() + "," + first.getLat();
-                log.info("城市名转换成功: {} → {} ({})", location, coord, first.getDisplayName());
-                return coord;
+            Set<Character> inputChars = stripSuffixToCharSet(location);
+            // 遍历所有结果，找覆盖率 100% 的第一条（防止"上海宝成"被误匹配为"上海"，同时允许"北京朝阳"匹配到"北京市-北京-朝阳"而非第一条"北京市-北京"）
+            for (CitySearchResult c : results) {
+                Set<Character> resultChars = stripSuffixToCharSet(c.getDisplayName());
+                int matchCount = 0;
+                for (Character ch : inputChars) {
+                    if (resultChars.contains(ch)) matchCount++;
+                }
+                double coverage = inputChars.isEmpty() ? 0 : (double) matchCount / inputChars.size();
+                if (coverage >= 1.0 && !c.getLon().isBlank() && !c.getLat().isBlank()) {
+                    String coord = c.getLon() + "," + c.getLat();
+                    log.info("城市名转换成功: {} → {} ({})", location, coord, c.getDisplayName());
+                    return coord;
+                }
             }
         }
 
@@ -372,9 +435,9 @@ public class LocationService {
     // 1. 计算 keyword 与每个候选 displayName 的字符集覆盖率（去除"省/市/区/县"等后缀字符后比较）
     // 2. 取覆盖率最高的候选
     // 3. 如果最高覆盖率 < 100% → 返回失败（未完全匹配，调用方应反问用户）
-    // 4. 如果最高覆盖率 = 100%：在所有 100% 覆盖的候选中按段数升序（市级优先于区县级）
-    //    - 段数最短唯一 → 返回该候选
-    //    - 段数最短多个 → 返回失败（歧义，调用方应反问用户）
+    // 4. 如果最高覆盖率 = 100%：
+    //    - 唯一 100% 覆盖 → 返回该候选
+    //    - 多条 100% 覆盖 → 返回失败（歧义，调用方应反问用户）
     // 返回 Map：成功时 { success: true, displayName: "广东省-广州" }
     //          失败时 { success: false, message: "...", candidates: ["...", "..."] }
     public Map<String, Object> selectBestCityMatch(String keyword) {
@@ -393,35 +456,47 @@ public class LocationService {
             return r;
         }
 
-        // 去除后缀字符集（"省/市/区/县"等）
-        Set<Character> keywordChars = stripSuffixToCharSet(keyword);
-
-        // 找出所有 100% 覆盖的候选，按段数分组
-        int bestSegments = Integer.MAX_VALUE;
-        List<CitySearchResult> bestMatches = new ArrayList<>();
-
+        // 完全匹配优先：如果某个候选的 displayName 与输入完全相同，直接命中
         for (CitySearchResult c : candidates) {
-            Set<Character> candidateChars = stripSuffixToCharSet(c.getDisplayName());
-            int intersectionSize = 0;
-            for (Character ch : keywordChars) {
-                if (candidateChars.contains(ch)) intersectionSize++;
-            }
-            double coverage = keywordChars.isEmpty() ? 0 : (double) intersectionSize / keywordChars.size();
-
-            if (coverage < 1.0) continue;  // 只看 100% 覆盖的
-
-            int segments = c.getDisplayName().split("-").length;
-            if (segments < bestSegments) {
-                bestSegments = segments;
-                bestMatches.clear();
-                bestMatches.add(c);
-            } else if (segments == bestSegments) {
-                bestMatches.add(c);
+            if (keyword.equals(c.getDisplayName())) {
+                Map<String, Object> r = new HashMap<>();
+                r.put("success", true);
+                r.put("displayName", c.getDisplayName());
+                return r;
             }
         }
 
-        if (bestMatches.isEmpty()) {
-            // 没有 100% 覆盖的候选
+        // 基于 name 字段匹配
+        // 用 name 而非 displayName 做覆盖率匹配
+        Set<Character> keywordChars = stripSuffixToCharSet(keyword);
+        List<CitySearchResult> nameMatches = new ArrayList<>();
+        Set<String> matchedIds = new HashSet<>();
+
+        // name 完全匹配：输入 == 候选 name
+        for (CitySearchResult c : candidates) {
+            if (keyword.equals(c.getName()) && !matchedIds.contains(c.getId())) {
+                nameMatches.add(c);
+                matchedIds.add(c.getId());
+            }
+        }
+
+        // name 覆盖率匹配：输入字符都在候选 name 去后缀字符集中
+        for (CitySearchResult c : candidates) {
+            if (matchedIds.contains(c.getId())) continue;
+            Set<Character> nameChars = stripSuffixToCharSet(c.getName());
+            int intersectionSize = 0;
+            for (Character ch : keywordChars) {
+                if (nameChars.contains(ch)) intersectionSize++;
+            }
+            double coverage = keywordChars.isEmpty() ? 0 : (double) intersectionSize / keywordChars.size();
+            if (coverage >= 1.0) {
+                nameMatches.add(c);
+                matchedIds.add(c.getId());
+            }
+        }
+
+        if (nameMatches.isEmpty()) {
+            // 没有任何 name 匹配
             Map<String, Object> r = new HashMap<>();
             r.put("success", false);
             r.put("message", "未完全匹配「" + keyword + "」，请确认城市名或更明确地指出");
@@ -429,19 +504,19 @@ public class LocationService {
             return r;
         }
 
-        if (bestMatches.size() > 1) {
-            // 段数最短的有多个，歧义
+        if (nameMatches.size() > 1) {
+            // 多条匹配，歧义
             Map<String, Object> r = new HashMap<>();
             r.put("success", false);
             r.put("message", "找到多个匹配的城市，请明确指出");
-            r.put("candidates", bestMatches.stream().map(CitySearchResult::getDisplayName).toList());
+            r.put("candidates", nameMatches.stream().map(CitySearchResult::getDisplayName).toList());
             return r;
         }
 
-        // 唯一最佳匹配
+        // 唯一匹配
         Map<String, Object> r = new HashMap<>();
         r.put("success", true);
-        r.put("displayName", bestMatches.get(0).getDisplayName());
+        r.put("displayName", nameMatches.get(0).getDisplayName());
         return r;
     }
 

@@ -400,7 +400,7 @@ public class RagService {
             log.error("Agent检索私有记忆失败: userId={}, error={}", userId, e.getMessage(), e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
-            errorResult.put("message", "检索失败：" + e.getMessage());
+            errorResult.put("message", "记忆检索失败，请稍后再试。");
             errorResult.put("count", 0);
             errorResult.put("memories", Collections.emptyList());
             return errorResult;
@@ -446,7 +446,7 @@ public class RagService {
             log.error("Agent添加私有记忆失败: userId={}, error={}", userId, e.getMessage(), e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
-            errorResult.put("message", "记忆存储失败：" + e.getMessage());
+            errorResult.put("message", "记忆存储失败，请稍后再试。");
             return errorResult;
         }
     }
@@ -478,7 +478,7 @@ public class RagService {
             log.error("Agent更新私有记忆失败: userId={}, error={}", userId, e.getMessage(), e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
-            errorResult.put("message", "记忆更新失败：" + e.getMessage());
+            errorResult.put("message", "记忆更新失败，请稍后再试。");
             return errorResult;
         }
     }
@@ -510,7 +510,7 @@ public class RagService {
             log.error("Agent删除私有记忆失败: userId={}, error={}", userId, e.getMessage(), e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
-            errorResult.put("message", "记忆删除失败：" + e.getMessage());
+            errorResult.put("message", "记忆删除失败，请稍后再试。");
             return errorResult;
         }
     }
@@ -538,7 +538,7 @@ public class RagService {
             log.error("Agent获取所有私有记忆失败: userId={}, error={}", userId, e.getMessage(), e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
-            errorResult.put("message", "获取记忆失败：" + e.getMessage());
+            errorResult.put("message", "获取记忆失败，请稍后再试。");
             errorResult.put("count", 0);
             errorResult.put("memories", Collections.emptyList());
             return errorResult;
@@ -568,7 +568,7 @@ public class RagService {
             log.error("Agent检索公共知识失败: userId={}, error={}", userId, e.getMessage(), e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
-            errorResult.put("message", "检索失败：" + e.getMessage());
+            errorResult.put("message", "知识检索失败，请稍后再试。");
             errorResult.put("count", 0);
             errorResult.put("knowledge", Collections.emptyList());
             return errorResult;
