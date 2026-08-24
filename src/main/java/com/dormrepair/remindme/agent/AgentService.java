@@ -453,7 +453,7 @@ public class AgentService {
                     if (actualToolName == null) {
                         String errorMsg = "工具不存在: " + toolName + " (可用工具: " + toolRegistry.listToolNames() + ")";
                         log.warn(errorMsg);
-                        return "{\"success\": false, \"error\": \"" + errorMsg.replace("\"", "'") + "\"}";
+                        return "{\"success\": false, \"message\": \"操作失败，请稍后再试。\"}";
                     }
                 }
                 if (!actualToolName.equals(normToolName)) {
@@ -588,7 +588,6 @@ public class AgentService {
         };
 
         fallback.put("message", friendlyMessage);
-        fallback.put("originalError", errorMessage);
 
         try {
             return objectMapper.writeValueAsString(fallback);

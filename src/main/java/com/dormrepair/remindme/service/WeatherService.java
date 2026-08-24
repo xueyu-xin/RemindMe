@@ -200,7 +200,7 @@ public class WeatherService {
             log.error("Agent查询实时天气失败: userId={}, error={}", userId, e.getMessage(), e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
-            errorResult.put("message", "实时天气查询失败：" + e.getMessage());
+            errorResult.put("message", "天气查询失败，可能因为城市名不正确或网络问题，请检查城市名或稍后再试。");
             return errorResult;
         }
     }
@@ -251,7 +251,7 @@ public class WeatherService {
             log.error("Agent查询天气预报失败: userId={}, error={}", userId, e.getMessage(), e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
-            errorResult.put("message", "天气预报查询失败：" + e.getMessage());
+            errorResult.put("message", "天气预报查询失败，可能因为城市名不正确或网络问题，请检查城市名或稍后再试。");
             return errorResult;
         }
     }
@@ -298,7 +298,7 @@ public class WeatherService {
             log.error("Agent查询空气质量失败: userId={}, error={}", userId, e.getMessage(), e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
-            errorResult.put("message", "空气质量查询失败：" + e.getMessage());
+            errorResult.put("message", "空气质量查询失败，可能因为城市名不正确或网络问题，请检查城市名或稍后再试。");
             return errorResult;
         }
     }
@@ -351,7 +351,7 @@ public class WeatherService {
             log.error("Agent查询天气预警失败: userId={}, error={}", userId, e.getMessage(), e);
             Map<String, Object> errorResult = new HashMap<>();
             errorResult.put("success", false);
-            errorResult.put("message", "天气预警查询失败：" + e.getMessage());
+            errorResult.put("message", "天气预警查询失败，可能因为城市名不正确或网络问题，请检查城市名或稍后再试。");
             return errorResult;
         }
     }

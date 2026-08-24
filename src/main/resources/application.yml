@@ -83,10 +83,6 @@ agent:
   max-history: 10  # 最多保留的对话历史条数
   timeout-seconds: 15  # Agent 处理超时时间
 
-amap:
-  api:
-    key: ${AMAP_API_KEY:your-amap-api-key}
-
 dashscope:
   api:
     key: ${DASHSCOPE_API_KEY:your-dashscope-api-key}

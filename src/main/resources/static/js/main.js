@@ -5064,10 +5064,18 @@ window.saveMessageToBackend = saveMessageToBackend;
                 var disp = getDisplay(status);
                 var icon = disp.icon;
                 var label = disp.label;
+                var isStepFailed = false;
                 // 工具名优先使用 extra.toolCnName（中文）
                 if (status === 'CALLING_TOOL' || status === 'TOOL_RESULT') {
                     if (extra && extra.toolCnName) {
-                        label = (status === 'TOOL_RESULT' ? '' : '') + extra.toolCnName + (status === 'TOOL_RESULT' ? ' 完成' : '');
+                        // 解析 detail 判断成功/失败
+                        isStepFailed = extra.detail && typeof extra.detail === 'string' && extra.detail.indexOf('失败') === 0;
+                        if (status === 'TOOL_RESULT') {
+                            icon = isStepFailed ? '❌' : '✅';
+                            label = extra.toolCnName + (isStepFailed ? ' 失败' : ' 完成');
+                        } else {
+                            label = extra.toolCnName;
+                        }
                     }
                 }
                 // 对 CALLING_* / TOOL_RESULT：附加 detail 详情
@@ -5088,7 +5096,7 @@ window.saveMessageToBackend = saveMessageToBackend;
                     }
                 }
                 var cls = 'as-step-row' + (isTerminal ? ' as-step-done' : ' as-step-pending');
-                if (status === 'ERROR') cls += ' as-step-error';
+                if (status === 'ERROR' || isStepFailed) cls += ' as-step-error';
                 // 用 data-step 便于按顺序重排（其实事件本身已有序，但保留方便扩展）
                 return '<div class="' + cls + '" data-step="' + stepIdx + '">' +
                     '<span class="as-step-icon">' + icon + '</span>' +
@@ -5099,7 +5107,7 @@ window.saveMessageToBackend = saveMessageToBackend;
                         '</div>' +
                         detailHtml +
                     '</div>' +
-                    '<span class="as-step-check">' + (isTerminal ? (status === 'ERROR' ? '✕' : '✓') : '') + '</span>' +
+                    '<span class="as-step-check">' + (isTerminal ? (status === 'ERROR' || isStepFailed ? '✕' : '✓') : '') + '</span>' +
                 '</div>';
             }
 

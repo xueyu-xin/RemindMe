@@ -7,18 +7,15 @@ import com.dormrepair.remindme.enums.ReminderStatus;
 import com.dormrepair.remindme.repository.RecurringReminderRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.repository.UserRepository;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
-import java.net.URLEncoder;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -46,10 +43,7 @@ public class SchedulerService {
     private final ObjectMapper objectMapper;
     private final PeriodService periodService;
     private final UserRepository userRepository;
-
-    // 高德地理编码 API Key，未配置时降级走默认城市
-    @Value("${amap.api.key:}")
-    private String amapKey;
+    private final LocationService locationService;
 
     @Scheduled(cron = "0 * * * * ?")
     @Transactional
@@ -110,6 +104,22 @@ public class SchedulerService {
             String city = entry.getKey();
             List<Reminder> cityReminders = entry.getValue();
 
+            // 省级地点不查天气，直接推送执行卡片
+            if ("__NO_WEATHER__".equals(city)) {
+                for (Reminder reminder : cityReminders) {
+                    try {
+                        confirmationService.pushExecuteCard(reminder);
+                        reminder.setLastConfirmRemindAt(LocalDateTime.now());
+                        reminder.setStatus(ReminderStatus.REMINDED);
+                        reminderRepository.save(reminder);
+                        log.info("阶段二提醒已推送(省级不查天气): id={}, title={}", reminder.getId(), reminder.getTitle());
+                    } catch (Exception e) {
+                        log.error("推送阶段二提醒失败(省级): id={}", reminder.getId(), e);
+                    }
+                }
+                continue;
+            }
+
             // 同一城市只查一次天气
             WeatherSuggestionCache cache = queryWeatherForCity(city);
             weatherCache.put(city, cache);
@@ -119,11 +129,12 @@ public class SchedulerService {
                 try {
                     String weatherSuggestion = null;
                     if (cache.success && cache.weatherText != null && cache.temperature != null) {
+                        // 用实际查询天气的城市作为建议中的地点，而非提醒原始 location
                         weatherSuggestion = llmService.generateWeatherSuggestion(
                                 cache.weatherText,
                                 cache.temperature,
                                 reminder.getTitle(),
-                                reminder.getLocation()
+                                city
                         );
                     }
 
@@ -152,14 +163,6 @@ public class SchedulerService {
         }
     }
 
-    // 地点类型枚举
-    private enum LocationType {
-        CITY,      // 城市
-        DISTRICT,  // 区/县
-        POI,       // 兴趣点（如"图书馆"）
-        OTHER      // 其他（无法识别）
-    }
-
     // 按城市分组提醒
     // 优先级：提醒的 location（城市级别）> 用户默认城市 > 兜底值"广州"
     private Map<String, List<Reminder>> groupRemindersByCity(List<Reminder> reminders) {
@@ -174,26 +177,22 @@ public class SchedulerService {
 
             // 2. 如果 location 不为空，判断地点类型
             if (location != null && !location.isBlank()) {
-                // 先处理"省-市-区"格式
-                String normalizedLocation = location;
-                if (location.contains("-")) {
-                    String[] parts = location.split("-");
-                    if (parts.length >= 2) {
-                        normalizedLocation = parts[1]; // 取市
-                    }
-                }
+                // 用和风城市搜索判断地点能否查天气
+                String weatherLocation = resolveWeatherLocation(location);
 
-                // 调用高德 API 判断地点类型
-                LocationType type = identifyLocationType(normalizedLocation);
-
-                if (type == LocationType.CITY || type == LocationType.DISTRICT) {
-                    // 是城市或区县，直接使用
-                    city = normalizedLocation;
-                    log.info("地点{}识别为{}，使用该地点查询天气", location, type.name());
-                } else {
-                    // 是 POI 或其他，降级使用用户默认城市
+                if (weatherLocation == null) {
+                    // 省级输入，不查天气，跳过分组
+                    log.info("地点{}识别为省级，不查天气", location);
+                    groups.computeIfAbsent("__NO_WEATHER__", k -> new java.util.ArrayList<>()).add(reminder);
+                    continue;
+                } else if ("__DEFAULT__".equals(weatherLocation)) {
+                    // POI 或其他，降级使用用户默认城市
                     city = userDefaultCity;
-                    log.info("地点{}识别为{}，降级使用用户默认城市{}", location, type.name(), city);
+                    log.info("地点{}识别为POI，降级使用用户默认城市{}", location, city);
+                } else {
+                    // 市级或区级，用原始输入查天气
+                    city = weatherLocation;
+                    log.info("地点{}识别为城市/区县，使用该地点查询天气", location);
                 }
             } else {
                 // 没有设置地点，使用用户默认城市
@@ -212,6 +211,32 @@ public class SchedulerService {
         return groups;
     }
 
+    // 判断地点能否查天气，返回值：null=省级不查、__DEFAULT__=POI降级默认城市、其他=用原始输入查天气
+    private String resolveWeatherLocation(String location) {
+        if (location == null || location.isBlank()) return "__DEFAULT__";
+
+        try {
+            List<com.dormrepair.remindme.dto.response.CitySearchResult> results = locationService.searchCities(location);
+            if (results.isEmpty()) return "__DEFAULT__";  // POI 搜不到
+
+            com.dormrepair.remindme.dto.response.CitySearchResult first = results.get(0);
+            // 去掉省/市后缀后的输入，用于和 adm1 比较
+            String normalizedInput = location.replaceAll("[省市]$", "");
+            String adm1Normalized = first.getAdm1().replaceAll("[省市]$", "");
+
+            // 判断是否只输入了省：输入去后缀等于 adm1 去后缀，且 adm1 以"省"结尾（排除直辖市和特别行政区）
+            if (normalizedInput.equals(adm1Normalized) && first.getAdm1().endsWith("省")) {
+                return null;  // 只输入了省，不查天气
+            }
+
+            // 市级或区级，用原始输入查天气
+            return location;
+        } catch (Exception e) {
+            log.warn("判断地点类型失败: location={}, error={}", location, e.getMessage());
+            return "__DEFAULT__";  // 异常时降级用默认城市
+        }
+    }
+
     // 获取用户默认城市
     private String getUserDefaultCity(Long userId) {
         if (userId == null) {
@@ -221,82 +246,12 @@ public class SchedulerService {
             Map<String, Object> preferences = userService.getUserPreferences(userId);
             String city = (String) preferences.get("city");
             if (city != null && !city.isBlank()) {
-                // 处理"省-市-区"格式
-                if (city.contains("-")) {
-                    String[] parts = city.split("-");
-                    if (parts.length >= 2) {
-                        return parts[1]; // 取市
-                    }
-                }
                 return city;
             }
         } catch (Exception e) {
             log.warn("获取用户默认城市失败: userId={}, error={}", userId, e.getMessage());
         }
         return "广州";
-    }
-
-    // 调用高德地理编码 API 判断地点类型
-    // 接口：https://restapi.amap.com/v3/geocode/geo，解析返回结果中的 level 字段
-    private LocationType identifyLocationType(String location) {
-        if (location == null || location.isBlank()) {
-            return LocationType.OTHER;
-        }
-
-        // 未配置高德 Key 时直接返回 OTHER，降级使用默认城市
-        if (amapKey == null || amapKey.isBlank()) {
-            log.debug("未配置高德API Key，跳过地点类型识别");
-            return LocationType.OTHER;
-        }
-
-        try {
-            String encodedLocation = URLEncoder.encode(location, "UTF-8");
-            String url = String.format(
-                    "https://restapi.amap.com/v3/geocode/geo?address=%s&key=%s&output=json",
-                    encodedLocation, amapKey
-            );
-
-            log.debug("调用高德地理编码API: location={}", location);
-            String response = restTemplate.getForObject(url, String.class);
-
-            if (response != null) {
-                JsonNode root = objectMapper.readTree(response);
-                String status = root.has("status") ? root.get("status").asText() : "0";
-
-                if ("1".equals(status)) {
-                    JsonNode geocodes = root.get("geocodes");
-                    if (geocodes != null && geocodes.isArray() && geocodes.size() > 0) {
-                        JsonNode first = geocodes.get(0);
-                        String level = first.has("level") ? first.get("level").asText() : "";
-                        log.debug("地点{}的level: {}", location, level);
-
-                        switch (level) {
-                            case "city":
-                                return LocationType.CITY;
-                            case "district":
-                                return LocationType.DISTRICT;
-                            case "province":
-                                // 省级也当作城市处理（取省会）
-                                return LocationType.CITY;
-                            case "poi":
-                            case "street":
-                            case "road":
-                                return LocationType.POI;
-                            default:
-                                return LocationType.OTHER;
-                        }
-                    }
-                } else {
-                    log.debug("高德地理编码API返回失败: status={}", status);
-                }
-            }
-        } catch (RestClientException e) {
-            log.warn("调用高德地理编码API失败(网络错误): location={}, error={}", location, e.getMessage());
-        } catch (Exception e) {
-            log.warn("调用高德地理编码API失败: location={}, error={}", location, e.getMessage());
-        }
-
-        return LocationType.OTHER;
     }
 
     // 查询城市天气并缓存（带容错处理）

@@ -403,7 +403,7 @@ public class ReminderService {
         } catch (Exception e) {
             log.error("Agent查询提醒失败: userId={}, error={}", userId, e.getMessage(), e);
             result.put("success", false);
-            result.put("error", "查询提醒失败: " + e.getMessage());
+            result.put("message", "查询提醒失败，请稍后再试。");
         }
         
         return result;
@@ -534,11 +534,11 @@ public class ReminderService {
         } catch (IllegalArgumentException e) {
             log.warn("Agent获取提醒详情失败: userId={}, reminderId={}, error={}", userId, reminderId, e.getMessage());
             result.put("success", false);
-            result.put("error", e.getMessage());
+            result.put("message", "获取提醒详情失败，请确认提醒是否存在。");
         } catch (Exception e) {
             log.error("Agent获取提醒详情异常: userId={}, reminderId={}, error={}", userId, reminderId, e.getMessage(), e);
             result.put("success", false);
-            result.put("error", "获取提醒详情失败: " + e.getMessage());
+            result.put("message", "获取提醒详情失败，请稍后再试。");
         }
 
         return result;
