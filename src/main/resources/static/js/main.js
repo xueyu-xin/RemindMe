@@ -139,24 +139,21 @@ function handleWebSocketMessageV2(msg) {
         if (confirmSessionId && processedSessionIds[confirmSessionId] === 'done') {
             // 仅清理卡片和引导语，不显示重复消息
             if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + confirmSessionId);
-            var skipCardEl = document.querySelector('.confirmation-card[data-session-id="' + confirmSessionId + '"]');
-            if (skipCardEl) skipCardEl.remove();
+            if (window.CardSystem) CardSystem.removeCard(confirmSessionId);
             if (typeof clearPendingSession === 'function') clearPendingSession(confirmSessionId);
-            if (window.CardSystem) CardSystem.clear();
             return true;
         }
-        
+
         // 按 sessionId 清理对应的引导语和卡片
         if (confirmSessionId) {
             if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + confirmSessionId);
-            var confirmCardEl = document.querySelector('.confirmation-card[data-session-id="' + confirmSessionId + '"]');
-            if (confirmCardEl) confirmCardEl.remove();
+            if (window.CardSystem) CardSystem.removeCard(confirmSessionId);
             if (typeof clearPendingSession === 'function') clearPendingSession(confirmSessionId);
         } else {
             if (typeof removeTempMessages === 'function') removeTempMessages();
             if (typeof clearPendingSession === 'function') clearPendingSession();
+            if (window.CardSystem) CardSystem.clear();
         }
-        if (window.CardSystem) CardSystem.clear();
 
         var replyMsg = msg.message || (msg.type === 'card_confirmed' ? '好的，提醒已确认啦～' : '好的，已取消提醒。');
         if (typeof addMessage === 'function') {
@@ -189,24 +186,22 @@ function handleWebSocketMessageV2(msg) {
         // 去重：如果已处理过，跳过消息显示
         if (timeoutSessionId && processedSessionIds[timeoutSessionId] === 'done') {
             if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + timeoutSessionId);
-            var tCardEl = document.querySelector('.confirmation-card[data-session-id="' + timeoutSessionId + '"]');
-            if (tCardEl) tCardEl.remove();
+            if (window.CardSystem) CardSystem.removeCard(timeoutSessionId);
             if (typeof clearPendingSession === 'function') clearPendingSession(timeoutSessionId);
             return true;
         }
         if (timeoutSessionId) processedSessionIds[timeoutSessionId] = 'done';
-        
+
         // 按 sessionId 清理对应的引导语和卡片
         if (timeoutSessionId) {
             if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + timeoutSessionId);
-            var timeoutCardEl = document.querySelector('.confirmation-card[data-session-id="' + timeoutSessionId + '"]');
-            if (timeoutCardEl) timeoutCardEl.remove();
+            if (window.CardSystem) CardSystem.removeCard(timeoutSessionId);
             if (typeof clearPendingSession === 'function') clearPendingSession(timeoutSessionId);
         } else {
             if (typeof removeTempMessages === 'function') removeTempMessages();
             if (typeof clearPendingSession === 'function') clearPendingSession();
+            if (window.CardSystem) CardSystem.clear();
         }
-        if (window.CardSystem) CardSystem.clear();
 
         var autoMsg = msg.message || '⏰ 时间到啦，已帮你自动确认提醒～';
         if (typeof addMessage === 'function') {
@@ -301,11 +296,10 @@ function handleMultiCardAction(actionId, sessionId, itemIds) {
 
             if (allDone) {
                 // 全部处理完成：终结清理（引导语、卡片、会话状态）
+                // 顺序：先 removeCard（移除 wrapper+卡片），再清引导语和会话状态
                 if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + sessionId);
-                var doneCardEl = document.querySelector('.confirmation-card[data-session-id="' + sessionId + '"]');
-                if (doneCardEl) doneCardEl.remove();
-                if (typeof clearPendingSession === 'function') clearPendingSession(sessionId);
                 if (window.CardSystem) CardSystem.removeCard(sessionId);
+                if (typeof clearPendingSession === 'function') clearPendingSession(sessionId);
                 if (sessionId && processedSessionIds) processedSessionIds[sessionId] = 'done';
                 if (typeof addMessage === 'function') {
                     addMessage('bot', result.message || '✅ 多项事务已处理完成', { skipSave: false });
@@ -3218,9 +3212,13 @@ window.saveMessageToBackend = saveMessageToBackend;
         function removeTempMessages() {
             var history = document.getElementById('chatHistory');
             if (!history) return;
-            var tempMsgs = history.querySelectorAll('[data-temp="true"]');
+            // 排除 AgentStatusFlow 气泡（.as-flow-bubble），它们有独立的生命周期管理
+            var tempMsgs = history.querySelectorAll('[data-temp="true"]:not(.as-flow-bubble)');
             tempMsgs.forEach(function(el) {
-                var wrapper = el.closest('.error-msg-wrapper');
+                // 也不清理 as-flow-wrapper（状态流气泡的外层 wrapper）
+                var wrapper = el.closest('.as-flow-wrapper');
+                if (wrapper) return;
+                wrapper = el.closest('.error-msg-wrapper');
                 if (wrapper) {
                     wrapper.remove();
                 } else {
@@ -3397,26 +3395,17 @@ window.saveMessageToBackend = saveMessageToBackend;
                 removeTempMessages();
             }
 
-            // 清理对应的卡片
+            // 清理对应的卡片（优先用 CardSystem.removeCard 移除 wrapper+卡片，避免孤儿）
             if (sid) {
-                var cardEl = document.querySelector('.confirmation-card[data-session-id="' + sid + '"]');
-                // 课表预览卡片使用 data-import-id 而非 data-session-id，兜底查找
-                if (!cardEl) {
-                    cardEl = document.querySelector('.confirmation-card[data-import-id="' + sid + '"]');
+                if (window.CardSystem) {
+                    CardSystem.removeCard(sid);
                 }
-                if (cardEl) cardEl.remove();
                 clearPendingSession(sid);
             } else {
                 // 兼容旧调用：清空所有卡片
                 removeTempMessages();
                 clearPendingSession();
-                var container = document.getElementById('confirmationContainer');
-                if (container) container.innerHTML = '';
-            }
-
-            // 清理 CardSystem 中对应的卡片
-            if (window.CardSystem) {
-                CardSystem.clear();
+                if (window.CardSystem) CardSystem.clear();
             }
 
             var defaultMsg = confirmed ? '好的，提醒已确认啦～' : '好的，已取消提醒。';

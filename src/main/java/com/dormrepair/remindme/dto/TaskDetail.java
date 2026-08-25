@@ -80,19 +80,28 @@ public class TaskDetail {
         String location = map.get("location") != null ? String.valueOf(map.get("location")) : null;
         String priority = map.get("priority") != null ? String.valueOf(map.get("priority")) : "NORMAL";
 
-        // 状态解析：兼容现有 Map 中的 "PENDING"/"CONFIRMED"/"CANCELLED" 字符串
+        // 状态解析：兼容现有 Map 中的 "PENDING"/"CONFIRMED"/"CANCELLED"/"SKIPPED" 字符串
         String statusStr = map.get("status") != null ? String.valueOf(map.get("status")) : "PENDING";
         boolean hasConflict = map.get("hasConflict") != null
                 && Boolean.parseBoolean(String.valueOf(map.get("hasConflict")));
 
-        // 推断 TaskStatus：CANCELLED → SKIPPED；CONFIRMED + hasConflict → OVERWRITTEN
+        // 推断 TaskStatus：
+        //   CANCELLED（取消选中）→ TaskStatus.CANCELLED（新增交互态）
+        //   SKIPPED → TaskStatus.SKIPPED
+        //   CONFIRMED + hasConflict → OVERWRITTEN
+        //   CONFIRMED 无冲突 → CONFIRMED
+        //   FAILED → FAILED
         TaskStatus status;
         if ("CANCELLED".equalsIgnoreCase(statusStr)) {
+            status = TaskStatus.CANCELLED;
+        } else if ("SKIPPED".equalsIgnoreCase(statusStr)) {
             status = TaskStatus.SKIPPED;
         } else if ("CONFIRMED".equalsIgnoreCase(statusStr)) {
             status = hasConflict ? TaskStatus.OVERWRITTEN : TaskStatus.CONFIRMED;
         } else if ("FAILED".equalsIgnoreCase(statusStr)) {
             status = TaskStatus.FAILED;
+        } else if ("OVERWRITTEN".equalsIgnoreCase(statusStr)) {
+            status = TaskStatus.OVERWRITTEN;
         } else {
             status = TaskStatus.PENDING;
         }

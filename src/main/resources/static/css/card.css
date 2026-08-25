@@ -252,8 +252,21 @@
     margin-bottom: 6px;
     background: var(--peach-pale);
     border-radius: 8px;
-    cursor: pointer;
+    /* cursor 只放到可交互子元素上，避免整行 cursor 切换造成的热点抖动 */
+    cursor: default;
     user-select: none;
+}
+
+/* 可交互子元素单独加 pointer 光标 */
+.conflict-select-all input[type="checkbox"],
+.conflict-select-all label {
+    cursor: pointer;
+}
+
+/* checkbox 预先占位透明 outline，抵消 Chrome 系统 hover 高亮环的盒模型变化 */
+.conflict-checkbox {
+    outline: 1px solid transparent;
+    outline-offset: 0;
 }
 
 .conflict-select-all input[type="checkbox"] {
@@ -644,8 +657,10 @@
     font-family: inherit;
     font-size: 12px;
     cursor: pointer;
-    transition: all 0.2s ease;
+    /* 白名单：只动画化不影响盒模型的属性，避免基线抖动 */
+    transition: background-color 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
     letter-spacing: 0;
+    box-sizing: border-box;
 }
 
 .mini-btn.confirm {
@@ -655,8 +670,9 @@
 }
 
 .mini-btn.confirm:hover {
-    transform: translateY(-1px);
+    /* 去掉 translateY(-1px)，避免 flex 行重居中导致整行抖动 */
     box-shadow: 0 4px 10px rgba(107, 203, 119, 0.4);
+    filter: brightness(1.03);
 }
 
 .mini-btn.cancel {
@@ -666,8 +682,9 @@
 }
 
 .mini-btn.cancel:hover {
-    transform: translateY(-1px);
+    /* 去掉 translateY(-1px)，避免 flex 行重居中导致整行抖动 */
     box-shadow: 0 4px 10px rgba(255, 107, 107, 0.4);
+    filter: brightness(1.03);
 }
 
 /* ===== 编辑表单 ===== */
@@ -726,8 +743,9 @@
     flex: 1;
 }
 
-/* ===== 多项事务确认卡片 ===== */
-/* 容器：继承 .confirmation-card 基础样式，整体可滚动避免条目过多撑高 */
+/* ===== 多项事务确认卡片（B 方案：完全复用项目已有设计体系） ===== */
+
+/* 容器：整体可滚动避免条目过多撑高 */
 .multi-confirmation-card {
     max-height: 400px;
     overflow-y: auto;
@@ -742,7 +760,7 @@
     border-radius: 3px;
 }
 
-/* 统计栏：共/待处理/已确认/已取消/冲突 */
+/* 统计栏（多卡片特有）：共/待处理/已确认/已取消/冲突 */
 .multi-item-stats {
     display: flex;
     justify-content: space-between;
@@ -760,13 +778,15 @@
     font-weight: 600;
 }
 
-/* 条目列表容器 */
+/* 条目列表容器：叠加 card-list。常驻滚动条（scroll）避免 auto 模式下
+   hover 重绘时 scrollbar 槽位变化触发 sticky 吸顶边界抖动 */
 .multi-item-list {
     background: var(--cream-bg);
     border-radius: 12px;
+    padding: 10px;
     margin: 12px 0;
     max-height: 300px;
-    overflow-y: auto;
+    overflow-y: scroll;
 }
 
 .multi-item-list::-webkit-scrollbar {
@@ -778,33 +798,43 @@
     border-radius: 3px;
 }
 
-/* 条目行 */
+/* 全选行：只保留 sticky 特有属性（margin-bottom / border-radius 由
+   conflict-select-all 提供，避免重复声明导致 hover 盒模型重算） */
+.multi-item-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    /* 吸顶阴影 + 底部分隔，与下一条目明确分层，避免边界融合导致的像素抖动 */
+    box-shadow: 0 2px 4px rgba(92, 64, 51, 0.04);
+    border-bottom: 1px solid var(--peach-soft);
+}
+
+/* 条目行：叠加 card-list-item。
+   - 常驻透明边框占位，避免 hover 背景色切换时"凭空长出边界"
+   - 分隔线加深为 peach-soft，不会与 hover 背景 peach-pale 同色融合
+   - 条目首尾行圆角分级，消除中间态尖角抖动 */
 .multi-item-row {
-    display: flex;
-    align-items: center;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--peach-pale);
-    transition: background 0.2s ease;
+    border-bottom: 1px solid var(--peach-soft);
+    border-radius: 0 !important;
+    border: 1px solid transparent;
+    border-bottom-color: var(--peach-soft);
+    transition: background-color 0.2s ease;
 }
 
 .multi-item-row:last-child {
     border-bottom: none;
+    border-bottom-left-radius: 10px !important;
+    border-bottom-right-radius: 10px !important;
 }
 
-/* 全选行 */
-.multi-item-row.multi-item-header {
-    position: sticky;
-    top: 0;
-    background: var(--peach-pale);
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--brown-deep);
-    z-index: 2;
-    border-bottom: 1px solid var(--peach-soft);
+.multi-item-row:first-child {
+    border-top-left-radius: 10px !important;
+    border-top-right-radius: 10px !important;
 }
 
 .multi-item-row.pending:hover {
     background: var(--peach-pale);
+    border-color: var(--peach-soft);
 }
 
 .multi-item-row.confirmed {
@@ -823,46 +853,17 @@
     border-left: 3px solid var(--danger);
 }
 
-/* 复选框 */
-.multi-item-checkbox,
-.multi-item-select-all {
+/* 复选框：叠加 conflict-checkbox，只修正右侧间距 */
+.multi-item-checkbox {
     margin-right: 12px;
-    cursor: pointer;
-    width: 16px;
-    height: 16px;
-    accent-color: var(--peach);
-    flex-shrink: 0;
 }
 
-.multi-item-checkbox:disabled {
-    cursor: not-allowed;
-    opacity: 0.5;
-}
-
-/* 序号 / 标题 / 时间 / 地点 */
+/* 序号 / 标题 / 时间 / 地点：
+   基础样式由 item-number / item-title / item-time（card-list 体系）提供，
+   这里只保留多卡片必要的修饰 */
 .multi-item-index {
-    color: var(--brown-light);
-    flex-shrink: 0;
-    width: 24px;
-    font-size: 13px;
-}
-
-.multi-item-title {
-    color: var(--brown-deep);
-    font-weight: 500;
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 14px;
     margin-right: 8px;
-}
-
-.multi-item-time {
-    color: var(--brown-mid);
-    font-size: 12px;
-    flex-shrink: 0;
+    margin-left: 0;
 }
 
 .multi-item-location {
@@ -872,7 +873,7 @@
     margin-left: 6px;
 }
 
-/* 冲突标记 */
+/* 冲突标记（多卡片特有） */
 .multi-item-conflict-badge {
     color: var(--danger);
     cursor: pointer;
@@ -889,7 +890,7 @@
     background: rgba(255, 107, 107, 0.2);
 }
 
-/* 状态标记 */
+/* 状态标记（多卡片特有） */
 .multi-item-status {
     font-size: 12px;
     margin-left: 8px;
@@ -904,34 +905,36 @@
     color: var(--brown-light);
 }
 
-/* 单条修改按钮 */
+/* 单条修改按钮：叠加 mini-btn 基础样式 + box-sizing:border-box
+   高度严格 28px（含 border），避免与相邻元素基线不一致 */
 .multi-item-modify-btn {
-    padding: 4px 10px;
-    height: 28px;
-    border-radius: 8px;
-    border: none;
-    font-family: inherit;
-    font-size: 12px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    margin-left: auto;
     background: var(--cream-card);
     color: var(--brown-deep);
     border: 1px solid var(--peach-pale);
-    flex-shrink: 0;
+    box-shadow: none;
+    margin-left: auto;
+    box-sizing: border-box;
+    height: 28px;
+    padding: 3px 9px;
+    -webkit-text-fill-color: var(--brown-deep);
 }
 
 .multi-item-modify-btn:hover {
     background: var(--peach-pale);
     border-color: var(--peach-soft);
+    color: var(--brown-deep);
+    -webkit-text-fill-color: var(--brown-deep);
+    /* 去掉 translateY(-1px)，用阴影变化模拟上浮感，避免 flex 行重居中抖动 */
+    box-shadow: var(--shadow-soft);
+    filter: brightness(0.99);
 }
 
-/* 批量操作按钮区：复用 .card-actions 布局，按钮复用 .action-btn */
+/* 批量操作按钮区：按钮复用 .action-btn，只微调 gap */
 .multi-card-actions {
     gap: 8px;
 }
 
-/* 多项编辑表单：复用 .card-edit-form 基础样式，追加表单间距微调 */
+/* 多项编辑表单：叠加 card-edit-form，只追加上边距 */
 .multi-item-edit-form {
     margin-top: 10px;
 }

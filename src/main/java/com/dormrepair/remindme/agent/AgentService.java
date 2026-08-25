@@ -281,7 +281,7 @@ public class AgentService {
                     // ---------- 状态流：工具执行完成（返回结果）----------
                     eventPublisher.publishAgentStatusWithTool(userId, AgentStatus.TOOL_RESULT, flowId, nextStep.get(),
                             llmToolCall.getToolName(), AgentStatusMapper.toChinese(llmToolCall.getToolName()),
-                            AgentStatusMapper.formatToolResultBrief(toolResult));
+                            AgentStatusMapper.formatToolResultBrief(llmToolCall.getToolName(), toolResult));
 
                     conversationMemory.addToolCall(userId, llmToolCall.getToolName(), llmToolCall.getArguments());
 

@@ -821,6 +821,10 @@ var CardSystem = (function() {
             }
         }
 
+        // 兜底：按 ID 清理可能残留的 wrapper（避免孤儿空气泡）
+        var wrapperEl = document.getElementById('cardWrapper-' + sessionId);
+        if (wrapperEl) wrapperEl.remove();
+
         delete cards[sessionId];
     }
 
@@ -923,8 +927,8 @@ var CardSystem = (function() {
         }
         html += '</div>';
 
-        // 条目列表
-        html += '<div class="multi-item-list">';
+        // 条目列表（复用项目已有 card-list 容器类）
+        html += '<div class="card-list multi-item-list">';
         html += renderMultiItems(items, sessionId);
         html += '</div>';
 
@@ -964,19 +968,20 @@ var CardSystem = (function() {
         return div;
     }
 
-    // 渲染条目列表 HTML
+    // 渲染条目列表 HTML（复用项目已有 card-list / card-list-item / conflict-select-all / mini-btn 类）
     function renderMultiItems(items, sessionId) {
         var html = '';
-        // 全选行
-        html += '<div class="multi-item-row multi-item-header">';
-        html += '<input type="checkbox" class="multi-item-select-all" data-session-id="' + sessionId + '">';
-        html += '<span class="multi-item-index">全选</span>';
+        // 全选行（复用项目已有 conflict-select-all 样式）
+        html += '<div class="conflict-select-all multi-item-header">';
+        html += '<input type="checkbox" class="conflict-checkbox multi-item-select-all" data-session-id="' + sessionId + '">';
+        html += '<label>全选</label>';
         html += '</div>';
 
         for (var i = 0; i < items.length; i++) {
             var item = items[i];
             var status = item.status || 'PENDING';
-            var cls = 'multi-item-row';
+            // 复用 card-list-item 基础样式，叠加多卡片特有修饰类
+            var cls = 'card-list-item multi-item-row';
             if (status === 'CONFIRMED') cls += ' confirmed';
             else if (status === 'CANCELLED') cls += ' cancelled';
             else cls += ' pending';
@@ -986,19 +991,20 @@ var CardSystem = (function() {
             var timeShort = item.remindTime || '';
 
             html += '<div class="' + cls + '" data-item-id="' + i + '">';
-            // 复选框：PENDING 可勾选，其他状态禁用
+            // 复选框：PENDING 可勾选，其他状态禁用（复用 conflict-checkbox）
             if (status === 'PENDING') {
-                html += '<input type="checkbox" class="multi-item-checkbox" data-item-id="' + i + '" data-session-id="' + sessionId + '">';
+                html += '<input type="checkbox" class="conflict-checkbox multi-item-checkbox" data-item-id="' + i + '" data-session-id="' + sessionId + '">';
             } else {
-                html += '<input type="checkbox" class="multi-item-checkbox" disabled>';
+                html += '<input type="checkbox" class="conflict-checkbox multi-item-checkbox" disabled>';
             }
-            html += '<span class="multi-item-index">' + (i + 1) + '</span>';
-            html += '<span class="multi-item-title">' + escapeHtml(item.title || '') + '</span>';
-            html += '<span class="multi-item-time">' + escapeHtml(timeShort) + '</span>';
+            // 序号 + 标题 + 时间 + 地点（复用 item-number / item-title / item-time）
+            html += '<span class="item-number multi-item-index">' + (i + 1) + '</span>';
+            html += '<span class="item-title multi-item-title">' + escapeHtml(item.title || '') + '</span>';
+            html += '<span class="item-time multi-item-time">' + escapeHtml(timeShort) + '</span>';
             if (item.location) {
                 html += '<span class="multi-item-location">📍' + escapeHtml(item.location) + '</span>';
             }
-            // 状态标记
+            // 状态标记（多卡片特有，保留）
             if (status === 'CONFIRMED') {
                 html += '<span class="multi-item-status confirmed">✅已确认</span>';
             } else if (status === 'CANCELLED') {
@@ -1006,9 +1012,9 @@ var CardSystem = (function() {
             } else if (item.hasConflict) {
                 html += '<span class="multi-item-conflict-badge" data-item-id="' + i + '" data-session-id="' + sessionId + '" title="查看冲突详情">⚠️冲突</span>';
             }
-            // 修改按钮：仅 PENDING 显示
+            // 修改按钮：仅 PENDING 显示（复用 mini-btn 基础样式 + 颜色修饰）
             if (status === 'PENDING') {
-                html += '<button class="multi-item-modify-btn" data-item-id="' + i + '" data-session-id="' + sessionId + '" title="修改">✏️</button>';
+                html += '<button class="mini-btn multi-item-modify-btn" data-item-id="' + i + '" data-session-id="' + sessionId + '" title="修改">✏️ 修改</button>';
             }
             html += '</div>';
         }

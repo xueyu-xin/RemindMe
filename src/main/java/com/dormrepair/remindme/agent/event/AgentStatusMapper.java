@@ -25,27 +25,35 @@ public class AgentStatusMapper {
         TOOL_STATUS_MAP.put("query_air_quality",       AgentStatus.CALLING_WEATHER);
         TOOL_STATUS_MAP.put("query_weather_alert",     AgentStatus.CALLING_WEATHER);
         TOOL_STATUS_MAP.put("search_city",             AgentStatus.CALLING_LOCATION);
-        TOOL_CN_NAME_MAP.put("query_weather_now",       "实时天气查询");
-        TOOL_CN_NAME_MAP.put("query_weather_forecast",  "天气预报查询");
-        TOOL_CN_NAME_MAP.put("query_air_quality",       "空气质量查询");
-        TOOL_CN_NAME_MAP.put("query_weather_alert",     "天气预警查询");
-        TOOL_CN_NAME_MAP.put("search_city",             "城市搜索");
+        TOOL_STATUS_MAP.put("get_weather",             AgentStatus.CALLING_WEATHER);
+        TOOL_CN_NAME_MAP.put("query_weather_now",       "正在查询天气...");
+        TOOL_CN_NAME_MAP.put("query_weather_forecast",  "正在查询天气预报...");
+        TOOL_CN_NAME_MAP.put("query_air_quality",       "正在查询空气质量...");
+        TOOL_CN_NAME_MAP.put("query_weather_alert",     "正在查询天气预警...");
+        TOOL_CN_NAME_MAP.put("search_city",             "正在搜索城市...");
+        TOOL_CN_NAME_MAP.put("get_weather",             "正在查询天气...");
 
         // ===== 提醒工具 =====
         TOOL_STATUS_MAP.put("create_reminder",          AgentStatus.CALLING_REMINDER_CREATE);
+        TOOL_STATUS_MAP.put("create_single_reminder",   AgentStatus.CALLING_REMINDER_CREATE);
         TOOL_STATUS_MAP.put("create_recurring_reminder", AgentStatus.CALLING_RECURRING_CREATE);
+        TOOL_STATUS_MAP.put("create_multi_reminders",   AgentStatus.CALLING_REMINDER_CREATE);
         TOOL_STATUS_MAP.put("update_reminder",          AgentStatus.CALLING_REMINDER_UPDATE);
+        TOOL_STATUS_MAP.put("delete_reminder",          AgentStatus.CALLING_REMINDER_CANCEL);
         TOOL_STATUS_MAP.put("cancel_reminder",          AgentStatus.CALLING_REMINDER_CANCEL);
         TOOL_STATUS_MAP.put("cancel_reminders_by_date", AgentStatus.CALLING_REMINDER_CANCEL);
         TOOL_STATUS_MAP.put("get_reminder_detail",      AgentStatus.CALLING_REMINDER_QUERY);
         TOOL_STATUS_MAP.put("query_reminders",          AgentStatus.CALLING_REMINDER_QUERY);
-        TOOL_CN_NAME_MAP.put("create_reminder",          "创建提醒");
-        TOOL_CN_NAME_MAP.put("create_recurring_reminder", "创建周期提醒");
-        TOOL_CN_NAME_MAP.put("update_reminder",          "修改提醒");
-        TOOL_CN_NAME_MAP.put("cancel_reminder",          "取消提醒");
-        TOOL_CN_NAME_MAP.put("cancel_reminders_by_date", "批量取消提醒");
-        TOOL_CN_NAME_MAP.put("get_reminder_detail",      "提醒详情查询");
-        TOOL_CN_NAME_MAP.put("query_reminders",          "提醒列表查询");
+        TOOL_CN_NAME_MAP.put("create_reminder",          "正在创建提醒...");
+        TOOL_CN_NAME_MAP.put("create_single_reminder",   "正在创建提醒...");
+        TOOL_CN_NAME_MAP.put("create_recurring_reminder", "正在创建周期提醒...");
+        TOOL_CN_NAME_MAP.put("create_multi_reminders",   "正在识别提醒内容...");
+        TOOL_CN_NAME_MAP.put("update_reminder",          "正在更新提醒...");
+        TOOL_CN_NAME_MAP.put("delete_reminder",          "正在取消提醒...");
+        TOOL_CN_NAME_MAP.put("cancel_reminder",          "正在取消提醒...");
+        TOOL_CN_NAME_MAP.put("cancel_reminders_by_date", "正在批量取消提醒...");
+        TOOL_CN_NAME_MAP.put("get_reminder_detail",      "正在查询提醒详情...");
+        TOOL_CN_NAME_MAP.put("query_reminders",          "正在查询日程...");
 
         // ===== 记忆工具 =====
         TOOL_STATUS_MAP.put("retrieve_private_knowledge", AgentStatus.CALLING_MEMORY_RETRIEVE);
@@ -102,6 +110,7 @@ public class AgentStatusMapper {
     }
 
     // 从工具参数中提取关键信息，生成前端可读的详情摘要（如城市名、提醒标题等）
+    @SuppressWarnings("unchecked")
     public static String extractToolDetail(String toolName, Map<String, Object> args) {
         if (toolName == null || args == null || args.isEmpty()) return "";
         try {
@@ -111,10 +120,12 @@ public class AgentStatusMapper {
                 case "query_weather_forecast":
                 case "query_air_quality":
                 case "query_weather_alert":
+                case "get_weather":
                     return args.containsKey("location") ? "城市：" + args.get("location") : "";
                 case "search_city":
                     return args.containsKey("keyword") ? "城市：" + args.get("keyword") : "";
                 case "create_reminder":
+                case "create_single_reminder":
                 case "create_recurring_reminder":
                 case "update_reminder": {
                     StringBuilder sb = new StringBuilder();
@@ -125,7 +136,35 @@ public class AgentStatusMapper {
                     }
                     return sb.toString();
                 }
+                case "create_multi_reminders": {
+                    // 从 items 中统计数量并显示前几项标题（最多 2 项）
+                    Object itemsObj = args.get("items");
+                    if (itemsObj instanceof java.util.List<?>) {
+                        java.util.List<Object> items = (java.util.List<Object>) itemsObj;
+                        int size = items.size();
+                        StringBuilder sb = new StringBuilder();
+                        sb.append("识别到 ").append(size).append(" 项");
+                        if (size > 0) {
+                            sb.append("：");
+                            int shown = 0;
+                            for (Object o : items) {
+                                if (!(o instanceof Map<?, ?>)) continue;
+                                Map<String, Object> m = (Map<String, Object>) o;
+                                Object t = m.get("title");
+                                if (t == null) continue;
+                                if (shown > 0) sb.append("、");
+                                sb.append(t);
+                                shown++;
+                                if (shown >= 2) break;
+                            }
+                            if (size > 2) sb.append(" 等");
+                        }
+                        return sb.toString();
+                    }
+                    return "";
+                }
                 case "cancel_reminder":
+                case "delete_reminder":
                 case "get_reminder_detail":
                     return args.containsKey("reminderId") ? "ID：" + args.get("reminderId") : "";
                 case "cancel_reminders_by_date": {
@@ -182,7 +221,7 @@ public class AgentStatusMapper {
 
     // 格式化工具结果 JSON，返回前端可读的简要结果（如天气温度、提醒创建成功等）
     @SuppressWarnings("unchecked")
-    public static String formatToolResultBrief(String toolResultJson) {
+    public static String formatToolResultBrief(String toolName, String toolResultJson) {
         if (toolResultJson == null || toolResultJson.isBlank()) return "";
         try {
             Map<String, Object> map = OBJECT_MAPPER.readValue(toolResultJson, Map.class);
@@ -192,6 +231,51 @@ public class AgentStatusMapper {
                 if (map.containsKey("error")) return "失败：" + map.get("error");
                 return "执行失败";
             }
+            String normalized = toolName == null ? "" : toolName.trim().toLowerCase();
+
+            // multi 提醒创建：显示 N 项 + 跳过 Y 项（若存在）
+            if ("create_multi_reminders".equals(normalized)) {
+                Object totalCount = map.get("totalCount");
+                Object skippedCount = map.get("skippedCount");
+                if (totalCount != null) {
+                    try {
+                        int total = Integer.parseInt(String.valueOf(totalCount));
+                        int skipped = 0;
+                        if (skippedCount != null) {
+                            skipped = Integer.parseInt(String.valueOf(skippedCount));
+                        }
+                        int created = total - skipped;
+                        if (skipped > 0) {
+                            return "✅ 已识别 " + total + " 项提醒（新建 " + created + " 项，跳过 " + skipped + " 项已存在）";
+                        }
+                        return "✅ 已识别 " + total + " 项提醒";
+                    } catch (NumberFormatException ignore) {}
+                }
+                if (map.containsKey("sessionId")) return "✅ 已识别提醒内容";
+            }
+
+            // 单提醒创建：显示 1 项提醒
+            if ("create_reminder".equals(normalized) || "create_single_reminder".equals(normalized)) {
+                if (map.containsKey("sessionId")) return "✅ 已识别 1 项提醒";
+            }
+
+            // 周期提醒：显示 1 项周期提醒
+            if ("create_recurring_reminder".equals(normalized)) {
+                if (map.containsKey("sessionId")) return "✅ 已识别 1 项周期提醒";
+            }
+
+            // 日程查询：显示返回的条目数量
+            if ("query_reminders".equals(normalized)) {
+                Object data = map.get("data");
+                if (data instanceof java.util.List<?>) {
+                    int n = ((java.util.List<?>) data).size();
+                    return "✅ 已查询到 " + n + " 条日程";
+                }
+                if (map.containsKey("total")) {
+                    return "✅ 已查询到 " + map.get("total") + " 条日程";
+                }
+            }
+
             // weather 场景
             if (map.containsKey("temperature") && map.containsKey("weather")) {
                 return map.get("temperature") + "，" + map.get("weather");
@@ -212,5 +296,10 @@ public class AgentStatusMapper {
             // 非 JSON 直接完整返回
             return toolResultJson;
         }
+    }
+
+    // 兼容旧签名（保留未传 toolName 的调用路径）
+    public static String formatToolResultBrief(String toolResultJson) {
+        return formatToolResultBrief(null, toolResultJson);
     }
 }
