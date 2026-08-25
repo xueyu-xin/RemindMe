@@ -22,10 +22,14 @@ public class AgentStatusMapper {
         // ===== 天气工具 =====
         TOOL_STATUS_MAP.put("query_weather_now",       AgentStatus.CALLING_WEATHER);
         TOOL_STATUS_MAP.put("query_weather_forecast",  AgentStatus.CALLING_WEATHER);
-        TOOL_STATUS_MAP.put("geocode_city",            AgentStatus.CALLING_LOCATION);
+        TOOL_STATUS_MAP.put("query_air_quality",       AgentStatus.CALLING_WEATHER);
+        TOOL_STATUS_MAP.put("query_weather_alert",     AgentStatus.CALLING_WEATHER);
+        TOOL_STATUS_MAP.put("search_city",             AgentStatus.CALLING_LOCATION);
         TOOL_CN_NAME_MAP.put("query_weather_now",       "实时天气查询");
         TOOL_CN_NAME_MAP.put("query_weather_forecast",  "天气预报查询");
-        TOOL_CN_NAME_MAP.put("geocode_city",            "城市坐标解析");
+        TOOL_CN_NAME_MAP.put("query_air_quality",       "空气质量查询");
+        TOOL_CN_NAME_MAP.put("query_weather_alert",     "天气预警查询");
+        TOOL_CN_NAME_MAP.put("search_city",             "城市搜索");
 
         // ===== 提醒工具 =====
         TOOL_STATUS_MAP.put("create_reminder",          AgentStatus.CALLING_REMINDER_CREATE);
@@ -34,14 +38,14 @@ public class AgentStatusMapper {
         TOOL_STATUS_MAP.put("cancel_reminder",          AgentStatus.CALLING_REMINDER_CANCEL);
         TOOL_STATUS_MAP.put("cancel_reminders_by_date", AgentStatus.CALLING_REMINDER_CANCEL);
         TOOL_STATUS_MAP.put("get_reminder_detail",      AgentStatus.CALLING_REMINDER_QUERY);
-        TOOL_STATUS_MAP.put("list_reminders",           AgentStatus.CALLING_REMINDER_QUERY);
+        TOOL_STATUS_MAP.put("query_reminders",          AgentStatus.CALLING_REMINDER_QUERY);
         TOOL_CN_NAME_MAP.put("create_reminder",          "创建提醒");
         TOOL_CN_NAME_MAP.put("create_recurring_reminder", "创建周期提醒");
         TOOL_CN_NAME_MAP.put("update_reminder",          "修改提醒");
         TOOL_CN_NAME_MAP.put("cancel_reminder",          "取消提醒");
         TOOL_CN_NAME_MAP.put("cancel_reminders_by_date", "批量取消提醒");
         TOOL_CN_NAME_MAP.put("get_reminder_detail",      "提醒详情查询");
-        TOOL_CN_NAME_MAP.put("list_reminders",           "提醒列表查询");
+        TOOL_CN_NAME_MAP.put("query_reminders",          "提醒列表查询");
 
         // ===== 记忆工具 =====
         TOOL_STATUS_MAP.put("retrieve_private_knowledge", AgentStatus.CALLING_MEMORY_RETRIEVE);
@@ -67,17 +71,9 @@ public class AgentStatusMapper {
         TOOL_STATUS_MAP.put("get_current_time",         AgentStatus.CALLING_TIME);
         TOOL_STATUS_MAP.put("calculate_date",           AgentStatus.CALLING_DATE_CALC);
         TOOL_STATUS_MAP.put("get_location",             AgentStatus.CALLING_LOCATION);
-        TOOL_STATUS_MAP.put("set_location",             AgentStatus.CALLING_LOCATION);
         TOOL_CN_NAME_MAP.put("get_current_time",         "获取当前时间");
         TOOL_CN_NAME_MAP.put("calculate_date",           "日期差值计算");
         TOOL_CN_NAME_MAP.put("get_location",             "GPS坐标解析");
-        TOOL_CN_NAME_MAP.put("set_location",             "设置位置信息");
-
-        // ===== 课表导入 =====
-        TOOL_STATUS_MAP.put("parse_schedule_excel",     AgentStatus.CALLING_SCHEDULE_IMPORT);
-        TOOL_STATUS_MAP.put("import_schedule_items",    AgentStatus.CALLING_SCHEDULE_IMPORT);
-        TOOL_CN_NAME_MAP.put("parse_schedule_excel",     "解析课表Excel");
-        TOOL_CN_NAME_MAP.put("import_schedule_items",    "批量导入课表");
 
         // ===== 经期管理 =====
         TOOL_STATUS_MAP.put("get_period_status",          AgentStatus.CALLING_PERIOD_STATUS);
@@ -113,8 +109,11 @@ public class AgentStatusMapper {
             switch (normalized) {
                 case "query_weather_now":
                 case "query_weather_forecast":
-                case "geocode_city":
+                case "query_air_quality":
+                case "query_weather_alert":
                     return args.containsKey("location") ? "城市：" + args.get("location") : "";
+                case "search_city":
+                    return args.containsKey("keyword") ? "城市：" + args.get("keyword") : "";
                 case "create_reminder":
                 case "create_recurring_reminder":
                 case "update_reminder": {
@@ -139,7 +138,7 @@ public class AgentStatusMapper {
                     }
                     return sb.toString();
                 }
-                case "list_reminders": {
+                case "query_reminders": {
                     StringBuilder sb = new StringBuilder();
                     if (args.containsKey("startDate")) sb.append("起：").append(args.get("startDate"));
                     if (args.containsKey("endDate")) {

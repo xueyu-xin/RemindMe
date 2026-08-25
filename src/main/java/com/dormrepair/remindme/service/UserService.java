@@ -128,7 +128,7 @@ public class UserService {
     // userId     用户ID，由系统自动填充
     // preference 偏好项：city / defaultAdvanceMinutes / nickname
     // value      新值
-    @AgentTool(name = "set_user_preferences", description = "修改用户偏好设置，用户要求更改默认城市、默认提前量、昵称时调用。注意：修改默认城市(city)时建议先调 city_search 工具查看候选城市，传入不明确的城市名可能被拒绝")
+    @AgentTool(name = "set_user_preferences", description = "修改用户偏好设置，用户要求更改默认城市、默认提前量、昵称时调用。修改默认城市(city)前必须先调 search_city 拿到标准 displayName 再传入，后端直接保存不再二次搜索。")
     @Transactional
     public Map<String, Object> setUserPreferences(Long userId, String preference, String value) {
         log.info("Agent调用修改用户偏好: userId={}, preference={}, value={}", userId, preference, value);
@@ -165,22 +165,9 @@ public class UserService {
                     result.put("error", "城市名称不能为空");
                     return result;
                 }
-                // 调和风城市搜索 + 覆盖率算法统一城市格式
-                Map<String, Object> cityMatch = locationService.selectBestCityMatch(value.trim());
-                if (Boolean.TRUE.equals(cityMatch.get("success"))) {
-                    String standardCity = (String) cityMatch.get("displayName");
-                    user.setCity(standardCity);
-                    fieldDisplayName = "默认城市";
-                    value = standardCity;
-                } else {
-                    result.put("success", false);
-                    result.put("error", cityMatch.get("message"));
-                    Object candidates = cityMatch.get("candidates");
-                    if (candidates != null) {
-                        result.put("candidates", candidates);
-                    }
-                    return result;
-                }
+                // AI应已通过search_city拿到标准displayName，直接保存，不再二次搜索
+                user.setCity(value.trim());
+                fieldDisplayName = "默认城市";
                 break;
 
             case "defaultAdvanceMinutes":

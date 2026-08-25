@@ -13,8 +13,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestTemplate;
 
 import java.time.Duration;
 import java.time.LocalDate;
@@ -39,7 +37,6 @@ public class SchedulerService {
     private final RecurringReminderService recurringReminderService;
     private final RecurringReminderRepository recurringReminderRepository;
     private final com.dormrepair.remindme.repository.RecurringInstanceRepository recurringInstanceRepository;
-    private final RestTemplate restTemplate;
     private final ObjectMapper objectMapper;
     private final PeriodService periodService;
     private final UserRepository userRepository;
@@ -93,56 +90,49 @@ public class SchedulerService {
             return;
         }
 
-        // 按城市分组，批量查询天气
-        Map<String, List<Reminder>> remindersByCity = groupRemindersByCity(remindersToPush);
+        // 按城市分组（LLM分区+选候选，已拿到coord），批量查询天气
+        Map<String, CityWeatherQuery> remindersByCity = groupRemindersByCity(remindersToPush);
         log.info("到期提醒扫描: 候选{}个, 符合触发条件{}个, 按城市分组{}个", candidates.size(), remindersToPush.size(), remindersByCity.size());
 
-        // 批量查询天气并生成建议
-        Map<String, WeatherSuggestionCache> weatherCache = new HashMap<>();
+        for (Map.Entry<String, CityWeatherQuery> entry : remindersByCity.entrySet()) {
+            String key = entry.getKey();
+            CityWeatherQuery query = entry.getValue();
+            List<Reminder> cityReminders = query.reminders;
 
-        for (Map.Entry<String, List<Reminder>> entry : remindersByCity.entrySet()) {
-            String city = entry.getKey();
-            List<Reminder> cityReminders = entry.getValue();
-
-            // 省级地点不查天气，直接推送执行卡片
-            if ("__NO_WEATHER__".equals(city)) {
+            // 省级/乱码/无城市：不查天气，直接推送执行卡片
+            if ("__NO_WEATHER__".equals(key)) {
                 for (Reminder reminder : cityReminders) {
                     try {
                         confirmationService.pushExecuteCard(reminder);
                         reminder.setLastConfirmRemindAt(LocalDateTime.now());
                         reminder.setStatus(ReminderStatus.REMINDED);
                         reminderRepository.save(reminder);
-                        log.info("阶段二提醒已推送(省级不查天气): id={}, title={}", reminder.getId(), reminder.getTitle());
+                        log.info("阶段二提醒已推送(不查天气): id={}, title={}", reminder.getId(), reminder.getTitle());
                     } catch (Exception e) {
-                        log.error("推送阶段二提醒失败(省级): id={}", reminder.getId(), e);
+                        log.error("推送阶段二提醒失败(不查天气): id={}", reminder.getId(), e);
                     }
                 }
                 continue;
             }
 
-            // 同一城市只查一次天气
-            WeatherSuggestionCache cache = queryWeatherForCity(city);
-            weatherCache.put(city, cache);
+            // 用LLM选好的coord直接查天气（不再searchCity）
+            WeatherSuggestionCache cache = queryWeatherForCity(query.coord, query.displayName);
 
-            // 每个提醒的标题和地点不同，分别生成建议
+            // 每个提醒的标题不同，分别生成建议
             for (Reminder reminder : cityReminders) {
                 try {
                     String weatherSuggestion = null;
                     if (cache.success && cache.weatherText != null && cache.temperature != null) {
-                        // 用实际查询天气的城市作为建议中的地点，而非提醒原始 location
                         weatherSuggestion = llmService.generateWeatherSuggestion(
                                 cache.weatherText,
                                 cache.temperature,
                                 reminder.getTitle(),
-                                city
+                                query.displayName
                         );
                     }
 
-                    // 推送执行卡片（带天气建议）
                     confirmationService.pushExecuteCard(reminder, weatherSuggestion);
-
                     reminder.setLastConfirmRemindAt(LocalDateTime.now());
-                    // 推送后状态改为 REMINDED，避免被调度器重复扫描推送
                     reminder.setStatus(ReminderStatus.REMINDED);
                     reminderRepository.save(reminder);
 
@@ -152,7 +142,6 @@ public class SchedulerService {
 
                 } catch (Exception e) {
                     log.error("推送阶段二提醒失败: id={}", reminder.getId(), e);
-                    // 降级：不带天气建议再推一次
                     try {
                         confirmationService.pushExecuteCard(reminder);
                     } catch (Exception ex) {
@@ -163,84 +152,121 @@ public class SchedulerService {
         }
     }
 
-    // 按城市分组提醒
-    // 优先级：提醒的 location（城市级别）> 用户默认城市 > 兜底值"广州"
-    private Map<String, List<Reminder>> groupRemindersByCity(List<Reminder> reminders) {
-        Map<String, List<Reminder>> groups = new HashMap<>();
+    // 城市天气查询分组（LLM分区+选候选后，存coord+displayName+reminders）
+    private static class CityWeatherQuery {
+        String coord;        // "经度,纬度"
+        String displayName;  // 标准城市名
+        List<Reminder> reminders;
+    }
+
+    // 按城市分组提醒（LLM分区+选候选，直接拿coord，不问用户）
+    private Map<String, CityWeatherQuery> groupRemindersByCity(List<Reminder> reminders) {
+        Map<String, CityWeatherQuery> groups = new HashMap<>();
 
         for (Reminder reminder : reminders) {
             String location = reminder.getLocation();
-            String city = null;
+            String coord = null;
+            String displayName = null;
 
-            // 1. 获取用户默认城市作为兜底
-            String userDefaultCity = getUserDefaultCity(reminder.getUserId());
+            // 第一步：LLM先判断location类型（不传候选，省得乱码/省级也白调searchCity）
+            String type = llmService.judgeLocationType(location);
+            log.info("地点{}识别为{}", location, type);
 
-            // 2. 如果 location 不为空，判断地点类型
-            if (location != null && !location.isBlank()) {
-                // 用和风城市搜索判断地点能否查天气
-                String weatherLocation = resolveWeatherLocation(location);
+            if ("GARBAGE".equals(type) || "PROVINCE".equals(type)) {
+                // 乱码/省级：不查天气，不获取偏好、不searchCity
+                addToNoWeatherGroup(groups, reminder);
+                continue;
+            }
 
-                if (weatherLocation == null) {
-                    // 省级输入，不查天气，跳过分组
-                    log.info("地点{}识别为省级，不查天气", location);
-                    groups.computeIfAbsent("__NO_WEATHER__", k -> new java.util.ArrayList<>()).add(reminder);
+            if ("POI".equals(type)) {
+                // POI/未填写：获取默认城市，用默认城市走城市搜索
+                String userDefaultCity = getUserDefaultCity(reminder.getUserId());
+                if (userDefaultCity == null || userDefaultCity.isBlank()) {
+                    log.info("POI/未填写但默认城市为空，不查天气");
+                    addToNoWeatherGroup(groups, reminder);
                     continue;
-                } else if ("__DEFAULT__".equals(weatherLocation)) {
-                    // POI 或其他，降级使用用户默认城市
-                    city = userDefaultCity;
-                    log.info("地点{}识别为POI，降级使用用户默认城市{}", location, city);
-                } else {
-                    // 市级或区级，用原始输入查天气
-                    city = weatherLocation;
-                    log.info("地点{}识别为城市/区县，使用该地点查询天气", location);
                 }
+                location = userDefaultCity;
+                log.info("地点识别为POI/未填写，降级使用默认城市{}", location);
+            }
+
+            // CITY或POI降级后：searchCity拿候选 → LLM选
+            Map<String, Object> resolved = llmService.resolveReminderLocation(
+                    location,
+                    getCandidatesForLocation(location));
+            String resolvedType = (String) resolved.get("type");
+            if ("CITY".equals(resolvedType)) {
+                coord = (String) resolved.get("coord");
+                displayName = (String) resolved.get("resolvedCity");
+                log.info("地点{}使用{} coord={}", location, displayName, coord);
             } else {
-                // 没有设置地点，使用用户默认城市
-                city = userDefaultCity;
-                log.info("提醒{}未设置地点，使用用户默认城市{}", reminder.getTitle(), city);
+                log.info("地点{}LLM未选出候选(type={})，不查天气", location, resolvedType);
+                addToNoWeatherGroup(groups, reminder);
+                continue;
             }
 
-            // 最终兜底：如果还是空，使用"广州"
-            if (city == null || city.isBlank()) {
-                city = "广州";
+            if (coord == null || coord.isBlank()) {
+                log.info("提醒{}无法确定查询坐标，不查天气", reminder.getTitle());
+                addToNoWeatherGroup(groups, reminder);
+                continue;
             }
 
-            groups.computeIfAbsent(city, k -> new java.util.ArrayList<>()).add(reminder);
+            // 按displayName分组（同城市复用coord，只查一次天气）
+            final String finalCoord = coord;
+            final String finalDisplayName = displayName;
+            String groupKey = displayName != null ? displayName : coord;
+            CityWeatherQuery query = groups.computeIfAbsent(groupKey, k -> {
+                CityWeatherQuery q = new CityWeatherQuery();
+                q.coord = finalCoord;
+                q.displayName = finalDisplayName;
+                q.reminders = new java.util.ArrayList<>();
+                return q;
+            });
+            query.reminders.add(reminder);
         }
 
         return groups;
     }
 
-    // 判断地点能否查天气，返回值：null=省级不查、__DEFAULT__=POI降级默认城市、其他=用原始输入查天气
-    private String resolveWeatherLocation(String location) {
-        if (location == null || location.isBlank()) return "__DEFAULT__";
+    private void addToNoWeatherGroup(Map<String, CityWeatherQuery> groups, Reminder reminder) {
+        CityWeatherQuery query = groups.computeIfAbsent("__NO_WEATHER__", k -> {
+            CityWeatherQuery q = new CityWeatherQuery();
+            q.reminders = new java.util.ArrayList<>();
+            return q;
+        });
+        query.reminders.add(reminder);
+    }
 
+    // 获取location的城市搜索候选（带坐标，传给LLM选）
+    private java.util.List<java.util.Map<String, Object>> getCandidatesForLocation(String location) {
+        if (location == null || location.isBlank()) return java.util.Collections.emptyList();
         try {
-            List<com.dormrepair.remindme.dto.response.CitySearchResult> results = locationService.searchCities(location);
-            if (results.isEmpty()) return "__DEFAULT__";  // POI 搜不到
-
-            com.dormrepair.remindme.dto.response.CitySearchResult first = results.get(0);
-            // 去掉省/市后缀后的输入，用于和 adm1 比较
-            String normalizedInput = location.replaceAll("[省市]$", "");
-            String adm1Normalized = first.getAdm1().replaceAll("[省市]$", "");
-
-            // 判断是否只输入了省：输入去后缀等于 adm1 去后缀，且 adm1 以"省"结尾（排除直辖市和特别行政区）
-            if (normalizedInput.equals(adm1Normalized) && first.getAdm1().endsWith("省")) {
-                return null;  // 只输入了省，不查天气
+            Map<String, Object> cityResult = locationService.searchCity(location);
+            if (!Boolean.TRUE.equals(cityResult.get("success"))) {
+                return java.util.Collections.emptyList();
             }
-
-            // 市级或区级，用原始输入查天气
-            return location;
+            // 唯一结果：包装成单元素列表
+            if (!cityResult.containsKey("candidates")) {
+                java.util.Map<String, Object> single = new java.util.HashMap<>();
+                single.put("displayName", cityResult.get("displayName"));
+                single.put("latitude", cityResult.get("latitude"));
+                single.put("longitude", cityResult.get("longitude"));
+                return java.util.List.of(single);
+            }
+            // 多候选：直接返回
+            @SuppressWarnings("unchecked")
+            java.util.List<java.util.Map<String, Object>> candidates = (java.util.List<java.util.Map<String, Object>>) cityResult.get("candidates");
+            return candidates;
         } catch (Exception e) {
-            log.warn("判断地点类型失败: location={}, error={}", location, e.getMessage());
-            return "__DEFAULT__";  // 异常时降级用默认城市
+            log.warn("获取候选失败: location={}, error={}", location, e.getMessage());
+            return java.util.Collections.emptyList();
         }
     }
 
-    // 获取用户默认城市
+    // 获取用户默认城市（未设置返回 null）
     private String getUserDefaultCity(Long userId) {
         if (userId == null) {
-            return "广州";
+            return null;
         }
         try {
             Map<String, Object> preferences = userService.getUserPreferences(userId);
@@ -251,39 +277,35 @@ public class SchedulerService {
         } catch (Exception e) {
             log.warn("获取用户默认城市失败: userId={}, error={}", userId, e.getMessage());
         }
-        return "广州";
+        return null;
     }
 
-    // 查询城市天气并缓存（带容错处理）
-    private WeatherSuggestionCache queryWeatherForCity(String city) {
+    // 查询城市天气并缓存（coord已是LLM选好的，直接查天气，不再searchCity）
+    private WeatherSuggestionCache queryWeatherForCity(String coord, String displayName) {
         WeatherSuggestionCache cache = new WeatherSuggestionCache();
 
-        // 容错1：城市为空，不查询
-        if (city == null || city.isBlank()) {
-            log.warn("城市名为空，跳过天气查询");
+        if (coord == null || coord.isBlank()) {
+            log.warn("坐标为空，跳过天气查询");
             cache.success = false;
             return cache;
         }
 
         try {
-            log.info("查询城市天气: city={}", city);
-            var weatherResponse = weatherService.getWeatherNow(city);
+            log.info("查询城市天气: displayName={}, coord={}", displayName, coord);
+            var weatherResponse = weatherService.getWeatherNow(coord);
 
             if (weatherResponse != null && weatherResponse.getNow() != null) {
                 cache.success = true;
                 cache.weatherText = weatherResponse.getNow().getText();
                 cache.temperature = weatherResponse.getNow().getTemp();
-                log.info("天气查询成功: city={}, weather={}, temp={}", city, cache.weatherText, cache.temperature);
+                cache.resolvedCity = displayName;
+                log.info("天气查询成功: displayName={}, weather={}, temp={}", displayName, cache.weatherText, cache.temperature);
             } else {
-                log.warn("天气查询结果为空: city={}", city);
+                log.warn("天气查询结果为空: coord={}", coord);
                 cache.success = false;
             }
-        } catch (RestClientException e) {
-            // 容错2：HTTP 错误（如 400、401、500），记录日志并跳过
-            log.warn("天气查询HTTP错误: city={}, error={}", city, e.getMessage());
-            cache.success = false;
         } catch (Exception e) {
-            log.error("查询城市天气失败: city={}, error={}", city, e.getMessage());
+            log.error("查询城市天气失败: coord={}, error={}", coord, e.getMessage());
             cache.success = false;
         }
 
@@ -295,6 +317,7 @@ public class SchedulerService {
         boolean success = false;
         String weatherText;
         String temperature;
+        String resolvedCity;
     }
 
     // 每小时执行：检查连续多次未响应的提醒，仅记录日志，不自动确认

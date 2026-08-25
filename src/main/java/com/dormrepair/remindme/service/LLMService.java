@@ -1294,7 +1294,7 @@ public class LLMService {
             第一条：先分清楚「地址是哪一种」，只有三种：
 
               1) 默认地址 = 用户在【我的】页面设置的城市（存在数据库 User.city 里）。
-                 查询方法：先 get_user_preferences 拿到 city 字段，再调 geocode_city(city) 拿到 latitude/longitude。
+                 查询方法：先 get_user_preferences 拿到 city 字段，再调 search_city(city) 拿到 latitude/longitude。
 
               2) 当前位置/实时定位 = 此时此刻用户在哪儿（有GPS就用GPS，没GPS就用当前定位接口的结果）。
                  查询方法：只有当用户明确说"当前位置"、"我现在在哪"、"我这儿"、"附近"这一类词时，
@@ -1302,24 +1302,24 @@ public class LLMService {
                  【用户没提当前位置，绝对不要调 get_location！】
 
               3) 用户指定的具体城市 = 用户原话里提到了城市名（"上海"、"广州"、"北京朝阳区"、"揭阳"…）。
-                 查询方法：直接调 geocode_city(城市名) 拿到 latitude/longitude，不要先查别的。
+                 查询方法：直接调 search_city(城市名) 拿到 latitude/longitude，不要先查别的。
 
-            第二条：查天气/空气质量/天气预警 —— 必须严格按这三类选坐标来源，绝对不能自己写死坐标（比如不能自己说上海=31.23,121.47、北京=39.9,116.4），必须通过 geocode_city 真查询！
+            第二条：查实时天气/天气预报/空气质量/天气预警 —— 必须严格按这四类选坐标来源，绝对不能自己写死坐标（比如不能自己说上海=31.23,121.47、北京=39.9,116.4），必须通过 search_city 真查询！
 
               场景 A：用户没提任何地址（只问"今天天气？""空气质量怎么样？""未来天气？"）
-                 → 步骤：先 get_user_preferences → 取默认 city → geocode_city(city) → 拿到 latitude/longitude → 再调天气/空气质量工具。
+                 → 步骤：先 get_user_preferences → 取默认 city → search_city(city) → 拿到标准名+latitude/longitude → 再调天气工具（传location=标准名+坐标）。
 
               场景 B：用户提到了具体城市名（"上海的空气质量？""北京明天会下雨吗？""去广州出差天气？"）
-                 → 步骤：geocode_city(用户说的城市名) → 拿到 latitude/longitude → 再调天气/空气质量工具。
+                 → 步骤：search_city(用户说的城市名) → 拿到标准名+latitude/longitude → 再调天气工具（传location=标准名+坐标）。
                  （不要多此一举先调 get_user_preferences 或 get_location）
 
               场景 C：用户提到了"当前位置"（"我现在这儿的空气质量？""我在哪儿？""附近的天气？"）
-                 → 步骤：get_location → 拿到返回里的 latitude/longitude → 再调天气/空气质量工具。
-                 （必须真调 get_location，不能拿默认城市冒充当前位置！）
+                 → 步骤：get_location → 若有GPS返回latitude/longitude+address → 再调天气工具（传location=address+坐标）。
+                 （必须真调 get_location，不能拿默认城市冒充当前位置！get_location无GPS时只返回默认城市名不含坐标，此时按场景A处理。）
 
             第三条：4 个天气工具（query_weather_now / query_weather_forecast / query_air_quality / query_weather_alert）
-              - 参数里最好带上具体的 location 城市名（后端有兜底自动转坐标），但 latitude、longitude 还是优先真实查询得到。
-              - 禁止 latitude/longitude 传 null、禁止传 "110.0,23.0" 这样拼好的字符串，必须分开传数字。
+              - 调用时必须同时传：location=标准城市名（search_city的displayName）+ latitude/longitude=坐标（分开传数字，不传拼好的字符串，不传null）。
+              - location 用于状态流显示标准城市名，latitude/longitude 用于实际查询。
 
             第四条：最终回复里写清楚你用了哪一种地址来源：
               - 如果用的是默认城市 → 回复里写"根据你的默认城市 XX …"
@@ -1328,7 +1328,37 @@ public class LLMService {
               不要让用户猜你是用哪里查的。
 
             第五条：成功案例（照着做）：
-              用户说"上海的空气质量呢" → 先 geocode_city("上海") 拿到真实 lat/lon → query_air_quality(latitude=31.23, longitude=121.47) → AQI 14 优。
+              用户说"上海的空气质量呢" → 先 search_city("上海") 拿到 displayName="上海市-上海" + lat/lon → query_air_quality(location="上海市-上海", latitude=31.23, longitude=121.47) → AQI 14 优。
+
+            第六条：search_city 返回多个候选时，AI根据用户原话自己判断选哪个：
+              - search_city 返回 candidates 列表时，先根据用户原话判断能不能确定选哪一个。
+              - 能确定：取候选的 displayName + latitude/longitude 一起传给天气工具（displayName作为location参数，坐标用latitude/longitude），或取 displayName 调 set_user_preferences。禁止再调 search_city（会死循环）！
+                例：用户说"上海宝山"→候选有"上海市-上海-宝山"→城市+区县明确→直接用宝山的坐标，不问用户。
+                例：用户说"上海"→候选有"上海市-上海"→只有市名→直接用上海市，不选区县。
+              - 疑似打错字（如"上海宝成"→候选有"上海宝山"）：AI推测后直接操作，但必须在回复里告知用户推测过程：
+                查天气时："你说的「上海宝成」可能打错字了，我按「上海宝山」帮你查了XX天气。如果你说的是别的地方，告诉我重新查。"
+                设地址时："你说的「上海宝成」可能打错字了，我按「上海宝山」帮你设置了默认城市。如果你说的是别的地方，告诉我重新设置。"
+                不需要先问用户确认，直接操作并告知，让用户决定是否需要重来。禁止只回复结果不提推测过程。
+              - 真正歧义选不了再问用户：
+                例：用户说"朝阳"→候选有北京朝阳区、辽宁朝阳市、吉林长春朝阳区→无法确定→列出来让用户选。
+                例：用户说"广东"→候选返回广东省下多个城市→告诉用户范围太大，让用户说更精细的地点。
+              - 候选列表很重要，不能盲目选第一条。
+              - 设地址时：set_user_preferences 的 value 直接传候选的 displayName，后端直接保存不再二次搜索。
+
+            第七条：天气工具调用规范（非常重要，违反会死循环或状态流异常）：
+              - 调天气工具时必须同时传：location=候选的displayName + latitude/longitude=候选的坐标。
+                location用于状态流显示标准城市名，latitude/longitude用于实际查询。不能只传坐标不传location（状态流会显示"当前位置"）。
+              - 如果 query_weather_now/forecast/air_quality/alert 返回了 candidates（说明你跳过了 search_city 直接传了城市名），
+                必须取其中一个候选的 latitude/longitude + displayName，再次调用【同一个天气工具】并传全部三个参数。
+              - 禁止在天气工具返回 candidates 后又去调 search_city！candidates 里已经带了坐标和名称，直接用！
+              - 正确流程：用户说"北京朝阳" → search_city("北京朝阳") → 选"北京市-北京-朝阳" → query_weather_now(location="北京市-北京-朝阳", latitude=39.92, longitude=116.48)
+              - 错误流程1：query_weather_now(location="北京朝阳") → 返回candidates → 又调 search_city → 又返回candidates → 死循环
+              - 错误流程2：query_weather_now(latitude=39.92, longitude=116.48) 不传location → 状态流显示"当前位置"而非标准城市名
+
+            第八条：设置偏好必须真正调用工具（禁止撒谎）：
+              - 用户要求设置默认城市时，必须真正调用 set_user_preferences 工具并看到 success=true 才算完成。
+              - 禁止只口头回复"已设置"而不调工具。
+              - 如果 search_city 返回多个候选且无法确定，先问用户，得到明确答复后再调 set_user_preferences。
 
             时间复用规则（非常重要！请严格遵守）：
             当用户说"再提醒我..."、"也提醒我..."、"同样提醒我..."、"再帮我提醒..."时，表示复用上一个提醒的时间：
@@ -2144,6 +2174,131 @@ public class LLMService {
         } catch (Exception e) {
             log.error("生成天气建议失败: {}", e.getMessage(), e);
             return null;
+        }
+    }
+
+    // 提醒查天气场景：LLM先判断location类型（
+    // 返回类型：CITY（城市/区县）/ POI（地名/未填写）/ PROVINCE（省级）/ GARBAGE（乱码/无意义）
+    public String judgeLocationType(String location) {
+        log.info("LLM判断提醒地点类型: location={}", location);
+        try {
+            String prompt = """
+                    判断这个提醒地点的类型，只返回类型，不选城市。
+
+                    提醒地点：%s
+
+                    判断规则：
+                    1. 城市/区县（如"北京朝阳"、"上海"、"上海市-上海"、"朝阳"）→ CITY
+                    2. POI/地名（如"图书馆"、"咖啡厅"、"公司"、"学校"、"卧室"、"家"）→ POI
+                    3. 省级（如"广东"、"浙江省"、"江苏省"）→ PROVINCE
+                    4. 乱码/无意义（如"asdf"、"!!!","12345"、"截止"、"明天"）→ GARBAGE
+                    5. 空地点 → POI
+
+                    只返回类型字符串（CITY/POI/PROVINCE/GARBAGE），不要返回其他文字。
+                    """.formatted(location == null ? "" : location);
+
+            UserMessage userMessage = new UserMessage(prompt);
+            Prompt promptObj = new Prompt(userMessage);
+            String content = chatModel.call(promptObj).getResult().getOutput().getText().trim().toUpperCase();
+
+            // 只取前几个字符，避免LLM返回多余文字
+            if (content.contains("CITY")) return "CITY";
+            if (content.contains("POI")) return "POI";
+            if (content.contains("PROVINCE")) return "PROVINCE";
+            return "GARBAGE";
+        } catch (Exception e) {
+            log.error("LLM判断地点类型失败: location={}, error={}", location, e.getMessage(), e);
+            return "GARBAGE";
+        }
+    }
+
+    // 提醒查天气场景：LLM从候选里选一个城市（不问用户，不判断类型）
+    // candidatesWithCoord: [{displayName, latitude, longitude}, ...]
+    // 返回 {type: CITY/GARBAGE, resolvedCity: 标准名, coord: "经度,纬度"}
+    //   CITY = 选了候选，coord从候选里取
+    //   GARBAGE = 选不了，不查
+    public java.util.Map<String, Object> resolveReminderLocation(
+            String location,
+            java.util.List<java.util.Map<String, Object>> candidatesWithCoord) {
+        java.util.Map<String, Object> result = new java.util.HashMap<>();
+        log.info("LLM处理提醒地点: location={}, candidates={}", location, candidatesWithCoord);
+
+        try {
+            StringBuilder candidateList = new StringBuilder();
+            if (candidatesWithCoord != null && !candidatesWithCoord.isEmpty()) {
+                for (int i = 0; i < candidatesWithCoord.size(); i++) {
+                    candidateList.append(i + 1).append(". ")
+                            .append(candidatesWithCoord.get(i).get("displayName"))
+                            .append("\n");
+                }
+            }
+
+            String prompt = """
+                    从城市搜索候选里选一个匹配提醒地点的城市。提醒地点已是城市/区县类型（类型判断已由其他步骤完成）。
+
+                    提醒地点：%s
+                    城市搜索候选（带编号）：
+                    %s
+
+                    选候选规则：
+                    a. 用户说城市+区县（如"北京朝阳"）→ 选"省-市-区县"格式的那条（如北京市-北京-朝阳）
+                    b. 用户只说城市（如"北京"、"上海"）→ 选"省-市"格式的那条，不选区县（如北京市-北京、上海市-上海）
+                    c. 地点已是标准城市名（如"上海市-上海"）→ 选完全匹配的那条
+                    d. 疑似错别字（如"上海宝成"→候选有"上海宝山"）→ 可以推测选最接近的
+                    e. 同名多义地点（如"朝阳"在辽宁、北京、吉林都有，用户没限定省/市）→ 无法确定，选不了
+                    f. 候选为空或都不匹配且无法推测 → 选不了
+
+                    只返回JSON，格式：
+                    {"type": "CITY或GARBAGE", "candidateIndex": "选中的候选编号(1-N)或0"}
+                    type=CITY表示选了候选，type=GARBAGE表示选不了。
+                    不要返回其他文字，不要自己写坐标。
+                    """.formatted(location == null ? "" : location, candidateList.toString());
+
+            UserMessage userMessage = new UserMessage(prompt);
+            Prompt promptObj = new Prompt(userMessage);
+
+            String content = chatModel.call(promptObj).getResult().getOutput().getText().trim();
+
+            // 解析JSON
+            try {
+                java.util.Map<String, Object> parsed = objectMapper.readValue(content, java.util.Map.class);
+                String type = (String) parsed.get("type");
+                String candidateIndexStr = String.valueOf(parsed.get("candidateIndex"));
+                int candidateIndex = 0;
+                try {
+                    candidateIndex = Integer.parseInt(candidateIndexStr.replaceAll("[^0-9]", ""));
+                } catch (NumberFormatException ignored) {
+                }
+
+                result.put("type", type);
+
+                // CITY类型：从候选列表里取真实displayName+coord
+                if ("CITY".equals(type) && candidateIndex >= 1
+                        && candidatesWithCoord != null && candidateIndex <= candidatesWithCoord.size()) {
+                    java.util.Map<String, Object> selected = candidatesWithCoord.get(candidateIndex - 1);
+                    String displayName = (String) selected.get("displayName");
+                    Object lat = selected.get("latitude");
+                    Object lon = selected.get("longitude");
+                    String coord = lon + "," + lat;  // 和风API格式：经度,纬度
+                    result.put("resolvedCity", displayName);
+                    result.put("coord", coord);
+                    log.info("LLM处理提醒地点结果: location={}, type=CITY, resolvedCity={}, coord={}",
+                            location, displayName, coord);
+                } else {
+                    log.info("LLM处理提醒地点结果: location={}, type={}", location, type);
+                }
+                return result;
+
+            } catch (Exception parseEx) {
+                log.warn("LLM返回无法解析为JSON，默认不查: location={}, content={}", location, content);
+                result.put("type", "GARBAGE");
+                return result;
+            }
+
+        } catch (Exception e) {
+            log.error("LLM处理提醒地点失败: location={}, error={}", location, e.getMessage(), e);
+            result.put("type", "GARBAGE");
+            return result;
         }
     }
 

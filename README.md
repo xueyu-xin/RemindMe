@@ -789,7 +789,7 @@ ollama pull qwen3-embedding:4b
 | `get_user_preferences` | 获取用户偏好 |
 | `set_user_preferences` | 修改用户偏好 |
 | `get_location` | 获取用户位置 |
-| `geocode_city` | 城市地理编码 |
+| `search_city` | 城市搜索 |
 | `calculate_date` | 日期计算（如"3天后"） |
 | `get_period_status` | 查询经期状态 |
 | `update_period_start` | 更新经期开始日期 |

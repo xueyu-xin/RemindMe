@@ -94,8 +94,6 @@ public class ToolRegistry implements SmartInitializingSingleton {
         }
         if (!missing.isEmpty()) {
             log.error("❌ 核心提醒工具缺失: {}，请检查 ReminderService bean 扫描/代理/初始化顺序！", missing);
-        } else {
-            log.info("✅ 核心提醒工具全部注册成功: {}", mustHave);
         }
     }
 
@@ -195,28 +193,28 @@ public class ToolRegistry implements SmartInitializingSingleton {
         ));
         paramDescriptions.put("queryWeatherNowForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",
-                "location", "具体城市名（可选，用户明确说了某个城市时传，例如 \"上海\"、\"北京\"）",
-                "latitude", "纬度（必填），数字类型，例如 31.23。必须是通过 geocode_city 或 get_location 或 get_user_preferences→geocode_city 查询得到的真实坐标，禁止自己脑补。",
-                "longitude", "经度（必填），数字类型，例如 121.47。禁止传 null。"
+                "location", "标准城市名（必填），从search_city选定候选的displayName，例如\"北京市-北京-朝阳\"。用于状态流显示，不用于查询。",
+                "latitude", "纬度（必填），从search_city选定候选的latitude，禁止脑补",
+                "longitude", "经度（必填），从search_city选定候选的longitude，禁止脑补"
         ));
         paramDescriptions.put("queryWeatherForecastForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",
-                "location", "具体城市名（可选）",
+                "location", "标准城市名（必填），从search_city选定候选的displayName，用于状态流显示",
                 "days", "预报天数（3/7/10/15/30，默认7天）",
-                "latitude", "纬度（必填），数字类型，必须真实查询得到，禁止脑补",
-                "longitude", "经度（必填），数字类型，禁止脑补"
+                "latitude", "纬度（必填），从search_city选定候选的latitude，禁止脑补",
+                "longitude", "经度（必填），从search_city选定候选的longitude，禁止脑补"
         ));
         paramDescriptions.put("queryAirQualityForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",
-                "location", "具体城市名（可选，用户明确说了某个城市时传，例如 \"上海\"、\"广州\"）。后端若未收到 lat/lon 会用此城市名自动转坐标，禁止空字符串。",
-                "latitude", "纬度（强烈建议填，数字类型，真实查询得到。禁止传 null，禁止自己脑补。若不填则后端自动用 location 或默认城市兜底计算）",
-                "longitude", "经度（强烈建议填，数字类型，真实查询得到。禁止传 null，禁止自己脑补。若不填则后端自动兜底计算）"
+                "location", "标准城市名（必填），从search_city选定候选的displayName，用于状态流显示",
+                "latitude", "纬度（必填），从search_city选定候选的latitude，禁止脑补",
+                "longitude", "经度（必填），从search_city选定候选的longitude，禁止脑补"
         ));
         paramDescriptions.put("queryWeatherAlertForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",
-                "location", "具体城市名（可选，用户明确说了某个城市时传）",
-                "latitude", "纬度（强烈建议填，数字类型，真实查询得到。若不填后端自动用 location 或默认城市兜底）",
-                "longitude", "经度（强烈建议填，数字类型，真实查询得到。若不填后端自动兜底）"
+                "location", "标准城市名（必填），从search_city选定候选的displayName，用于状态流显示",
+                "latitude", "纬度（必填），从search_city选定候选的latitude，禁止脑补",
+                "longitude", "经度（必填），从search_city选定候选的longitude，禁止脑补"
         ));
         paramDescriptions.put("calculateDate", Map.of(
                 "expression", "日期表达式（必填），如：3天后、2天前、2周后、下周一、下周三"
@@ -238,8 +236,8 @@ public class ToolRegistry implements SmartInitializingSingleton {
                 "latitude", "纬度（可选，有GPS坐标时传入）",
                 "longitude", "经度（可选，有GPS坐标时传入）"
         ));
-        paramDescriptions.put("geocodeCity", Map.of(
-                "city", "具体城市名（必填），用户明确提到了某一个城市名时传，例如 \"上海\"、\"广州\"、\"北京市\"、\"揭阳市\""
+        paramDescriptions.put("searchCity", Map.of(
+                "keyword", "城市名（必填），用户说的地点名，如\"上海\"、\"北京朝阳\"、\"广州\""
         ));
         paramDescriptions.put("createRecurringReminderForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",

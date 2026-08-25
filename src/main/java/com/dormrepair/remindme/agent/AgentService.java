@@ -153,7 +153,7 @@ public class AgentService {
                     // 重试提示需覆盖常见工具场景，并引导 LLM 基于历史工具结果继续，避免只引导创建提醒导致天气查询等场景卡死
                     String retryInput = "用户请求：" + userInput + "\n请根据对话历史中的工具调用结果继续处理："
                             + "如需创建提醒，调用 create_reminder 或 create_recurring_reminder；"
-                            + "如已通过 geocode_city 获取坐标，请调用 query_weather_now 查询实时天气或 query_weather_forecast 查询预报；"
+                            + "如已通过 search_city 获取标准名和坐标，请调用对应天气工具（query_weather_now 实时天气 / query_weather_forecast 天气预报 / query_air_quality 空气质量 / query_weather_alert 天气预警），传 location=标准名 + latitude/longitude=坐标；"
                             + "如所有必要工具已调用完毕，请基于结果直接生成最终自然语言回复。";
                     llmResponse = llmService.chatWithTools(retryInput, tools, history);
                     if (llmResponse == null || llmResponse.isBlank()) {
@@ -298,13 +298,13 @@ public class AgentService {
                     }
                     conversationMemory.addToolResult(userId, llmToolCall.getToolName(), toolResult, toolSuccess);
 
-                    // 天气查询工具链引导：get_user_preferences 返回 city 后，显式提示 LLM 调用 query_weather_now
+                    // 天气查询工具链引导：get_user_preferences 返回默认城市后，引导 LLM 先调 search_city 拿标准名+坐标，再调天气工具
                     if ("get_user_preferences".equals(llmToolCall.getToolName())) {
                         try {
                             Map<String, Object> prefMap = objectMapper.readValue(toolResult, Map.class);
                             Object city = prefMap.get("city");
                             if (city != null && !city.toString().isBlank() && Boolean.TRUE.equals(prefMap.get("success"))) {
-                                String weatherHint = "已获取用户默认城市：" + city + "。如果用户在查询天气，请立即调用 query_weather_now(location=\"" + city + "\") 查询实时天气，不要再重复调用 get_user_preferences。";
+                                String weatherHint = "已获取用户默认城市：" + city + "。如果用户在查询天气/天气预报/空气质量/天气预警，请先调用 search_city(keyword=\"" + city + "\") 拿到标准名和坐标，再调用对应天气工具（传location=标准名+latitude/longitude=坐标），不要再重复调用 get_user_preferences。";
                                 history.add(ConversationMemory.Message.builder()
                                         .role("system")
                                         .content(weatherHint)
