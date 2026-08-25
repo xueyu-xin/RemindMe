@@ -824,10 +824,14 @@ CREATE INDEX idx_verification_codes_expires ON verification_codes(expires_at);
 |--------|-----------|----------|----------|------|--------|------|------|
 | id | `id` | `Long` | `number` | 是 | 自增 | PK | ID，主键 |
 | userId | `user_id` | `Long` | `number` | 是 | 无 | FK | 用户ID |
-| inputText | `input_text` | `String` | `string` | 是 | 无 | NOT NULL | 用户输入文本 |
-| intentType | `intent_type` | `IntentType` | `string` | 否 | `NULL` | 无 | LLM识别的意图类型 |
+| role | `role` | `String` | `string` | 否 | `NULL` | VARCHAR(8) | 消息角色：user-用户发的输入、bot-LLM或系统返回的回复 |
+| content | `content` | `String` | `string` | 否 | `NULL` | TEXT | 消息内容文本：对话消息的主存储字段，支持大文本 |
+| sessionId | `session_id` | `String` | `string` | 否 | `NULL` | VARCHAR(64) | 会话ID：同一轮连续对话共享同一个 sessionId，用于切分对话上下文 |
+| inputText | `input_text` | `String` | `string` | 是 | 无 | NOT NULL | 用户输入原始文本（兼容字段，role=user 时与 content 内容一致） |
+| intentType | `intent_type` | `IntentType` | `string` | 否 | `NULL` | 无 | LLM识别的意图类型（仅 role=user 且为提醒类指令时赋值） |
 | parsedTime | `parsed_time` | `LocalDateTime` | `string` | 否 | `NULL` | 无 | LLM解析出的提醒时间 |
 | parsedTitle | `parsed_title` | `String` | `string` | 否 | `NULL` | 无 | LLM解析出的事项标题 |
+| processed | `processed` | `Boolean` | `boolean` | 是 | `FALSE` | NOT NULL | 是否已被后处理任务消费（动态提示词学习、统计聚合等），消费后置 true 避免重复处理 |
 | createdAt | `created_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 输入时间 |
 
 #### 3.5.2 建表DDL
@@ -836,16 +840,21 @@ CREATE INDEX idx_verification_codes_expires ON verification_codes(expires_at);
 CREATE TABLE user_dialog_stats (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     user_id BIGINT NOT NULL,
+    role VARCHAR(8) DEFAULT NULL,
+    content TEXT DEFAULT NULL,
+    session_id VARCHAR(64) DEFAULT NULL,
     input_text TEXT NOT NULL,
     intent_type VARCHAR(20) DEFAULT NULL,
     parsed_time TIMESTAMP DEFAULT NULL,
     parsed_title VARCHAR(255) DEFAULT NULL,
+    processed BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_user_dialog_stats_user_time ON user_dialog_stats(user_id, created_at);
 CREATE INDEX idx_user_dialog_stats_intent ON user_dialog_stats(intent_type);
+CREATE INDEX idx_user_dialog_stats_session ON user_dialog_stats(session_id);
 ```
 
 
@@ -864,6 +873,7 @@ CREATE INDEX idx_user_dialog_stats_intent ON user_dialog_stats(intent_type);
 | parsedData | `parsed_data` | `String` | `object` | 否 | `NULL` | JSON | LLM解析后的完整数据（JSON格式） |
 | parsedTitle | `parsed_title` | `String` | `string` | 否 | `NULL` | VARCHAR(200) | 解析出的标题 |
 | parsedTime | `parsed_time` | `LocalDateTime` | `string` | 否 | `NULL` | 无 | 解析出的提醒时间 |
+| parsedEndTime | `parsed_end_time` | `LocalDateTime` | `string` | 否 | `NULL` | 无 | 解析出的结束时间（可选）：如课程下课时间、会议结束时间，用于日历视图连续显示 |
 | parsedLocation | `parsed_location` | `String` | `string` | 否 | `NULL` | VARCHAR(200) | 解析出的地点 |
 | parsedPriority | `parsed_priority` | `String` | `string` | 否 | `NULL` | VARCHAR(20) | 解析出的优先级 |
 | parsedAdvanceMinutes | `parsed_advance_minutes` | `Integer` | `number` | 否 | `NULL` | 无 | 解析出的提前量 |
@@ -888,6 +898,7 @@ CREATE TABLE confirmation_sessions (
     parsed_data JSON DEFAULT NULL,
     parsed_title VARCHAR(200) DEFAULT NULL,
     parsed_time TIMESTAMP DEFAULT NULL,
+    parsed_end_time TIMESTAMP DEFAULT NULL,
     parsed_location VARCHAR(200) DEFAULT NULL,
     parsed_priority VARCHAR(20) DEFAULT NULL,
     parsed_advance_minutes INT DEFAULT NULL,
@@ -941,6 +952,7 @@ CREATE INDEX idx_stage ON confirmation_sessions(stage);
 | lastGeneratedDate | `last_generated_date` | `LocalDate` | `string` | 否 | `NULL` | 无 | 调度器上次成功生成实例的日期（避免重复生成，便于断点续跑） |
 | source | `source` | `String` | `string` | 是 | `'USER_INPUT'` | 无 | 模板来源：USER_INPUT-用户手动创建、EXCEL_IMPORT-Excel 课表导入、PERIOD_REMINDER-经期自动生成 |
 | timezone | `timezone` | `String` | `string` | 是 | `'Asia/Shanghai'` | 无 | 时区 |
+| excludedDates | `excluded_dates` | `String` | `string` | 否 | `NULL` | TEXT | 例外日期列表，JSON 数组格式（如 `["2026-08-21","2026-08-22"]`），这些日期将跳过生成提醒；覆盖冲突提醒时自动加入 |
 | createdAt | `created_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 创建时间 |
 | updatedAt | `updated_at` | `LocalDateTime` | `string` | 是 | 当前时间 | 无 | 更新时间 |
 
@@ -963,6 +975,7 @@ CREATE TABLE recurring_reminders (
     last_generated_date DATE DEFAULT NULL,
     source VARCHAR(255) NOT NULL,
     timezone VARCHAR(255) NOT NULL,
+    excluded_dates TEXT DEFAULT NULL,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -978,7 +991,6 @@ CREATE INDEX idx_repeat_type ON recurring_reminders(repeat_type);
 | 预留字段 | 类型 | 说明 | 计划版本 |
 |----------|------|------|----------|
 | `cron_expression` | VARCHAR(100) | 复杂重复规则的 Cron 表达式 | v2.0 |
-| `exclude_dates` | JSON | 排除日期列表（如法定节假日） | v2.0 |
 
 
 ### 3.8 表名：recurring_instances（周期提醒实例表）
@@ -1665,14 +1677,24 @@ public class VerificationCode {
 ### 5.5 UserDialogStats.java
 
 ```java
-package com.reminder.entity;
+package com.dormrepair.remindme.entity;
 
-import javax.persistence.*;
+import com.dormrepair.remindme.enums.IntentType;
+import jakarta.persistence.*;
+import lombok.Data;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+
 import java.time.LocalDateTime;
 
+@Data
 @Entity
-@Table(name = "user_dialog_stats")
+@Table(name = "user_dialog_stats", indexes = {
+        @Index(name = "idx_user_created", columnList = "user_id, created_at")
+})
+@EntityListeners(AuditingEntityListener.class)
 public class UserDialogStats {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -1680,9 +1702,23 @@ public class UserDialogStats {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(name = "input_text", nullable = false)
+    // 消息角色：user-用户发的输入、bot-LLM 或系统返回的回复
+    @Column(name = "role", length = 8)
+    private String role;
+
+    // 消息内容文本：对话消息的主存储字段，支持大文本
+    @Column(name = "content", columnDefinition = "TEXT")
+    private String content;
+
+    // 会话 id：同一轮连续对话共享同一个 sessionId，用于切分对话上下文
+    @Column(name = "session_id", length = 64)
+    private String sessionId;
+
+    // 兼容字段：用户输入原始文本（role=user 时与 content 内容一致）
+    @Column(name = "input_text", nullable = false, columnDefinition = "TEXT")
     private String inputText;
 
+    // LLM 解析出的意图类型（仅 role=user 且为提醒类指令时赋值）
     @Column(name = "intent_type")
     @Enumerated(EnumType.STRING)
     private IntentType intentType;
@@ -1693,10 +1729,13 @@ public class UserDialogStats {
     @Column(name = "parsed_title")
     private String parsedTitle;
 
+    // 是否已被后处理任务消费，消费后置 true 避免重复处理
+    @Column(name = "processed", nullable = false)
+    private Boolean processed = false;
+
+    @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
-
-    // Getter / Setter
 }
 ```
 
@@ -1744,6 +1783,10 @@ public class ConfirmationSession {
 
     @Column(name = "parsed_time")
     private LocalDateTime parsedTime;
+
+    // 解析出的结束时间（可选）：如课程下课时间、会议结束时间
+    @Column(name = "parsed_end_time")
+    private LocalDateTime parsedEndTime;
 
     @Column(name = "parsed_location", length = 200)
     private String parsedLocation;
@@ -1881,6 +1924,10 @@ public class RecurringReminder {
 
     @Column(nullable = false)
     private String timezone = "Asia/Shanghai";
+
+    // 例外日期列表，JSON 数组格式（如 ["2026-08-21","2026-08-22"]），这些日期将跳过生成提醒
+    @Column(name = "excluded_dates", columnDefinition = "TEXT")
+    private String excludedDates;
 
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
@@ -2265,9 +2312,13 @@ public class ReminderResponse {
 | expires_at | expiresAt | expiresAt | verification_codes | 过期时间 |
 | used | used | used | verification_codes | 验证码是否已使用 |
 | input_text | inputText | inputText | user_dialog_stats | 输入文本 |
+| role | role | role | user_dialog_stats | 消息角色（user/bot） |
+| content | content | content | user_dialog_stats | 消息内容文本 |
+| session_id | sessionId | sessionId | user_dialog_stats | 会话ID（同轮对话共享） |
 | intent_type | intentType | intentType | user_dialog_stats | 意图类型 |
 | parsed_time | parsedTime | parsedTime | user_dialog_stats | 解析的时间 |
 | parsed_title | parsedTitle | parsedTitle | user_dialog_stats | 解析的事项 |
+| processed | processed | processed | user_dialog_stats | 是否已被后处理消费 |
 | session_id | sessionId | sessionId | confirmation_sessions | 会话ID |
 | user_id | userId | userId | confirmation_sessions | 所属用户 |
 | reminder_id | reminderId | reminderId | confirmation_sessions | 关联提醒ID |
@@ -2275,6 +2326,7 @@ public class ReminderResponse {
 | parsed_data | parsedData | parsedData | confirmation_sessions | 解析数据(JSON) |
 | parsed_title | parsedTitle | parsedTitle | confirmation_sessions | 解析标题 |
 | parsed_time | parsedTime | parsedTime | confirmation_sessions | 解析时间 |
+| parsed_end_time | parsedEndTime | parsedEndTime | confirmation_sessions | 解析结束时间（可选） |
 | parsed_location | parsedLocation | parsedLocation | confirmation_sessions | 解析地点 |
 | parsed_priority | parsedPriority | parsedPriority | confirmation_sessions | 解析优先级 |
 | parsed_advance_minutes | parsedAdvanceMinutes | parsedAdvanceMinutes | confirmation_sessions | 解析提前量 |
@@ -2300,6 +2352,7 @@ public class ReminderResponse {
 | repeat_days | repeatDays | repeatDays | recurring_reminders | WEEKLY 时指定的星期几（1-7 逗号分隔） |
 | advance_minutes | advanceMinutes | advanceMinutes | recurring_reminders | 提前量（分钟） |
 | last_generated_date | lastGeneratedDate | lastGeneratedDate | recurring_reminders | 上次生成实例日期（断点续传） |
+| excluded_dates | excludedDates | excludedDates | recurring_reminders | 例外日期列表（JSON数组，跳过生成） |
 | recurring_id | recurringId | recurringId | recurring_instances | 周期模板ID |
 | remind_date | remindDate | remindDate | recurring_instances | 实例对应日期 |
 | file_name | fileName | fileName | schedule_imports | 原始文件名 |
@@ -2321,6 +2374,7 @@ public class ReminderResponse {
 | v1.0 | 2026-07-18 | 初始版本，完整数据字典 | — |
 | v1.1 | 2026-07-28 | 新增 SessionStatus/ConfirmStage 枚举、confirmation_sessions 表、确认流程 API（4.5节）、冲突检测 API（4.6节）、DTO 定义（5.7节）、ConfirmationSession 实体类（5.6节）、更新字段映射总表 | — |
 | v1.2 | 2026-08-11 | 1) users 表补 period_remind_postponed/period_confirm_count/period_remind_postponed_count/period_remind_time/semester_start_date 字段；2) reminders 表补 end_time/execution_status/note 字段；3) 新增 3.7-3.10 四张表（recurring_reminders 含 repeat_days / recurring_instances / schedule_imports / schedule_import_items）；4) 新增 5.7-5.10 四个实体类（RecurringReminder/RecurringInstance/ScheduleImport/ScheduleImportItem）；5) 原 5.7 DTO 顺延为 5.11；6) 字段映射总表同步补充上述全部新增字段 | — |
+| v1.3 | 2026-08-24 | 1) user_dialog_stats 表新增 role/content/session_id/processed 四个字段（3.5.1 字段定义表 + 3.5.2 DDL + session_id 索引）；2) confirmation_sessions 表新增 parsed_end_time 字段（3.6.1 字段定义表 + 3.6.2 DDL）；3) recurring_reminders 表新增 excluded_dates 字段（3.7.1 字段定义表 + 3.7.2 DDL），并从 3.7.3 扩展性预留中移除已实现的 exclude_dates；4) 5.5 UserDialogStats.java 同步为 jakarta + Lombok + Auditing 版本并补齐四个字段；5) 5.6 ConfirmationSession.java 补 parsedEndTime；6) 5.7 RecurringReminder.java 补 excludedDates | — |
 
 ---
 

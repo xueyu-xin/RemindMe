@@ -349,18 +349,29 @@ var CardSystem = (function() {
             }
         }
 
-        // 判断是否是周期提醒：优先 isRecurring 字段，兜底从 remindTime 显示文本推断
-        var isRecurring = data.isRecurring === true;
+        // 判断是否是周期提醒（三源合一）
+        var isRecurring = false;
+        // 1. 优先使用 data.isRecurring（布尔值）
+        if (data.isRecurring === true) {
+            isRecurring = true;
+        }
+        // 2. 检查 remindTime 是否包含周期特征字 "至" 或 "共"
         if (!isRecurring) {
             var rt = data.remindTime || '';
-            if (/^[\u4e00-\u9fa5]/.test(rt) && rt.indexOf('|') >= 0) {
+            if (rt.indexOf('至') >= 0 || rt.indexOf('共') >= 0) {
+                isRecurring = true;
+            }
+        }
+        // 3. 检查 startDate 是否存在且非空
+        if (!isRecurring) {
+            if (data.startDate !== undefined && data.startDate !== null && data.startDate !== '') {
                 isRecurring = true;
             }
         }
 
         var formHtml = '';
         formHtml += '<div class="card-edit-form">';
-        formHtml += '<input type="hidden" class="edit-is-recurring" value="' + (isRecurring ? '1' : '0') + '">';
+        formHtml += '<input type="hidden" class="edit-is-recurring" value="' + String(isRecurring ? '1' : '0') + '">';
         formHtml += '<div class="form-group"><label>标题</label><input type="text" class="edit-title" value="' + escapeHtml(data.title || '') + '"></div>';
 
         if (!isRecurring) {
@@ -516,6 +527,39 @@ var CardSystem = (function() {
             editData.endDate = endVal;
             editData.repeatType = repeatVal;
             editData.isRecurring = true;
+        }
+
+        // 兜底读取：即使 isRecurring=false，若 DOM 中存在周期字段且有值也按周期提醒提交
+        if (!isRecurring) {
+            var domFlagInput = card.element.querySelector('.edit-is-recurring');
+            var domTimeInput = card.element.querySelector('.edit-recurring-time');
+            var domStartInput = card.element.querySelector('.edit-recurring-start');
+            var domEndInput = card.element.querySelector('.edit-recurring-end');
+            var domRepeatInput = card.element.querySelector('.edit-recurring-repeat');
+
+            var domFlagVal = domFlagInput ? domFlagInput.value : '';
+            var domTimeVal = (domTimeInput && domTimeInput.value) ? domTimeInput.value : '';
+            var domStartVal = (domStartInput && domStartInput.value) ? domStartInput.value : '';
+            var domEndVal = (domEndInput && domEndInput.value) ? domEndInput.value : '';
+            var domRepeatVal = (domRepeatInput && domRepeatInput.value) ? domRepeatInput.value : '';
+
+            var hasRecurringFields = domFlagVal === '1'
+                || !!domTimeVal || !!domStartVal || !!domEndVal || !!domRepeatVal;
+
+            if (hasRecurringFields) {
+                var dRecurringTimeFull = domTimeVal;
+                if (dRecurringTimeFull && dRecurringTimeFull.length === 5) dRecurringTimeFull += ':00';
+                if (dRecurringTimeFull) {
+                    editData.recurringRemindTime = dRecurringTimeFull;
+                    if (domStartVal) {
+                        editData.remindTime = domStartVal + ' ' + dRecurringTimeFull;
+                    }
+                }
+                if (domStartVal) editData.startDate = domStartVal;
+                if (domEndVal)   editData.endDate = domEndVal;
+                if (domRepeatVal) editData.repeatType = domRepeatVal;
+                editData.isRecurring = true;
+            }
         }
 
         fetch('/api/confirmations/' + sessionId + '/reparse?userId=' + userId, {

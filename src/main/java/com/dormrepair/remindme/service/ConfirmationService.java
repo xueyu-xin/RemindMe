@@ -29,6 +29,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
@@ -870,6 +871,56 @@ public class ConfirmationService {
             }
         }
 
+        // 周期字段恢复：若 newParsedData 缺失周期字段，从旧会话的 parsedData 中补齐
+        boolean missingIsRecurring = !Boolean.TRUE.equals(newParsedData.get("isRecurring"));
+        boolean missingStartDate = newParsedData.get("startDate") == null;
+        boolean missingEndDate = newParsedData.get("endDate") == null;
+        boolean missingRecurringRemindTime = newParsedData.get("recurringRemindTime") == null;
+        boolean missingRepeatType = newParsedData.get("repeatType") == null;
+
+        if (missingIsRecurring || missingStartDate || missingEndDate
+                || missingRecurringRemindTime || missingRepeatType) {
+            Map<String, Object> oldData = parseParsedData(session.getParsedData());
+            if (Boolean.TRUE.equals(oldData.get("isRecurring"))) {
+                // 旧会话是周期提醒，说明当前请求体缺失周期字段，逐个恢复
+                if (missingIsRecurring && oldData.get("isRecurring") != null) {
+                    newParsedData.put("isRecurring", oldData.get("isRecurring"));
+                }
+                if (missingStartDate && oldData.get("startDate") != null) {
+                    newParsedData.put("startDate", oldData.get("startDate"));
+                }
+                if (missingEndDate && oldData.get("endDate") != null) {
+                    newParsedData.put("endDate", oldData.get("endDate"));
+                }
+                if (missingRecurringRemindTime && oldData.get("recurringRemindTime") != null) {
+                    newParsedData.put("recurringRemindTime", oldData.get("recurringRemindTime"));
+                }
+                if (missingRepeatType && oldData.get("repeatType") != null) {
+                    newParsedData.put("repeatType", oldData.get("repeatType"));
+                }
+                if (oldData.get("repeatDays") != null && newParsedData.get("repeatDays") == null) {
+                    newParsedData.put("repeatDays", oldData.get("repeatDays"));
+                }
+            }
+        }
+
+        // 重新计算 totalDays：startDate、endDate 都存在时重新计算天数差 + 1
+        Object sdObj = newParsedData.get("startDate");
+        Object edObj = newParsedData.get("endDate");
+        if (sdObj != null && edObj != null) {
+            try {
+                LocalDate sd = LocalDate.parse(String.valueOf(sdObj));
+                LocalDate ed = LocalDate.parse(String.valueOf(edObj));
+                long totalDays = java.time.temporal.ChronoUnit.DAYS.between(sd, ed) + 1;
+                if (totalDays > 0) {
+                    newParsedData.put("totalDays", totalDays);
+                }
+            } catch (Exception e) {
+                log.warn("reparse计算totalDays失败: startDate={}, endDate={}, err={}",
+                        sdObj, edObj, e.getMessage());
+            }
+        }
+
         String parsedDataJson;
         try {
             parsedDataJson = objectMapper.writeValueAsString(newParsedData);
@@ -1138,9 +1189,10 @@ public class ConfirmationService {
 
     // 构建阶段一确认卡片：组装数据与按钮，按周期/冲突/普通场景选择不同文案和操作集
     private ConfirmationCardResponse buildConfirmationCard(ConfirmationSession session, Map<String, Object> parsedData) {
-        boolean hasConflict = Boolean.TRUE.equals(parsedData.get("hasConflict"));
-        boolean isRecurring = Boolean.TRUE.equals(parsedData.get("isRecurring"));
-        
+        // 兼容 Boolean / String "true" / 数字 1 等多种来源的布尔值
+        boolean hasConflict = safeToBoolean(parsedData.get("hasConflict"), false);
+        boolean isRecurring = safeToBoolean(parsedData.get("isRecurring"), false);
+
         Long userId = session.getUserId();
         int defaultAdvance = userService.getUserById(userId)
                 .map(u -> u.getDefaultAdvanceMinutes())
@@ -1154,8 +1206,8 @@ public class ConfirmationService {
                 .priority((String) parsedData.getOrDefault("priority", Priority.NORMAL.name()))
                 .location((String) parsedData.get("location"))
                 .note((String) parsedData.get("note"))
-                .advanceMinutes((Integer) parsedData.getOrDefault("advanceMinutes", defaultAdvance))
-                .confidence((Double) parsedData.getOrDefault("confidence", 0.95))
+                .advanceMinutes(safeToInteger(parsedData.get("advanceMinutes"), defaultAdvance))
+                .confidence(safeToDouble(parsedData.get("confidence"), 0.95))
                 .hasConflict(hasConflict)
                 .conflictMessage((String) parsedData.get("conflictMessage"))
                 .conflictId(parsedData.get("conflictId") != null ? Long.valueOf(String.valueOf(parsedData.get("conflictId"))) : null)
@@ -1177,42 +1229,39 @@ public class ConfirmationService {
         }
 
         // 周期提醒：显示日期范围和总天数
+        Object tdForLog = parsedData.get("totalDays");
+        log.info("周期卡片分支判定: isRecurring={}, raw_isRecurring_type={}, totalDays={}, totalDays_type={}, startDate={}, endDate={}, recurringRemindTime={}, repeatType={}",
+                isRecurring,
+                parsedData.get("isRecurring") == null ? "null" : parsedData.get("isRecurring").getClass().getName(),
+                tdForLog,
+                tdForLog == null ? "null" : tdForLog.getClass().getName(),
+                parsedData.get("startDate"),
+                parsedData.get("endDate"),
+                parsedData.get("recurringRemindTime"),
+                parsedData.get("repeatType"));
         if (isRecurring) {
-            StringBuilder titleBuilder = new StringBuilder();
-            titleBuilder.append("📅 周期提醒：").append(parsedData.get("title"));
+            // 构建显示标题（复用公共方法）
+            String originalTitle = (String) parsedData.get("title");
             String repeatType = (String) parsedData.getOrDefault("repeatType", RepeatType.DAILY.name());
-            String repeatLabel = switch (repeatType) {
-                case "WEEKLY" -> "每周";
-                case "MONTHLY" -> "每月";
-                default -> "每天";
-            };
-            titleBuilder.append("（").append(repeatLabel).append("）");
-            data.setTitle(titleBuilder.toString());
+            String displayTitle = buildRecurringDisplayTitle(originalTitle, repeatType);
+            data.setTitle(displayTitle);
 
-            // 提取纯时间部分用于显示
-            String recurringRemindTime = (String) parsedData.get("recurringRemindTime");
-            if (recurringRemindTime == null) {
+            // 构建显示时间（复用公共方法）：优先 recurringRemindTime，兜底从 remindTime 截取
+            String remindTime = (String) parsedData.get("recurringRemindTime");
+            if (remindTime == null) {
                 String fullTime = (String) parsedData.get("remindTime");
                 if (fullTime != null && fullTime.length() > 10) {
-                    recurringRemindTime = fullTime.substring(11);  // 提取 HH:mm:ss
-                } else {
-                    recurringRemindTime = fullTime;
+                    remindTime = fullTime.substring(11);
                 }
             }
-            // 显示为 "每天 19:00 | 2026-08-03 至 2026-08-09 共7天"
-            StringBuilder timeBuilder = new StringBuilder();
-            if (recurringRemindTime != null) {
-                // 截取 HH:mm 部分
-                String displayTime = recurringRemindTime.length() >= 5 ? recurringRemindTime.substring(0, 5) : recurringRemindTime;
-                timeBuilder.append(repeatLabel).append(" ").append(displayTime);
+            String startDate = (String) parsedData.get("startDate");
+            String endDate = (String) parsedData.get("endDate");
+            Object totalDaysObj = parsedData.get("totalDays");
+            String repeatType2 = (String) parsedData.getOrDefault("repeatType", RepeatType.DAILY.name());
+            String displayTime = buildRecurringDisplayTime(remindTime, startDate, endDate, totalDaysObj, repeatType2);
+            if (displayTime != null) {
+                data.setRemindTime(displayTime);
             }
-            timeBuilder.append(" | ").append(parsedData.get("startDate"))
-                    .append(" 至 ").append(parsedData.get("endDate"));
-            Integer totalDays = (Integer) parsedData.get("totalDays");
-            if (totalDays != null) {
-                timeBuilder.append(" 共").append(totalDays).append("天");
-            }
-            data.setRemindTime(timeBuilder.toString());
         }
 
         // 冲突列表已在上文通过 parseConflictList 设置为 List<ConflictItem>，此处无需重复处理
@@ -1236,7 +1285,15 @@ public class ConfirmationService {
                 case "MONTHLY" -> "每月";
                 default -> "每天";
             };
-            Integer totalDays = (Integer) parsedData.get("totalDays");
+            Object totalDaysObj2 = parsedData.get("totalDays");
+            Integer totalDays = null;
+            if (totalDaysObj2 instanceof Integer) {
+                totalDays = (Integer) totalDaysObj2;
+            } else if (totalDaysObj2 instanceof Long) {
+                totalDays = ((Long) totalDaysObj2).intValue();
+            } else if (totalDaysObj2 instanceof Number) {
+                totalDays = ((Number) totalDaysObj2).intValue();
+            }
             message = String.format("📅 我将为你创建「%s」的%s提醒%s，请确认：",
                     parsedData.get("title"),
                     repeatLabel,
@@ -1301,6 +1358,42 @@ public class ConfirmationService {
         } catch (JsonProcessingException e) {
             return new HashMap<>();
         }
+    }
+
+    // Jackson JSON 反序列化整数字段时可能返回 Integer 或 Long，统一用 Number 接收并取 intValue
+    private Integer safeToInteger(Object obj, Integer defaultValue) {
+        if (obj == null) return defaultValue;
+        if (obj instanceof Integer) return (Integer) obj;
+        if (obj instanceof Long) return ((Long) obj).intValue();
+        if (obj instanceof Number) return ((Number) obj).intValue();
+        try {
+            return Integer.parseInt(String.valueOf(obj));
+        } catch (Exception e) {
+            return defaultValue;
+        }
+    }
+
+    // Jackson JSON 反序列浮点字段时可能返回 Double 或 Integer，统一用 Number 接收并取 doubleValue
+    private Double safeToDouble(Object obj, Double defaultValue) {
+        if (obj == null) return defaultValue;
+        if (obj instanceof Double) return (Double) obj;
+        if (obj instanceof Number) return ((Number) obj).doubleValue();
+        try {
+            return Double.parseDouble(String.valueOf(obj));
+        } catch (Exception e) {
+            return defaultValue;
+        }
+    }
+
+    // JSON 布尔字段可能是 Boolean / String（"true"/"false"）/ 数字（0/1），统一做一次兼容判断
+    private boolean safeToBoolean(Object obj, boolean defaultValue) {
+        if (obj == null) return defaultValue;
+        if (obj instanceof Boolean) return (Boolean) obj;
+        if (obj instanceof Number) return ((Number) obj).intValue() != 0;
+        String s = String.valueOf(obj).trim();
+        if ("true".equalsIgnoreCase(s) || "1".equals(s) || "yes".equalsIgnoreCase(s)) return true;
+        if ("false".equalsIgnoreCase(s) || "0".equals(s) || "no".equalsIgnoreCase(s)) return false;
+        return defaultValue;
     }
 
     public Optional<ConfirmationSession> findPendingSession(Long userId) {
@@ -1512,6 +1605,33 @@ public class ConfirmationService {
                     } else {
                         data.put("expiresAt", null);
                         data.put("timeout", TIMEOUT_SECONDS);
+                    }
+
+                    // 周期提醒：用公共方法覆盖 title 和 remindTime 为显示格式，保证 fetchCardData 后卡片仍为周期格式
+                    boolean isRecurring = safeToBoolean(parsedData.get("isRecurring"), false);
+                    if (isRecurring) {
+                        // 1. 构建显示标题
+                        String originalTitle = session.getParsedTitle();
+                        String repeatType = (String) parsedData.getOrDefault("repeatType", "DAILY");
+                        String displayTitle = buildRecurringDisplayTitle(originalTitle, repeatType);
+                        data.put("title", displayTitle);
+
+                        // 2. 构建显示时间：优先 recurringRemindTime，兜底从 remindTime 截取
+                        String remindTime = (String) parsedData.get("recurringRemindTime");
+                        if (remindTime == null) {
+                            String fullTime = (String) parsedData.get("remindTime");
+                            if (fullTime != null && fullTime.length() > 10) {
+                                remindTime = fullTime.substring(11);
+                            }
+                        }
+                        String startDate = (String) parsedData.get("startDate");
+                        String endDate = (String) parsedData.get("endDate");
+                        Object totalDaysObj = parsedData.get("totalDays");
+                        String displayTime = buildRecurringDisplayTime(remindTime, startDate, endDate, totalDaysObj, repeatType);
+                        if (displayTime != null) {
+                            data.put("remindTime", displayTime);
+                        }
+                        // displayTime 为 null 时保留原 remindTime，避免显示空白
                     }
                     return data;
                 })
@@ -1884,5 +2004,55 @@ public class ConfirmationService {
 
     private void pushMessage(Long userId, Map<String, Object> data) {
         webSocketPushService.pushToUser(userId, "/queue/messages", data);
+    }
+
+    // ========== 周期提醒显示格式公共方法（buildConfirmationCard / getSessionData 共用）==========
+
+    // 安全 Object → int 转换：支持 Integer、Long、Number、String 数字，失败返回 defaultValue
+    private int safeToInt(Object obj, int defaultValue) {
+        if (obj == null) return defaultValue;
+        if (obj instanceof Integer) return (Integer) obj;
+        if (obj instanceof Long) return ((Long) obj).intValue();
+        if (obj instanceof Number) return ((Number) obj).intValue();
+        try {
+            return Integer.parseInt(String.valueOf(obj).trim());
+        } catch (Exception e) {
+            return defaultValue;
+        }
+    }
+
+    // 构建周期提醒的显示标题："📅 周期提醒：{originalTitle}（{每天/每周/每月}）"
+    private String buildRecurringDisplayTitle(String originalTitle, String repeatType) {
+        if (originalTitle == null || originalTitle.isBlank()) {
+            return originalTitle;
+        }
+        String label = switch (repeatType == null ? "" : repeatType) {
+            case "WEEKLY" -> "每周";
+            case "MONTHLY" -> "每月";
+            default -> "每天";
+        };
+        return "📅 周期提醒：" + originalTitle + "（" + label + "）";
+    }
+
+    // 构建周期提醒的显示时间："{每天/每周/每月} HH:mm | {startDate} 至 {endDate} 共X天"
+    private String buildRecurringDisplayTime(String remindTime, String startDate, String endDate,
+                                              Object totalDaysObj, String repeatType) {
+        if (remindTime == null || remindTime.isBlank()
+                || startDate == null || startDate.isBlank()
+                || endDate == null || endDate.isBlank()) {
+            return null;
+        }
+        // totalDays 安全转换：无法转换或转换后 <=0 都视为非法
+        int totalDays = safeToInt(totalDaysObj, -1);
+        if (totalDays < 0) {
+            return null;
+        }
+        String label = switch (repeatType == null ? "" : repeatType) {
+            case "WEEKLY" -> "每周";
+            case "MONTHLY" -> "每月";
+            default -> "每天";
+        };
+        String displayTime = remindTime.length() >= 5 ? remindTime.substring(0, 5) : remindTime;
+        return label + " " + displayTime + " | " + startDate + " 至 " + endDate + " 共" + totalDays + "天";
     }
 }
