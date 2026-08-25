@@ -1,10 +1,14 @@
 package com.dormrepair.remindme.controller;
 
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse;
+import com.dormrepair.remindme.dto.response.ConflictDetailResponse;
+import com.dormrepair.remindme.dto.request.MultiBatchRequest;
+import com.dormrepair.remindme.dto.request.MultiItemModifyRequest;
 import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.enums.Priority;
 import com.dormrepair.remindme.service.ConfirmationService;
 import com.dormrepair.remindme.service.LLMService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -572,6 +576,179 @@ public class ConfirmationController {
             Map<String, Object> error = new HashMap<>();
             error.put("success", false);
             error.put("message", "处理冲突失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    // ===== 多项事务确认接口 =====
+
+    // 创建多项事务确认会话：批量识别到多项事务后调用，返回多项确认卡片
+    // body 字段：items(事务列表,每项含 title/remindTime/location/note/priority/advanceMinutes)、source(text/excel/pdf/image)
+    @PostMapping("/multi/create")
+    public ResponseEntity<Map<String, Object>> createMultiSession(
+            @RequestParam Long userId,
+            @RequestBody Map<String, Object> body) {
+        try {
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> items = (List<Map<String, Object>>) body.get("items");
+            String source = body.get("source") != null ? String.valueOf(body.get("source")) : "text";
+
+            if (items == null || items.isEmpty()) {
+                Map<String, Object> error = new HashMap<>();
+                error.put("success", false);
+                error.put("message", "事务列表不能为空");
+                return ResponseEntity.badRequest().body(error);
+            }
+
+            ConfirmationCardResponse card = confirmationService.createMultiSession(userId, items, source);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("sessionId", card.getData() != null ? card.getData().getSessionId() : null);
+            result.put("data", card.getData());
+            result.put("message", card.getMessage());
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        } catch (Exception e) {
+            log.error("创建多项事务会话失败: userId={}, error={}", userId, e.getMessage(), e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "创建失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    // 多项事务「确认选中」：对勾选的无冲突条目创建提醒
+    @PostMapping("/multi/{sessionId}/confirm-selected")
+    public ResponseEntity<Map<String, Object>> confirmSelected(
+            @PathVariable String sessionId,
+            @RequestParam Long userId,
+            @RequestBody MultiBatchRequest body) {
+        try {
+            List<Integer> itemIds = body != null ? body.getItemIds() : null;
+            Map<String, Object> result = confirmationService.confirmSelected(sessionId, userId, itemIds);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        } catch (Exception e) {
+            log.error("多项确认失败: sessionId={}, userId={}, error={}", sessionId, userId, e.getMessage(), e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "确认失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    // 多项事务「取消选中」：对勾选的条目标记为取消
+    @PostMapping("/multi/{sessionId}/cancel-selected")
+    public ResponseEntity<Map<String, Object>> cancelSelected(
+            @PathVariable String sessionId,
+            @RequestParam Long userId,
+            @RequestBody MultiBatchRequest body) {
+        try {
+            List<Integer> itemIds = body != null ? body.getItemIds() : null;
+            Map<String, Object> result = confirmationService.cancelSelected(sessionId, userId, itemIds);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        } catch (Exception e) {
+            log.error("多项取消失败: sessionId={}, userId={}, error={}", sessionId, userId, e.getMessage(), e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "取消失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    // 多项事务「覆盖选中」：对勾选的有冲突条目删除冲突提醒后创建，无冲突条目直接创建
+    @PostMapping("/multi/{sessionId}/overwrite-selected")
+    public ResponseEntity<Map<String, Object>> overwriteSelected(
+            @PathVariable String sessionId,
+            @RequestParam Long userId,
+            @RequestBody MultiBatchRequest body) {
+        try {
+            List<Integer> itemIds = body != null ? body.getItemIds() : null;
+            Map<String, Object> result = confirmationService.overwriteSelected(sessionId, userId, itemIds);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        } catch (Exception e) {
+            log.error("多项覆盖失败: sessionId={}, userId={}, error={}", sessionId, userId, e.getMessage(), e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "覆盖失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    // 多项事务「修改单条」：更新某条事务字段后重新检测冲突并刷新卡片
+    @PutMapping("/multi/{sessionId}/item/{index}")
+    public ResponseEntity<Map<String, Object>> modifyMultiItem(
+            @PathVariable String sessionId,
+            @RequestParam Long userId,
+            @PathVariable Integer index,
+            @RequestBody @Valid MultiItemModifyRequest request) {
+        try {
+            Map<String, Object> newData = new HashMap<>();
+            newData.put("title", request.getTitle());
+            newData.put("remindTime", request.getRemindTime());
+            newData.put("endTime", request.getEndTime());
+            newData.put("location", request.getLocation());
+            newData.put("note", request.getNote());
+            newData.put("priority", request.getPriority());
+            newData.put("advanceMinutes", request.getAdvanceMinutes());
+
+            Map<String, Object> result = confirmationService.modifyMultiItem(sessionId, userId, index, newData);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        } catch (Exception e) {
+            log.error("多项修改失败: sessionId={}, userId={}, index={}, error={}", sessionId, userId, index, e.getMessage(), e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "修改失败: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(error);
+        }
+    }
+
+    // 多项事务「获取冲突详情」：点击冲突标记后返回弹窗所需的双向冲突信息
+    @GetMapping("/multi/{sessionId}/item/{index}/conflict")
+    public ResponseEntity<Map<String, Object>> getMultiConflictDetail(
+            @PathVariable String sessionId,
+            @RequestParam Long userId,
+            @PathVariable Integer index) {
+        try {
+            ConflictDetailResponse detail = confirmationService.getMultiConflictDetail(sessionId, userId, index);
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("data", detail);
+            return ResponseEntity.ok(result);
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", e.getMessage());
+            return ResponseEntity.badRequest().body(error);
+        } catch (Exception e) {
+            log.error("获取冲突详情失败: sessionId={}, userId={}, index={}, error={}", sessionId, userId, index, e.getMessage(), e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "获取冲突详情失败: " + e.getMessage());
             return ResponseEntity.internalServerError().body(error);
         }
     }

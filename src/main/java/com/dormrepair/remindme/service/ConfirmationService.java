@@ -6,7 +6,10 @@ import com.dormrepair.remindme.agent.event.EventPublisher;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.Action;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.ConfirmationData;
+import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.MultiItem;
+import com.dormrepair.remindme.dto.response.ConflictDetailResponse;
 import com.dormrepair.remindme.dto.response.ConflictResponse;
+import com.dormrepair.remindme.dto.TaskDetail;
 import com.dormrepair.remindme.entity.ConfirmationSession;
 import com.dormrepair.remindme.entity.ConfirmationSession.SessionStatus;
 import com.dormrepair.remindme.entity.Reminder;
@@ -33,6 +36,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -57,6 +61,7 @@ public class ConfirmationService {
     private final AgentService agentService;
     private final UserService userService;
     private final TransactionTemplate transactionTemplate;
+    private final ReplyTemplateService replyTemplateService;
 
     // 周期提醒服务，用 @Lazy 避免循环依赖
     @org.springframework.beans.factory.annotation.Autowired
@@ -965,6 +970,608 @@ public class ConfirmationService {
         return card;
     }
 
+    // ===== 多项事务确认会话方法 =====
+
+    // 创建多项事务确认会话：为每项事务检测冲突后组装 parsedData，构建并推送多项确认卡片
+    @Transactional(rollbackFor = Exception.class)
+    public ConfirmationCardResponse createMultiSession(Long userId, List<Map<String, Object>> items, String source) {
+        if (items == null || items.isEmpty()) {
+            throw new InvalidInputException("事务列表不能为空");
+        }
+
+        String sessionId = UUID.randomUUID().toString();
+        int defaultAdvance = userService.getUserById(userId)
+                .map(u -> u.getDefaultAdvanceMinutes())
+                .orElse(10);
+
+        // 按 remindTime 排序后处理，确保同批次互相冲突检测按时间顺序进行
+        List<Map<String, Object>> sortedItems = new ArrayList<>(items);
+        sortedItems.sort((a, b) -> {
+            String timeA = a.get("remindTime") != null ? String.valueOf(a.get("remindTime")) : "";
+            String timeB = b.get("remindTime") != null ? String.valueOf(b.get("remindTime")) : "";
+            return timeA.compareTo(timeB);
+        });
+
+        List<Map<String, Object>> processedItems = new ArrayList<>();
+        // 已确认无冲突的 item 列表，用于后续 item 的同批次互相冲突检测
+        List<Map<String, Object>> confirmedItems = new ArrayList<>();
+        for (int i = 0; i < sortedItems.size(); i++) {
+            Map<String, Object> raw = sortedItems.get(i);
+            String title = raw.get("title") != null ? String.valueOf(raw.get("title")).trim() : null;
+            String remindTime = raw.get("remindTime") != null ? String.valueOf(raw.get("remindTime")).trim() : null;
+            if (title == null || title.isBlank() || remindTime == null || remindTime.isBlank()) {
+                throw new InvalidInputException("第 " + (i + 1) + " 项缺少标题或提醒时间");
+            }
+
+            Map<String, Object> item = new HashMap<>();
+            item.put("id", i);
+            item.put("title", title);
+            item.put("remindTime", remindTime);
+            item.put("endTime", raw.get("endTime") != null ? String.valueOf(raw.get("endTime")) : null);
+            item.put("location", raw.get("location") != null ? String.valueOf(raw.get("location")) : null);
+            item.put("note", raw.get("note") != null ? String.valueOf(raw.get("note")) : null);
+            item.put("priority", raw.get("priority") != null ? String.valueOf(raw.get("priority")) : Priority.NORMAL.name());
+            item.put("advanceMinutes", safeToInteger(raw.get("advanceMinutes"), defaultAdvance));
+            item.put("status", "PENDING");
+
+            // 1. 与已有提醒的冲突检测
+            boolean hasDbConflict = false;
+            try {
+                LocalDateTime parsedTime = parseTimeFlexible(remindTime);
+                ConflictResponse conflictResponse = conflictDetectionService.checkConflict(userId, parsedTime, null);
+                if (conflictResponse.isHasConflict()) {
+                    hasDbConflict = true;
+                    String description = conflictDetectionService.getConflictDescription(
+                            conflictResponse.getConflicts(), parsedTime);
+                    item.put("hasConflict", true);
+                    item.put("conflictMessage", description);
+                    if (conflictResponse.getConflicts() != null && !conflictResponse.getConflicts().isEmpty()) {
+                        ConflictResponse.ConflictItem first = conflictResponse.getConflicts().get(0);
+                        item.put("conflictId", first.getId());
+                        item.put("conflictTitle", first.getTitle());
+                        item.put("conflictRemindTime", first.getRemindTime() != null
+                                ? first.getRemindTime().format(TimeUtils.FORMATTER) : null);
+                    }
+                } else {
+                    item.put("hasConflict", false);
+                }
+            } catch (Exception e) {
+                log.warn("多项事务冲突检测失败: item={}, err={}", title, e.getMessage());
+                item.put("hasConflict", false);
+            }
+
+            // 2. 同批次互相冲突检测：遍历 confirmedItems 检查时间重叠
+            String sameBatchConflictTitle = findSameBatchConflictTitle(item, confirmedItems);
+            if (sameBatchConflictTitle != null) {
+                item.put("hasConflict", true);
+                String existingMsg = item.get("conflictMessage") != null
+                        ? String.valueOf(item.get("conflictMessage")) : null;
+                String batchMsg = "与同批次中的「" + sameBatchConflictTitle + "」时间重叠";
+                if (existingMsg != null && !existingMsg.isBlank()) {
+                    item.put("conflictMessage", existingMsg + "；" + batchMsg);
+                } else {
+                    item.put("conflictMessage", batchMsg);
+                }
+            }
+
+            // 3. 只有无冲突的 item 才加入 confirmedItems，供后续 item 检测同批次冲突
+            if (!hasDbConflict && sameBatchConflictTitle == null) {
+                confirmedItems.add(item);
+            }
+
+            processedItems.add(item);
+        }
+
+        Map<String, Object> parsedData = new HashMap<>();
+        parsedData.put("items", processedItems);
+        parsedData.put("totalCount", processedItems.size());
+        parsedData.put("confirmedCount", 0);
+        parsedData.put("cancelledCount", 0);
+        parsedData.put("source", source);
+        parsedData.put("isBatch", true);
+        parsedData.put("isMulti", true);
+        parsedData.put("type", "multi_confirmation");
+
+        String parsedDataJson;
+        try {
+            parsedDataJson = objectMapper.writeValueAsString(parsedData);
+        } catch (JsonProcessingException e) {
+            parsedDataJson = "{}";
+        }
+
+        ConfirmationSession session = ConfirmationSession.builder()
+                .sessionId(sessionId)
+                .userId(userId)
+                .originalInput("多项事务来源: " + source)
+                .parsedData(parsedDataJson)
+                .stage("INFO_CONFIRM")
+                .status(SessionStatus.PENDING)
+                .expiresAt(null) // 多项事务无超时，须用户手动处理
+                .retryCount(0)
+                .attemptCount(0)
+                .maxAttempts(3)
+                .intervalMinutes(10)
+                .build();
+
+        confirmationRepository.save(session);
+
+        ConfirmationCardResponse card = buildMultiConfirmationCard(session, parsedData);
+        pushConfirmationCard(userId, card);
+
+        log.info("创建多项事务确认会话: sessionId={}, userId={}, itemCount={}", sessionId, userId, processedItems.size());
+        return card;
+    }
+
+    // 确认选中的多条事务：跳过已处理项和有冲突项，无冲突项创建提醒并标记 CONFIRMED
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> confirmSelected(String sessionId, Long userId, List<Integer> itemIndexes) {
+        ConfirmationSession session = findValidSession(sessionId, userId);
+        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+        List<Map<String, Object>> items = getMultiItems(parsedData);
+        if (items.isEmpty()) {
+            throw new InvalidInputException("会话中无多项事务数据");
+        }
+
+        int confirmedCount = safeToInteger(parsedData.get("confirmedCount"), 0);
+        int cancelledCount = safeToInteger(parsedData.get("cancelledCount"), 0);
+        int totalCount = items.size();
+
+        List<Map<String, Object>> conflictList = new ArrayList<>();
+        int successCount = 0;
+
+        for (Integer idx : itemIndexes) {
+            if (idx == null || idx < 0 || idx >= items.size()) {
+                continue;
+            }
+            Map<String, Object> item = items.get(idx);
+            String status = String.valueOf(item.getOrDefault("status", "PENDING"));
+            if (!"PENDING".equals(status)) {
+                continue;
+            }
+            boolean hasConflict = safeToBoolean(item.get("hasConflict"), false);
+            if (hasConflict) {
+                Map<String, Object> conflictInfo = new HashMap<>();
+                conflictInfo.put("itemIndex", idx);
+                conflictInfo.put("title", item.get("title"));
+                conflictInfo.put("conflictMessage", item.get("conflictMessage"));
+                conflictList.add(conflictInfo);
+                continue;
+            }
+            createReminder(userId, item, ConfirmStatus.CONFIRMED);
+            item.put("status", "CONFIRMED");
+            successCount++;
+            confirmedCount++;
+        }
+
+        parsedData.put("items", items);
+        parsedData.put("confirmedCount", confirmedCount);
+        parsedData.put("cancelledCount", cancelledCount);
+        saveMultiParsedData(session, parsedData);
+
+        boolean allProcessed = (confirmedCount + cancelledCount) == totalCount;
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("confirmedCount", successCount);
+        result.put("conflictCount", conflictList.size());
+        result.put("conflictList", conflictList);
+        result.put("allProcessed", allProcessed);
+        result.put("sessionId", sessionId);
+        if (allProcessed) {
+            result.put("message", buildMultiReply(session, items));
+        } else {
+            result.put("message", buildMultiResultMessage(successCount, conflictList.size(), "确认"));
+        }
+        log.info("多项确认选中: sessionId={}, userId={}, success={}, conflict={}",
+                sessionId, userId, successCount, conflictList.size());
+        return result;
+    }
+
+    // 取消选中的多条事务：仅将 PENDING 项标记为 CANCELLED，不创建提醒
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> cancelSelected(String sessionId, Long userId, List<Integer> itemIndexes) {
+        ConfirmationSession session = findValidSession(sessionId, userId);
+        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+        List<Map<String, Object>> items = getMultiItems(parsedData);
+        if (items.isEmpty()) {
+            throw new InvalidInputException("会话中无多项事务数据");
+        }
+
+        int confirmedCount = safeToInteger(parsedData.get("confirmedCount"), 0);
+        int cancelledCount = safeToInteger(parsedData.get("cancelledCount"), 0);
+        int totalCount = items.size();
+        int cancelCount = 0;
+
+        for (Integer idx : itemIndexes) {
+            if (idx == null || idx < 0 || idx >= items.size()) {
+                continue;
+            }
+            Map<String, Object> item = items.get(idx);
+            String status = String.valueOf(item.getOrDefault("status", "PENDING"));
+            if (!"PENDING".equals(status)) {
+                continue;
+            }
+            item.put("status", "CANCELLED");
+            cancelCount++;
+            cancelledCount++;
+        }
+
+        parsedData.put("items", items);
+        parsedData.put("confirmedCount", confirmedCount);
+        parsedData.put("cancelledCount", cancelledCount);
+        saveMultiParsedData(session, parsedData);
+
+        boolean allProcessed = (confirmedCount + cancelledCount) == totalCount;
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("cancelledCount", cancelCount);
+        result.put("allProcessed", allProcessed);
+        result.put("sessionId", sessionId);
+        if (allProcessed) {
+            result.put("message", buildMultiReply(session, items));
+        } else {
+            result.put("message", buildMultiResultMessage(cancelCount, 0, "取消"));
+        }
+        log.info("多项取消选中: sessionId={}, userId={}, cancelled={}", sessionId, userId, cancelCount);
+        return result;
+    }
+
+    // 覆盖选中的多条事务：有冲突项先删除冲突提醒再创建，无冲突项直接创建
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> overwriteSelected(String sessionId, Long userId, List<Integer> itemIndexes) {
+        ConfirmationSession session = findValidSession(sessionId, userId);
+        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+        List<Map<String, Object>> items = getMultiItems(parsedData);
+        if (items.isEmpty()) {
+            throw new InvalidInputException("会话中无多项事务数据");
+        }
+
+        int confirmedCount = safeToInteger(parsedData.get("confirmedCount"), 0);
+        int cancelledCount = safeToInteger(parsedData.get("cancelledCount"), 0);
+        int totalCount = items.size();
+        int successCount = 0;
+        int overwrittenCount = 0;
+
+        for (Integer idx : itemIndexes) {
+            if (idx == null || idx < 0 || idx >= items.size()) {
+                continue;
+            }
+            Map<String, Object> item = items.get(idx);
+            String status = String.valueOf(item.getOrDefault("status", "PENDING"));
+            if (!"PENDING".equals(status)) {
+                continue;
+            }
+            boolean hasConflict = safeToBoolean(item.get("hasConflict"), false);
+            if (hasConflict && item.get("conflictId") != null) {
+                Long conflictId = Long.valueOf(String.valueOf(item.get("conflictId")));
+                deleteConflicts(userId, List.of(conflictId));
+                overwrittenCount++;
+            }
+            createReminder(userId, item, ConfirmStatus.CONFIRMED);
+            item.put("status", "CONFIRMED");
+            successCount++;
+            confirmedCount++;
+        }
+
+        parsedData.put("items", items);
+        parsedData.put("confirmedCount", confirmedCount);
+        parsedData.put("cancelledCount", cancelledCount);
+        saveMultiParsedData(session, parsedData);
+
+        boolean allProcessed = (confirmedCount + cancelledCount) == totalCount;
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("confirmedCount", successCount);
+        result.put("overwrittenCount", overwrittenCount);
+        result.put("allProcessed", allProcessed);
+        result.put("sessionId", sessionId);
+        if (allProcessed) {
+            result.put("message", buildMultiReply(session, items));
+        } else {
+            result.put("message", buildMultiResultMessage(successCount, overwrittenCount, "覆盖"));
+        }
+        log.info("多项覆盖选中: sessionId={}, userId={}, success={}, overwritten={}",
+                sessionId, userId, successCount, overwrittenCount);
+        return result;
+    }
+
+    // 修改单条事务：更新字段后重新检测冲突，返回更新后的卡片数据
+    @Transactional(rollbackFor = Exception.class)
+    public Map<String, Object> modifyMultiItem(String sessionId, Long userId, Integer itemIndex, Map<String, Object> newData) {
+        ConfirmationSession session = findValidSession(sessionId, userId);
+        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+        List<Map<String, Object>> items = getMultiItems(parsedData);
+
+        if (itemIndex == null || itemIndex < 0 || itemIndex >= items.size()) {
+            throw new InvalidInputException("条目索引无效");
+        }
+        Map<String, Object> item = items.get(itemIndex);
+        String status = String.valueOf(item.getOrDefault("status", "PENDING"));
+        if (!"PENDING".equals(status)) {
+            throw new InvalidInputException("该条目已处理，不能修改");
+        }
+
+        if (newData.get("title") != null) {
+            item.put("title", String.valueOf(newData.get("title")).trim());
+        }
+        if (newData.get("remindTime") != null) {
+            item.put("remindTime", String.valueOf(newData.get("remindTime")).trim());
+        }
+        if (newData.get("endTime") != null) {
+            item.put("endTime", String.valueOf(newData.get("endTime")));
+        }
+        if (newData.get("location") != null) {
+            item.put("location", String.valueOf(newData.get("location")));
+        }
+        if (newData.get("note") != null) {
+            item.put("note", String.valueOf(newData.get("note")));
+        }
+        if (newData.get("priority") != null) {
+            item.put("priority", String.valueOf(newData.get("priority")));
+        }
+        if (newData.get("advanceMinutes") != null) {
+            item.put("advanceMinutes", safeToInteger(newData.get("advanceMinutes"), 10));
+        }
+
+        // 重新检测冲突
+        String remindTime = String.valueOf(item.get("remindTime"));
+        try {
+            LocalDateTime parsedTime = parseTimeFlexible(remindTime);
+            ConflictResponse conflictResponse = conflictDetectionService.checkConflict(userId, parsedTime, null);
+            if (conflictResponse.isHasConflict()) {
+                String description = conflictDetectionService.getConflictDescription(
+                        conflictResponse.getConflicts(), parsedTime);
+                item.put("hasConflict", true);
+                item.put("conflictMessage", description);
+                if (conflictResponse.getConflicts() != null && !conflictResponse.getConflicts().isEmpty()) {
+                    ConflictResponse.ConflictItem first = conflictResponse.getConflicts().get(0);
+                    item.put("conflictId", first.getId());
+                    item.put("conflictTitle", first.getTitle());
+                    item.put("conflictRemindTime", first.getRemindTime() != null
+                            ? first.getRemindTime().format(TimeUtils.FORMATTER) : null);
+                }
+            } else {
+                item.put("hasConflict", false);
+                item.remove("conflictMessage");
+                item.remove("conflictId");
+                item.remove("conflictTitle");
+                item.remove("conflictRemindTime");
+            }
+        } catch (Exception e) {
+            log.warn("修改后冲突检测失败: {}", e.getMessage());
+            item.put("hasConflict", false);
+        }
+
+        recountMultiStats(parsedData, items);
+        saveMultiParsedData(session, parsedData);
+
+        ConfirmationCardResponse card = buildMultiConfirmationCard(session, parsedData);
+        Map<String, Object> result = new HashMap<>();
+        result.put("success", true);
+        result.put("message", "已修改该条目");
+        result.put("data", card.getData());
+        result.put("sessionId", sessionId);
+        return result;
+    }
+
+    // 获取单条冲突详情（供前端弹窗使用）：按 conflictId 查询冲突提醒详情
+    public ConflictDetailResponse getMultiConflictDetail(String sessionId, Long userId, Integer itemIndex) {
+        ConfirmationSession session = findValidSession(sessionId, userId);
+        Map<String, Object> parsedData = parseParsedData(session.getParsedData());
+        List<Map<String, Object>> items = getMultiItems(parsedData);
+
+        if (itemIndex == null || itemIndex < 0 || itemIndex >= items.size()) {
+            throw new InvalidInputException("条目索引无效");
+        }
+        Map<String, Object> item = items.get(itemIndex);
+        if (!safeToBoolean(item.get("hasConflict"), false)) {
+            throw new InvalidInputException("该条目无冲突");
+        }
+
+        Long conflictId = item.get("conflictId") != null ? Long.valueOf(String.valueOf(item.get("conflictId"))) : null;
+        String conflictTitle = null;
+        String conflictRemindTime = null;
+        String conflictLocation = null;
+        if (conflictId != null) {
+            Reminder conflictReminder = reminderRepository.findById(conflictId)
+                    .filter(r -> r.getUserId().equals(userId))
+                    .orElse(null);
+            if (conflictReminder != null) {
+                conflictTitle = conflictReminder.getTitle();
+                conflictRemindTime = conflictReminder.getRemindTime() != null
+                        ? conflictReminder.getRemindTime().format(TimeUtils.FORMATTER) : null;
+                conflictLocation = conflictReminder.getLocation();
+            }
+        }
+
+        return ConflictDetailResponse.builder()
+                .currentId(itemIndex.longValue())
+                .currentTitle(String.valueOf(item.get("title")))
+                .currentRemindTime(String.valueOf(item.get("remindTime")))
+                .currentLocation(item.get("location") != null ? String.valueOf(item.get("location")) : null)
+                .conflictReminderId(conflictId)
+                .conflictTitle(conflictTitle)
+                .conflictRemindTime(conflictRemindTime)
+                .conflictLocation(conflictLocation)
+                .conflictMessage(item.get("conflictMessage") != null ? String.valueOf(item.get("conflictMessage")) : null)
+                .build();
+    }
+
+    // 构建多项事务确认卡片：从 parsedData 提取条目与统计字段，组装卡片数据与按钮
+    private ConfirmationCardResponse buildMultiConfirmationCard(ConfirmationSession session, Map<String, Object> parsedData) {
+        List<Map<String, Object>> items = getMultiItems(parsedData);
+        int totalCount = items.size();
+        int[] stats = countMultiItemStats(items);
+        int confirmedCount = stats[0];
+        int cancelledCount = stats[1];
+        int conflictCount = stats[2];
+        int pendingCount = totalCount - confirmedCount - cancelledCount;
+
+        ConfirmationData data = ConfirmationData.builder()
+                .sessionId(session.getSessionId())
+                .multiItems(buildMultiItemList(items))
+                .totalCount(totalCount)
+                .confirmedCount(confirmedCount)
+                .cancelledCount(cancelledCount)
+                .pendingCount(pendingCount)
+                .conflictCount(conflictCount)
+                .isMulti(true)
+                .build();
+
+        String message;
+        if (conflictCount > 0) {
+            message = "📋 识别到 " + totalCount + " 项事务，其中 " + conflictCount + " 项存在时间冲突，请处理";
+        } else {
+            message = "📋 识别到 " + totalCount + " 项事务，请确认";
+        }
+
+        List<Action> actions = Arrays.asList(
+                Action.builder().id("confirm_selected").label("✅ 确认选中").style("primary").build(),
+                Action.builder().id("cancel_selected").label("❌ 取消选中").style("danger").build(),
+                Action.builder().id("overwrite_selected").label("📝 覆盖选中").style("warning").build()
+        );
+
+        return ConfirmationCardResponse.builder()
+                .type("multi_confirmation_card")
+                .message(message)
+                .data(data)
+                .actions(actions)
+                .timeout(null) // 多项事务无超时
+                .expiresAt(null)
+                .build();
+    }
+
+    // 从 parsedData 提取多项事务条目列表，兼容反序列化后的 List<LinkedHashMap>
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> getMultiItems(Map<String, Object> parsedData) {
+        Object itemsObj = parsedData.get("items");
+        if (itemsObj instanceof List) {
+            return (List<Map<String, Object>>) itemsObj;
+        }
+        return new ArrayList<>();
+    }
+
+    // 重新序列化多项事务 parsedData 并保存会话
+    private void saveMultiParsedData(ConfirmationSession session, Map<String, Object> parsedData) {
+        try {
+            session.setParsedData(objectMapper.writeValueAsString(parsedData));
+        } catch (JsonProcessingException e) {
+            log.warn("序列化多项事务 parsedData 失败: {}", e.getMessage());
+        }
+        confirmationRepository.save(session);
+    }
+
+    // 统计条目状态：返回 [confirmedCount, cancelledCount, conflictCount]
+    private int[] countMultiItemStats(List<Map<String, Object>> items) {
+        int confirmed = 0;
+        int cancelled = 0;
+        int conflict = 0;
+        for (Map<String, Object> item : items) {
+            String status = String.valueOf(item.getOrDefault("status", "PENDING"));
+            if ("CONFIRMED".equals(status)) {
+                confirmed++;
+            } else if ("CANCELLED".equals(status)) {
+                cancelled++;
+            }
+            if (safeToBoolean(item.get("hasConflict"), false)) {
+                conflict++;
+            }
+        }
+        return new int[]{confirmed, cancelled, conflict};
+    }
+
+    // 根据 items 列表更新 parsedData 中的统计字段
+    private void recountMultiStats(Map<String, Object> parsedData, List<Map<String, Object>> items) {
+        int[] stats = countMultiItemStats(items);
+        parsedData.put("totalCount", items.size());
+        parsedData.put("confirmedCount", stats[0]);
+        parsedData.put("cancelledCount", stats[1]);
+    }
+
+    // 将 items Map 列表映射为 MultiItem DTO 列表，确保前端字段完整
+    private List<MultiItem> buildMultiItemList(List<Map<String, Object>> items) {
+        List<MultiItem> list = new ArrayList<>();
+        for (int i = 0; i < items.size(); i++) {
+            Map<String, Object> item = items.get(i);
+            list.add(MultiItem.builder()
+                    .id(i)
+                    .title(String.valueOf(item.get("title")))
+                    .remindTime(item.get("remindTime") != null ? String.valueOf(item.get("remindTime")) : null)
+                    .endTime(item.get("endTime") != null ? String.valueOf(item.get("endTime")) : null)
+                    .location(item.get("location") != null ? String.valueOf(item.get("location")) : null)
+                    .note(item.get("note") != null ? String.valueOf(item.get("note")) : null)
+                    .priority(item.get("priority") != null ? String.valueOf(item.get("priority")) : null)
+                    .advanceMinutes(item.get("advanceMinutes") != null ? safeToInteger(item.get("advanceMinutes"), 10) : null)
+                    .status(String.valueOf(item.getOrDefault("status", "PENDING")))
+                    .hasConflict(safeToBoolean(item.get("hasConflict"), false))
+                    .conflictMessage(item.get("conflictMessage") != null ? String.valueOf(item.get("conflictMessage")) : null)
+                    .conflictId(item.get("conflictId") != null ? Long.valueOf(String.valueOf(item.get("conflictId"))) : null)
+                    .conflictTitle(item.get("conflictTitle") != null ? String.valueOf(item.get("conflictTitle")) : null)
+                    .conflictRemindTime(item.get("conflictRemindTime") != null ? String.valueOf(item.get("conflictRemindTime")) : null)
+                    .selected(false)
+                    .build());
+        }
+        return list;
+    }
+
+    // 为每条事务准备前端显示数据（确保字段完整），供 getSessionData 等场景复用
+    private List<Map<String, Object>> prepareItemsForFrontend(List<Map<String, Object>> items) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (int i = 0; i < items.size(); i++) {
+            Map<String, Object> item = items.get(i);
+            Map<String, Object> view = new HashMap<>(item);
+            view.put("id", i);
+            view.putIfAbsent("status", "PENDING");
+            view.putIfAbsent("hasConflict", false);
+            view.putIfAbsent("priority", Priority.NORMAL.name());
+            result.add(view);
+        }
+        return result;
+    }
+
+    // 检查多项事务是否全部处理完成（已确认 + 已取消 == 总数）
+    private boolean isAllItemsProcessed(Map<String, Object> parsedData) {
+        int total = safeToInteger(parsedData.get("totalCount"), 0);
+        int confirmed = safeToInteger(parsedData.get("confirmedCount"), 0);
+        int cancelled = safeToInteger(parsedData.get("cancelledCount"), 0);
+        return total > 0 && (confirmed + cancelled) == total;
+    }
+
+    // 生成多项操作结果文案
+    private String buildMultiResultMessage(int count, int extra, String action) {
+        StringBuilder sb = new StringBuilder();
+        switch (action) {
+            case "确认" -> {
+                sb.append("✅ 已确认 ").append(count).append(" 项");
+                if (extra > 0) {
+                    sb.append("，").append(extra).append(" 项有冲突需处理");
+                }
+            }
+            case "取消" -> sb.append("❌ 已取消 ").append(count).append(" 项");
+            case "覆盖" -> sb.append("📝 已覆盖 ").append(count).append(" 项");
+            default -> sb.append("操作完成");
+        }
+        return sb.toString();
+    }
+
+    // 所有条目处理完成后，生成四段式结构化回复
+    // 将 items Map 列表转为 TaskDetail 列表，调用 ReplyTemplateService 生成完整回复
+    private String buildMultiReply(ConfirmationSession session, List<Map<String, Object>> items) {
+        try {
+            List<TaskDetail> tasks = new ArrayList<>();
+            for (int i = 0; i < items.size(); i++) {
+                tasks.add(TaskDetail.fromMap(items.get(i)));
+            }
+            String userInput = session != null ? session.getOriginalInput() : null;
+            return replyTemplateService.buildReply(userInput, tasks);
+        } catch (Exception e) {
+            log.warn("生成多任务结构化回复失败，回退简单文案: err={}", e.getMessage());
+            return "✅ 多项事务已处理完成";
+        }
+    }
+
     // 定时清理过期会话：每 15 秒扫描一次，只处理有超时的会话（expiresAt 不为 null）
     @Scheduled(fixedRate = 15000)
     @Transactional(rollbackFor = Exception.class)
@@ -1125,6 +1732,42 @@ public class ConfirmationService {
             timeStr,
             0
         );
+    }
+
+    // 同批次时间重叠检测：返回与当前 item 时间重叠的已确认 item 标题，无重叠返回 null
+    // 重叠判定：startA < endB && startB < endA
+    //   其中 start = remindTime - advanceMinutes，end = remindTime
+    private String findSameBatchConflictTitle(Map<String, Object> currentItem, List<Map<String, Object>> confirmedItems) {
+        if (currentItem == null || confirmedItems == null || confirmedItems.isEmpty()) {
+            return null;
+        }
+        LocalDateTime currentRemindTime;
+        try {
+            currentRemindTime = parseTimeFlexible(String.valueOf(currentItem.get("remindTime")));
+        } catch (Exception e) {
+            return null;
+        }
+        int currentAdvance = safeToInteger(currentItem.get("advanceMinutes"), 0);
+        LocalDateTime currentStart = currentRemindTime.minusMinutes(currentAdvance);
+        LocalDateTime currentEnd = currentRemindTime;
+
+        for (Map<String, Object> confirmed : confirmedItems) {
+            LocalDateTime confirmedRemindTime;
+            try {
+                confirmedRemindTime = parseTimeFlexible(String.valueOf(confirmed.get("remindTime")));
+            } catch (Exception e) {
+                continue;
+            }
+            int confirmedAdvance = safeToInteger(confirmed.get("advanceMinutes"), 0);
+            LocalDateTime confirmedStart = confirmedRemindTime.minusMinutes(confirmedAdvance);
+            LocalDateTime confirmedEnd = confirmedRemindTime;
+
+            // 标准区间重叠判定：startA < endB && startB < endA
+            if (currentStart.isBefore(confirmedEnd) && confirmedStart.isBefore(currentEnd)) {
+                return String.valueOf(confirmed.get("title"));
+            }
+        }
+        return null;
     }
 
     // 查找有效会话：状态须为 PENDING 且未过期（expiresAt 为 null 表示无超时，如周期提醒/冲突会话）
@@ -1632,6 +2275,20 @@ public class ConfirmationService {
                             data.put("remindTime", displayTime);
                         }
                         // displayTime 为 null 时保留原 remindTime，避免显示空白
+                    }
+
+                    // 多项事务：填充 multiItems 与统计字段，供前端 fetchCardData 刷新卡片
+                    boolean isMulti = safeToBoolean(parsedData.get("isMulti"), false);
+                    if (isMulti) {
+                        List<Map<String, Object>> multiItems = getMultiItems(parsedData);
+                        int[] stats = countMultiItemStats(multiItems);
+                        data.put("isMulti", true);
+                        data.put("multiItems", buildMultiItemList(multiItems));
+                        data.put("totalCount", multiItems.size());
+                        data.put("confirmedCount", stats[0]);
+                        data.put("cancelledCount", stats[1]);
+                        data.put("pendingCount", multiItems.size() - stats[0] - stats[1]);
+                        data.put("conflictCount", stats[2]);
                     }
                     return data;
                 })

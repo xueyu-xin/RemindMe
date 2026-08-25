@@ -90,6 +90,48 @@ function handleWebSocketMessageV2(msg) {
         return false;
     }
 
+    // 多项事务确认卡片：与单条 confirmation_card 同样的交互骨架，但数据结构含 items 列表
+    if (msg.type === 'multi_confirmation_card') {
+        // 清理临时消息
+        if (typeof removeTempMessages === 'function') removeTempMessages();
+
+        // 显示引导语（如果有），打上 groupId 便于后续按会话清理
+        var mLeadMsg = msg.leadMessage || msg.naturalMessage || msg.message;
+        var mWsSessionId = msg.data ? msg.data.sessionId : msg.sessionId;
+        if (mLeadMsg && typeof addMessage === 'function') {
+            addMessage('bot', mLeadMsg, { skipSave: true, isTemp: true, groupId: 'card-' + mWsSessionId });
+        }
+
+        // 去重检查：同 sessionId 的卡片已存在则跳过
+        if (mWsSessionId) {
+            var existingMultiCard = document.querySelector('.confirmation-card[data-session-id="' + mWsSessionId + '"]');
+            if (existingMultiCard) return true;
+        }
+
+        // 保存待确认会话状态
+        if (mWsSessionId) {
+            try {
+                savePendingSession(mWsSessionId, mLeadMsg || '', msg);
+            } catch (_) {}
+        }
+
+        // 调用 CardSystem 显示多项卡片（CardSystem.show 内部会根据 data.isMulti 走专用渲染路径）
+        if (window.CardSystem) {
+            CardSystem.show({
+                message: msg.message || '📋 检测到多项事务，请确认',
+                data: msg.data || {},
+                actions: msg.actions || [
+                    { id: 'confirm_selected', label: '✅ 确认选中', style: 'primary' },
+                    { id: 'cancel_selected', label: '❌ 取消选中', style: 'danger' },
+                    { id: 'overwrite_selected', label: '📝 覆盖选中', style: 'warning' }
+                ],
+                expiresAt: null  // 多项事务卡片无超时
+            });
+            return true;
+        }
+        return false;
+    }
+
     if (msg.type === 'card_confirmed' || msg.type === 'card_cancelled') {
         var confirmSessionId = msg.data ? msg.data.sessionId : msg.sessionId;
         
@@ -204,12 +246,137 @@ function handleConfirmationActionV2(actionId, sessionId) {
         });
 }
 
+// ===== 多项事务卡片批量操作处理 =====
+// 由 card.js 的批量按钮和冲突弹窗调用；itemIds 缺省时从卡片复选框收集
+function handleMultiCardAction(actionId, sessionId, itemIds) {
+    var userId = localStorage.getItem('userId');
+    var headers = getAuthHeaders();
+    var cardEl = document.getElementById('card-' + sessionId);
+
+    // 收集选中的条目索引（复选框 data-item-id）
+    if (!itemIds || !itemIds.length) {
+        itemIds = [];
+        if (cardEl) {
+            var boxes = cardEl.querySelectorAll('.multi-item-checkbox:checked');
+            for (var i = 0; i < boxes.length; i++) {
+                var id = boxes[i].getAttribute('data-item-id');
+                if (id != null) itemIds.push(parseInt(id, 10));
+            }
+        }
+    }
+    if (!itemIds || !itemIds.length) {
+        if (typeof addMessage === 'function') {
+            addMessage('bot', '⚠️ 请先勾选要操作的条目～', { skipSave: false });
+        }
+        return;
+    }
+
+    // 操作 → 端点映射
+    var endpointMap = {
+        confirm_selected: '/api/confirmations/multi/' + sessionId + '/confirm-selected',
+        cancel_selected: '/api/confirmations/multi/' + sessionId + '/cancel-selected',
+        overwrite_selected: '/api/confirmations/multi/' + sessionId + '/overwrite-selected'
+    };
+    var endpoint = endpointMap[actionId];
+    if (!endpoint) {
+        if (typeof addMessage === 'function') {
+            addMessage('bot', '❌ 未知操作：' + actionId, { skipSave: false });
+        }
+        return;
+    }
+
+    // 覆盖操作按项目约束直接执行（不弹 confirm 窗），所有操作统一 loading 反馈
+    setMultiCardButtonsLoading(cardEl, actionId);
+
+    fetch(endpoint + '?userId=' + userId, {
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify({ itemIds: itemIds })
+    }).then(function(res) { return res.json(); })
+    .then(function(result) {
+        if (result.success) {
+            var data = result.data || result || {};
+            // 后端多项操作返回 allProcessed 标记是否全部处理完成（兼容 allDone 命名）
+            var allDone = data.allProcessed === true || data.allDone === true;
+
+            if (allDone) {
+                // 全部处理完成：终结清理（引导语、卡片、会话状态）
+                if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + sessionId);
+                var doneCardEl = document.querySelector('.confirmation-card[data-session-id="' + sessionId + '"]');
+                if (doneCardEl) doneCardEl.remove();
+                if (typeof clearPendingSession === 'function') clearPendingSession(sessionId);
+                if (window.CardSystem) CardSystem.removeCard(sessionId);
+                if (sessionId && processedSessionIds) processedSessionIds[sessionId] = 'done';
+                if (typeof addMessage === 'function') {
+                    addMessage('bot', result.message || '✅ 多项事务已处理完成', { skipSave: false });
+                }
+                if (typeof renderCalendar === 'function') renderCalendar();
+            } else {
+                // 仍有未处理条目：刷新卡片数据，显示进度提示
+                if (window.CardSystem && typeof CardSystem.updateMultiCardStatus === 'function' && data.multiItems) {
+                    CardSystem.updateMultiCardStatus(sessionId, data);
+                } else if (window.CardSystem && typeof CardSystem.fetchCardData === 'function') {
+                    CardSystem.fetchCardData(sessionId, userId);
+                }
+                if (typeof addMessage === 'function') {
+                    addMessage('bot', result.message || '✅ 已处理选中条目', { skipSave: false });
+                }
+                if (typeof renderCalendar === 'function') renderCalendar();
+            }
+        } else {
+            // 失败：恢复按钮，提示错误
+            restoreMultiCardButtons(cardEl);
+            if (typeof addMessage === 'function') {
+                addMessage('bot', '❌ ' + (result.message || '操作失败'), { skipSave: false });
+            }
+        }
+    }).catch(function(err) {
+        restoreMultiCardButtons(cardEl);
+        if (typeof addMessage === 'function') {
+            addMessage('bot', '❌ 请求失败：' + (err && err.message ? err.message : '请重试'), { skipSave: false });
+        }
+    });
+}
+
+// 多项卡片批量按钮统一 loading 反馈：禁用所有按钮，触发按钮显示加载文案
+function setMultiCardButtonsLoading(cardEl, actionId) {
+    if (!cardEl) return;
+    var btns = cardEl.querySelectorAll('.multi-card-actions .action-btn');
+    var loadingText = {
+        confirm_selected: '⏳ 确认中...',
+        cancel_selected: '⏳ 取消中...',
+        overwrite_selected: '⏳ 覆盖中...'
+    };
+    for (var i = 0; i < btns.length; i++) {
+        btns[i].disabled = true;
+        if (btns[i].getAttribute('data-action-id') === actionId) {
+            btns[i].setAttribute('data-original-text', btns[i].textContent);
+            btns[i].textContent = loadingText[actionId] || '⏳ 处理中...';
+        }
+    }
+}
+
+// 恢复多项卡片批量按钮状态
+function restoreMultiCardButtons(cardEl) {
+    if (!cardEl) return;
+    var btns = cardEl.querySelectorAll('.multi-card-actions .action-btn');
+    for (var i = 0; i < btns.length; i++) {
+        btns[i].disabled = false;
+        var orig = btns[i].getAttribute('data-original-text');
+        if (orig) {
+            btns[i].textContent = orig;
+            btns[i].removeAttribute('data-original-text');
+        }
+    }
+}
+
 // ===== 导出全局接口 =====
 window.initApp = initApp;
 window.handleWebSocketMessageV2 = handleWebSocketMessageV2;
 // 兼容：WS订阅处调用 handleWebSocketMessage
 window.handleWebSocketMessage = handleWebSocketMessageV2;
 window.handleConfirmationActionV2 = handleConfirmationActionV2;
+window.handleMultiCardAction = handleMultiCardAction;
 window.removeTempMessages = removeTempMessages;
 window.removeMessagesByGroup = removeMessagesByGroup;
 window.addMessage = addMessage;
@@ -365,7 +532,8 @@ window.saveMessageToBackend = saveMessageToBackend;
             var container = document.getElementById('confirmationContainer');
 
             // 使用 CardSystem 处理确认卡片（如可用）
-            if (window.CardSystem && (card.type === 'confirmation_card' || card.type === 'single_confirm_card')) {
+            // multi_confirmation_card 走同一入口，CardSystem.show 内部按 data.isMulti 路由到专用渲染
+            if (window.CardSystem && (card.type === 'confirmation_card' || card.type === 'single_confirm_card' || card.type === 'multi_confirmation_card')) {
                 CardSystem.show({
                     message: card.message || '请确认信息',
                     data: card.data || {},

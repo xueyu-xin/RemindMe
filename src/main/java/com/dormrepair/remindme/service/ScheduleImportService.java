@@ -54,6 +54,9 @@ public class ScheduleImportService {
     private final ConflictDetectionService conflictDetectionService;
     private final UserRepository userRepository;
     private final ReminderRepository reminderRepository;
+    // 图片识别服务与多项确认服务：通用图片识别后构建多项事务确认卡片
+    private final ImageRecognitionService imageRecognitionService;
+    private final ConfirmationService confirmationService;
 
     // 课表识别结果缓存，importId 映射到识别出的 ScheduleTableDTO
     private final Map<Long, ScheduleTableDTO> scheduleTableCache = new ConcurrentHashMap<>();
@@ -85,17 +88,23 @@ public class ScheduleImportService {
             if (tableResult.getSuccess() != null && tableResult.getSuccess() && tableResult.getCourses() != null && !tableResult.getCourses().isEmpty()) {
                 return processScheduleTableFromDTO(tableResult, fileType, userId, fileName);
             }
-            // 课表识别失败，回退到通用日程识别
+            // 课表识别失败，回退到通用图片识别 → 创建多项事务确认卡片
             log.warn("图片课表识别失败，回退到通用识别：fileName={}", fileName);
-            List<ScheduleItemDTO> recognizedItems = qwenRecognitionService.recognizeImage(base64);
-            if (recognizedItems.isEmpty()) {
-                log.warn("图片未识别到任何日程：fileName={}", fileName);
+            List<Map<String, Object>> multiItems = imageRecognitionService.recognizeSchedule(base64);
+            if (multiItems.isEmpty()) {
+                log.warn("图片未识别到任何事务：fileName={}", fileName);
                 Map<String, Object> result = new HashMap<>();
                 result.put("success", false);
-                result.put("message", "未识别到任何日程信息，请检查文件内容");
+                result.put("message", "未识别到任何日程信息，请手动输入");
                 return result;
             }
-            return buildImportResult(userId, fileName, fileType, recognizedItems);
+            ConfirmationCardResponse card = confirmationService.createMultiSession(userId, multiItems, "image");
+            Map<String, Object> result = new HashMap<>();
+            result.put("success", true);
+            result.put("sessionId", card.getData() != null ? card.getData().getSessionId() : null);
+            result.put("message", "识别完成，请确认");
+            result.put("totalCount", multiItems.size());
+            return result;
         } else {
             content = FileParserUtil.parseFile(file);
         }

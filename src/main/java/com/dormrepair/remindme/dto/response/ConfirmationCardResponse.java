@@ -104,6 +104,23 @@ public class ConfirmationCardResponse {
         // 批量导入完成后失败/跳过的数量
         private Integer failedCount;
 
+        // ===== 多项事务确认场景字段 =====
+
+        // 多项事务条目列表（每条对应一项独立提醒，区别于课表导入的 items）
+        private List<MultiItem> multiItems;
+        // 多项事务已确认数量
+        private Integer confirmedCount;
+        // 多项事务已取消数量
+        private Integer cancelledCount;
+        // 多项事务待处理数量
+        private Integer pendingCount;
+        // 多项事务存在冲突的数量
+        private Integer conflictCount;
+        // 是否为多项事务卡片：前端据此分支渲染，区别于 isBatch（课表批量导入）
+        @JsonProperty("isMulti")
+        @Builder.Default
+        private Boolean isMulti = false;
+
         // ===== 课表场景专用字段 =====
 
         // 节次时间表：课表识别完成后给用户自定义每节课的起止时间
@@ -138,6 +155,45 @@ public class ConfirmationCardResponse {
         private Boolean hasConflict;
         // 冲突描述文案
         private String conflictMessage;
+    }
+
+    // 多项事务确认场景中的单条事务条目，每条对应一项独立提醒
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class MultiItem {
+        // 条目索引（从 0 开始，与前端列表位置对应）
+        private Integer id;
+        // 事务标题
+        private String title;
+        // 提醒时间（完整时间字符串 yyyy-MM-dd HH:mm:ss）
+        private String remindTime;
+        // 结束时间（可选）
+        private String endTime;
+        // 地点（可选）
+        private String location;
+        // 备注（可选）
+        private String note;
+        // 优先级：HIGH/NORMAL/LOW
+        private String priority;
+        // 提前提醒分钟数
+        private Integer advanceMinutes;
+        // 条目状态：PENDING / CONFIRMED / CANCELLED
+        private String status;
+        // 是否与已有提醒存在时间冲突
+        private Boolean hasConflict;
+        // 冲突描述信息
+        private String conflictMessage;
+        // 冲突的提醒 ID（用于覆盖操作定位冲突来源）
+        private Long conflictId;
+        // 冲突提醒的标题（弹窗显示用）
+        private String conflictTitle;
+        // 冲突提醒的时间（弹窗显示用）
+        private String conflictRemindTime;
+        // 用户是否勾选（前端勾选状态，后端不持久化，仅用于前后端交互）
+        private Boolean selected;
     }
 
     // 卡片可点击按钮的定义

@@ -67,10 +67,17 @@ public interface ReminderRepository extends JpaRepository<Reminder, Long> {
             @Param("endTime") LocalDateTime endTime
     );
 
-    // 按ID列表 + 用户ID批量更新状态，用于取消提醒的原子操作
+    // 按 ID 列表 + 用户 ID 批量更新状态，用于取消提醒的原子操作
     @Modifying
     @Query("UPDATE Reminder r SET r.status = :status WHERE r.id IN :ids AND r.userId = :userId")
     int bulkCancelByIds(@Param("ids") List<Long> ids,
                         @Param("userId") Long userId,
                         @Param("status") ReminderStatus status);
+
+    // 按 userId + title + remindTime + 状态集合 计数，用于批量创建前的去重检查
+    // 匹配 reminders 表中未取消/未过期的同用户同标题同时间提醒，避免重复创建
+    long countByUserIdAndTitleAndRemindTimeAndStatusIn(Long userId,
+                                                        String title,
+                                                        LocalDateTime remindTime,
+                                                        List<ReminderStatus> statuses);
 }

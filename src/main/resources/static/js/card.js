@@ -53,8 +53,9 @@ var CardSystem = (function() {
             removeCard(sessionId);
         }
 
-        // 创建卡片元素
-        var cardElement = createCardElement(card);
+        // 创建卡片元素：多项事务卡片走专用渲染路径
+        var isMulti = card.data && card.data.isMulti === true;
+        var cardElement = isMulti ? createMultiCardElement(card) : createCardElement(card);
         card.element = cardElement;
 
         // 插入到聊天历史中
@@ -612,7 +613,8 @@ var CardSystem = (function() {
         var card = cardEntry.card;
         var parent = card.element.parentNode;
 
-        var newElement = createCardElement(card);
+        var newElement = (card.data && card.data.isMulti === true)
+            ? createMultiCardElement(card) : createCardElement(card);
 
         if (parent) {
             parent.replaceChild(newElement, card.element);
@@ -893,13 +895,394 @@ var CardSystem = (function() {
         return Object.keys(cards).length;
     }
 
+    // ===== 多项事务确认卡片渲染 =====
+
+    // 创建多项事务卡片元素：标题 + 统计栏 + 条目列表 + 批量操作按钮
+    function createMultiCardElement(card) {
+        var sessionId = card.sessionId;
+        var div = document.createElement('div');
+        div.className = 'confirmation-card multi-confirmation-card';
+        div.id = 'card-' + sessionId;
+        div.setAttribute('data-session-id', sessionId);
+        div.setAttribute('data-multi', '1');
+
+        var items = (card.data && card.data.multiItems) || [];
+        var s = card.data || {};
+
+        var html = '';
+        html += '<div class="card-title">' + escapeHtml(card.message) + '</div>';
+
+        // 统计栏
+        html += '<div class="multi-item-stats">';
+        html += '<span>共 ' + (s.totalCount || 0) + ' 项</span>';
+        html += '<span>待处理 ' + (s.pendingCount != null ? s.pendingCount : 0) + '</span>';
+        html += '<span>已确认 ' + (s.confirmedCount || 0) + '</span>';
+        html += '<span>已取消 ' + (s.cancelledCount || 0) + '</span>';
+        if (s.conflictCount) {
+            html += '<span class="conflict">⚠️冲突 ' + s.conflictCount + '</span>';
+        }
+        html += '</div>';
+
+        // 条目列表
+        html += '<div class="multi-item-list">';
+        html += renderMultiItems(items, sessionId);
+        html += '</div>';
+
+        // 批量操作按钮
+        var conflictCount = items.filter(function(item) {
+            return item.hasConflict === true;
+        }).length;
+        html += '<div class="card-actions multi-card-actions">';
+        html += '<button class="action-btn primary" data-action-id="confirm_selected" data-session-id="' + sessionId + '">✅ 确认选中</button>';
+        html += '<button class="action-btn danger" data-action-id="cancel_selected" data-session-id="' + sessionId + '">❌ 取消选中</button>';
+        if (conflictCount > 0) {
+            html += '<button class="action-btn warning" data-action-id="overwrite_selected" data-session-id="' + sessionId + '">📝 覆盖选中</button>';
+        }
+        html += '</div>';
+
+        div.innerHTML = html;
+
+        // 绑定批量按钮事件：委托给 main.js 的 handleMultiCardAction
+        var batchBtns = div.querySelectorAll('.multi-card-actions .action-btn');
+        for (var k = 0; k < batchBtns.length; k++) {
+            (function(btn) {
+                btn.addEventListener('click', function() {
+                    var actionId = btn.getAttribute('data-action-id');
+                    var btnSessionId = btn.getAttribute('data-session-id');
+                    if (typeof window.handleMultiCardAction === 'function') {
+                        window.handleMultiCardAction(actionId, btnSessionId);
+                    } else {
+                        showError('多项操作处理未就绪');
+                    }
+                });
+            })(batchBtns[k]);
+        }
+
+        // 绑定条目级事件（复选框联动、修改按钮、冲突标记）
+        bindMultiItemEvents(div, sessionId);
+
+        return div;
+    }
+
+    // 渲染条目列表 HTML
+    function renderMultiItems(items, sessionId) {
+        var html = '';
+        // 全选行
+        html += '<div class="multi-item-row multi-item-header">';
+        html += '<input type="checkbox" class="multi-item-select-all" data-session-id="' + sessionId + '">';
+        html += '<span class="multi-item-index">全选</span>';
+        html += '</div>';
+
+        for (var i = 0; i < items.length; i++) {
+            var item = items[i];
+            var status = item.status || 'PENDING';
+            var cls = 'multi-item-row';
+            if (status === 'CONFIRMED') cls += ' confirmed';
+            else if (status === 'CANCELLED') cls += ' cancelled';
+            else cls += ' pending';
+            if (item.hasConflict && status === 'PENDING') cls += ' has-conflict';
+
+            // remindTime 格式 yyyy-MM-dd HH:mm:ss，显示完整时间
+            var timeShort = item.remindTime || '';
+
+            html += '<div class="' + cls + '" data-item-id="' + i + '">';
+            // 复选框：PENDING 可勾选，其他状态禁用
+            if (status === 'PENDING') {
+                html += '<input type="checkbox" class="multi-item-checkbox" data-item-id="' + i + '" data-session-id="' + sessionId + '">';
+            } else {
+                html += '<input type="checkbox" class="multi-item-checkbox" disabled>';
+            }
+            html += '<span class="multi-item-index">' + (i + 1) + '</span>';
+            html += '<span class="multi-item-title">' + escapeHtml(item.title || '') + '</span>';
+            html += '<span class="multi-item-time">' + escapeHtml(timeShort) + '</span>';
+            if (item.location) {
+                html += '<span class="multi-item-location">📍' + escapeHtml(item.location) + '</span>';
+            }
+            // 状态标记
+            if (status === 'CONFIRMED') {
+                html += '<span class="multi-item-status confirmed">✅已确认</span>';
+            } else if (status === 'CANCELLED') {
+                html += '<span class="multi-item-status cancelled">❌已取消</span>';
+            } else if (item.hasConflict) {
+                html += '<span class="multi-item-conflict-badge" data-item-id="' + i + '" data-session-id="' + sessionId + '" title="查看冲突详情">⚠️冲突</span>';
+            }
+            // 修改按钮：仅 PENDING 显示
+            if (status === 'PENDING') {
+                html += '<button class="multi-item-modify-btn" data-item-id="' + i + '" data-session-id="' + sessionId + '" title="修改">✏️</button>';
+            }
+            html += '</div>';
+        }
+        return html;
+    }
+
+    // 绑定条目级事件：全选联动、单条修改、冲突详情
+    function bindMultiItemEvents(container, sessionId) {
+        // 全选 → 同步所有 PENDING 复选框
+        var selectAll = container.querySelector('.multi-item-select-all');
+        if (selectAll) {
+            selectAll.addEventListener('change', function() {
+                var boxes = container.querySelectorAll('.multi-item-checkbox:not(:disabled)');
+                for (var i = 0; i < boxes.length; i++) {
+                    boxes[i].checked = selectAll.checked;
+                }
+            });
+        }
+        // 单个复选框 → 反向同步全选框
+        var singleBoxes = container.querySelectorAll('.multi-item-checkbox:not(:disabled)');
+        for (var j = 0; j < singleBoxes.length; j++) {
+            singleBoxes[j].addEventListener('change', function() {
+                if (!selectAll) return;
+                var allBoxes = container.querySelectorAll('.multi-item-checkbox:not(:disabled)');
+                var allChecked = true;
+                for (var k = 0; k < allBoxes.length; k++) {
+                    if (!allBoxes[k].checked) { allChecked = false; break; }
+                }
+                selectAll.checked = allChecked;
+            });
+        }
+        // 单条修改按钮
+        var modifyBtns = container.querySelectorAll('.multi-item-modify-btn');
+        for (var m = 0; m < modifyBtns.length; m++) {
+            (function(btn) {
+                btn.addEventListener('click', function() {
+                    var itemId = parseInt(btn.getAttribute('data-item-id'), 10);
+                    showMultiItemEditForm(sessionId, itemId);
+                });
+            })(modifyBtns[m]);
+        }
+        // 冲突标记点击 → 弹窗
+        var conflictBadges = container.querySelectorAll('.multi-item-conflict-badge');
+        for (var c = 0; c < conflictBadges.length; c++) {
+            (function(badge) {
+                badge.addEventListener('click', function() {
+                    var itemId = parseInt(badge.getAttribute('data-item-id'), 10);
+                    showMultiConflictDetail(sessionId, itemId);
+                });
+            })(conflictBadges[c]);
+        }
+    }
+
+    // 获取/更新卡片状态（用于批量操作后局部刷新，不重建整个卡片）
+    function updateMultiCardStatus(sessionId, newData) {
+        var cardEntry = cards[sessionId];
+        if (!cardEntry || !cardEntry.card.element) return;
+        if (newData) cardEntry.card.data = newData;
+        var card = cardEntry.card;
+        var el = card.element;
+        var s = card.data || {};
+
+        // 更新统计栏
+        var statsEl = el.querySelector('.multi-item-stats');
+        if (statsEl) {
+            var statsHtml = '';
+            statsHtml += '<span>共 ' + (s.totalCount || 0) + ' 项</span>';
+            statsHtml += '<span>待处理 ' + (s.pendingCount != null ? s.pendingCount : 0) + '</span>';
+            statsHtml += '<span>已确认 ' + (s.confirmedCount || 0) + '</span>';
+            statsHtml += '<span>已取消 ' + (s.cancelledCount || 0) + '</span>';
+            if (s.conflictCount) {
+                statsHtml += '<span class="conflict">⚠️冲突 ' + s.conflictCount + '</span>';
+            }
+            statsEl.innerHTML = statsHtml;
+        }
+        // 重新渲染条目列表并重绑事件
+        var listEl = el.querySelector('.multi-item-list');
+        if (listEl) {
+            listEl.innerHTML = renderMultiItems(card.data.multiItems || [], sessionId);
+            bindMultiItemEvents(el, sessionId);
+        }
+    }
+
+    // 获取冲突详情弹窗
+    function showMultiConflictDetail(sessionId, itemIndex) {
+        var userId = localStorage.getItem('userId');
+        fetch('/api/confirmations/multi/' + sessionId + '/item/' + itemIndex + '/conflict?userId=' + userId, {
+            headers: getHeaders()
+        }).then(function(res) { return res.json(); })
+        .then(function(result) {
+            if (result.success && result.data) {
+                renderMultiConflictPopup(sessionId, itemIndex, result.data);
+            } else {
+                showError(result.message || '获取冲突详情失败');
+            }
+        }).catch(function(err) {
+            showError('请求失败: ' + err.message);
+        });
+    }
+
+    // 渲染冲突详情弹窗
+    function renderMultiConflictPopup(sessionId, itemIndex, detail) {
+        var existing = document.getElementById('conflict-detail-overlay-' + sessionId);
+        if (existing) existing.remove();
+
+        var overlay = document.createElement('div');
+        overlay.className = 'conflict-detail-overlay';
+        overlay.id = 'conflict-detail-overlay-' + sessionId;
+
+        var html = '';
+        html += '<div class="conflict-detail-content">';
+        html += '<div class="conflict-detail-title">⚠️ 时间冲突</div>';
+        // 当前事务
+        html += '<div class="conflict-detail-item current">';
+        html += '<div class="conflict-detail-label">当前事务</div>';
+        html += '<div class="conflict-detail-name">' + escapeHtml(detail.currentTitle || '') + '</div>';
+        html += '<div class="conflict-detail-time">' + escapeHtml(detail.currentRemindTime || '') + '</div>';
+        if (detail.currentLocation) {
+            html += '<div class="conflict-detail-loc">📍' + escapeHtml(detail.currentLocation) + '</div>';
+        }
+        html += '</div>';
+        html += '<div class="conflict-detail-arrow">⬆ 冲突 ⬇</div>';
+        // 已有提醒
+        html += '<div class="conflict-detail-item existing">';
+        html += '<div class="conflict-detail-label">已有提醒</div>';
+        html += '<div class="conflict-detail-name">' + escapeHtml(detail.conflictTitle || '') + '</div>';
+        html += '<div class="conflict-detail-time">' + escapeHtml(detail.conflictRemindTime || '') + '</div>';
+        if (detail.conflictLocation) {
+            html += '<div class="conflict-detail-loc">📍' + escapeHtml(detail.conflictLocation) + '</div>';
+        }
+        html += '</div>';
+        if (detail.conflictMessage) {
+            html += '<div class="conflict-detail-message">' + escapeHtml(detail.conflictMessage) + '</div>';
+        }
+        // 操作按钮
+        html += '<div class="card-actions multi-card-actions">';
+        html += '<button class="action-btn warning conflict-overwrite-btn">📝 覆盖</button>';
+        html += '<button class="action-btn secondary conflict-modify-btn">✏️ 修改</button>';
+        html += '<button class="action-btn secondary conflict-close-btn">关闭</button>';
+        html += '</div>';
+        html += '</div>';
+
+        overlay.innerHTML = html;
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('.conflict-close-btn').addEventListener('click', function() {
+            overlay.remove();
+        });
+        overlay.querySelector('.conflict-modify-btn').addEventListener('click', function() {
+            overlay.remove();
+            showMultiItemEditForm(sessionId, itemIndex);
+        });
+        overlay.querySelector('.conflict-overwrite-btn').addEventListener('click', function() {
+            overlay.remove();
+            // 覆盖单条：直接调用 overwrite_selected 并传入指定条目
+            if (typeof window.handleMultiCardAction === 'function') {
+                window.handleMultiCardAction('overwrite_selected', sessionId, [itemIndex]);
+            }
+        });
+        // 点击遮罩关闭
+        overlay.addEventListener('click', function(e) {
+            if (e.target === overlay) overlay.remove();
+        });
+    }
+
+    // 显示单条事务编辑表单（多项卡片专用，提交到 multi/item/{index} 接口）
+    function showMultiItemEditForm(sessionId, itemIndex) {
+        var cardEntry = cards[sessionId];
+        if (!cardEntry || !cardEntry.card.element) return;
+        var card = cardEntry.card;
+        var items = (card.data && card.data.multiItems) || [];
+        if (itemIndex < 0 || itemIndex >= items.length) return;
+        var item = items[itemIndex];
+
+        // 移除已有编辑表单
+        var existingForm = card.element.querySelector('.card-edit-form');
+        if (existingForm) existingForm.remove();
+
+        // datetime-local 回填：yyyy-MM-dd HH:mm:ss → yyyy-MM-ddTHH:mm
+        var dtLocalVal = '';
+        if (item.remindTime && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(item.remindTime)) {
+            dtLocalVal = item.remindTime.replace(' ', 'T').slice(0, 16);
+        }
+
+        var formHtml = '';
+        formHtml += '<div class="card-edit-form multi-item-edit-form">';
+        formHtml += '<div class="form-group"><label>标题</label><input type="text" class="edit-title" value="' + escapeHtml(item.title || '') + '"></div>';
+        formHtml += '<div class="form-group"><label>时间</label><input type="datetime-local" class="edit-remindTime-single" value="' + escapeHtml(dtLocalVal) + '"></div>';
+        formHtml += '<div class="form-group"><label>地点</label><input type="text" class="edit-location" value="' + escapeHtml(item.location || '') + '"></div>';
+        formHtml += '<div class="form-group"><label>备注</label><textarea class="edit-note" rows="2">' + escapeHtml(item.note || '') + '</textarea></div>';
+        formHtml += '<div class="form-group"><label>优先级</label>';
+        formHtml += '<select class="edit-priority">';
+        formHtml += '<option value="LOW"' + (item.priority === 'LOW' ? ' selected' : '') + '>低</option>';
+        formHtml += '<option value="NORMAL"' + (item.priority === 'NORMAL' ? ' selected' : '') + '>普通</option>';
+        formHtml += '<option value="HIGH"' + (item.priority === 'HIGH' ? ' selected' : '') + '>高</option>';
+        formHtml += '</select></div>';
+        formHtml += '<div class="form-actions">';
+        formHtml += '<button class="action-btn primary multi-edit-submit" data-item-id="' + itemIndex + '">修改</button>';
+        formHtml += '<button class="action-btn secondary multi-edit-cancel">取消修改</button>';
+        formHtml += '</div>';
+        formHtml += '</div>';
+
+        var itemList = card.element.querySelector('.multi-item-list');
+        if (itemList) {
+            itemList.insertAdjacentHTML('afterend', formHtml);
+        }
+
+        var submitBtn = card.element.querySelector('.multi-edit-submit');
+        var cancelBtn = card.element.querySelector('.multi-edit-cancel');
+        if (submitBtn) {
+            submitBtn.addEventListener('click', function() {
+                submitMultiItemEdit(sessionId, itemIndex);
+            });
+        }
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', function() {
+                var form = card.element.querySelector('.card-edit-form');
+                if (form) form.remove();
+            });
+        }
+    }
+
+    // 提交单条事务修改
+    function submitMultiItemEdit(sessionId, itemIndex) {
+        var cardEntry = cards[sessionId];
+        if (!cardEntry) return;
+        var card = cardEntry.card;
+        var userId = localStorage.getItem('userId');
+
+        var titleVal = card.element.querySelector('.edit-title').value;
+        var locationVal = card.element.querySelector('.edit-location').value;
+        var noteVal = card.element.querySelector('.edit-note').value;
+        var priorityVal = card.element.querySelector('.edit-priority').value;
+        var dtInput = card.element.querySelector('.edit-remindTime-single');
+        var dtVal = dtInput ? dtInput.value : '';
+        var remindTime = dtVal ? (dtVal.replace('T', ' ') + ':00') : '';
+
+        var editData = {
+            title: titleVal,
+            remindTime: remindTime,
+            location: locationVal,
+            note: noteVal,
+            priority: priorityVal
+        };
+
+        fetch('/api/confirmations/multi/' + sessionId + '/item/' + itemIndex + '?userId=' + userId, {
+            method: 'PUT',
+            headers: getHeaders(),
+            body: JSON.stringify(editData)
+        }).then(function(res) { return res.json(); })
+        .then(function(result) {
+            if (result.success) {
+                // 移除编辑表单
+                var form = card.element.querySelector('.card-edit-form');
+                if (form) form.remove();
+                // 刷新卡片数据
+                fetchCardData(sessionId, userId);
+            } else {
+                showError(result.message || '修改失败');
+            }
+        }).catch(function(err) {
+            showError('请求失败: ' + err.message);
+        });
+    }
+
     // 暴露公共接口
     return {
         init: init,
         show: show,
         clear: clear,
         removeCard: removeCard,
-        getCardCount: getCardCount
+        getCardCount: getCardCount,
+        fetchCardData: fetchCardData,
+        updateMultiCardStatus: updateMultiCardStatus
     };
 })();
 

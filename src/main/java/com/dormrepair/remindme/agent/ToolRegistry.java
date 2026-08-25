@@ -248,6 +248,11 @@ public class ToolRegistry implements SmartInitializingSingleton {
                 "repeatType", "周期类型，可选值 DAILY/WEEKLY/MONTHLY（默认DAILY）",
                 "repeatDays", "WEEKLY 时必填，指定每周哪几天生成，逗号分隔的数字字符串，1=周一…7=周日，如 \"1\" 表示每周一、\"1,3,5\" 表示周一三五。DAILY/MONTHLY 时传 null"
         ));
+        paramDescriptions.put("createMultiRemindersForAgent", Map.of(
+                "userId", "用户ID（系统自动填充）",
+                "items", "事务数组（必填），每项为对象，含 title(标题,必填)、remindTime(提醒时间 yyyy-MM-dd HH:mm:ss,必填)、location(地点,可选)、note(备注,可选)、priority(LOW/NORMAL/HIGH,可选)、advanceMinutes(提前分钟数,可选)。例：[{\"title\":\"开会\",\"remindTime\":\"2026-08-31 15:00:00\"}]",
+                "source", "来源标识（可选），text/excel/pdf/image，默认 text"
+        ));
         // RAG 相关参数描述
         paramDescriptions.put("retrievePrivateKnowledgeForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",
