@@ -7,18 +7,45 @@ import com.dormrepair.remindme.enums.TaskStatus;
 import java.util.List;
 
 // 多任务执行结果汇总工具类。
-// 遍历 TaskDetail 列表统计各状态数量，并按规则计算 FinalStatus。
-// 提供 getSummaryLine() 根据最终状态返回对应的结论行文案。
+// 双轨语义：
+// - 业务结果轨道（legacy FinalStatus）：跳过/失败优先，覆盖量整体区分，用于历史调用方（如持久化 session.final_status）。
+// - 交互结果轨道（reply FinalStatus）：按 CONFIRMED+OVERWRITTEN / CANCELLED / SKIPPED / FAILED 四象限组合，用于 ReplyTemplateService 选择回复模板。
+// 提供 countStatuses / computeLegacyFinalStatus / computeReplyFinalStatus 三个独立公共入口 + computeSummary 一次性汇总。
 public class TaskSummaryUtils {
 
-    // 统计各状态数量，计算最终状态（兼容旧调用：仍保留原统计维度）
-    public static SummaryResult computeSummary(List<TaskDetail> tasks) {
+    // ===== P2-1-1：计数阶段，独立成公共方法 =====
+
+    /** 中间计数载体，供双轨 FinalStatus 独立方法直接消费，避免重复遍历 tasks。 */
+    public static class StatusCounts {
+        public final int total;
+        public final int successCount;     // CONFIRMED
+        public final int overwrittenCount; // OVERWRITTEN
+        public final int skippedCount;     // SKIPPED
+        public final int cancelledCount;   // CANCELLED
+        public final int failedCount;      // FAILED
+
+        public StatusCounts(int total, int successCount, int overwrittenCount,
+                            int skippedCount, int cancelledCount, int failedCount) {
+            this.total = total;
+            this.successCount = successCount;
+            this.overwrittenCount = overwrittenCount;
+            this.skippedCount = skippedCount;
+            this.cancelledCount = cancelledCount;
+            this.failedCount = failedCount;
+        }
+
+        /** CONFIRMED + OVERWRITTEN：交互维度中的"已创建"类，用于 reply 轨判断 */
+        public int createdCount() { return successCount + overwrittenCount; }
+    }
+
+    /** 统计各状态数量，不做任何 FinalStatus 判定。 */
+    public static StatusCounts countStatuses(List<TaskDetail> tasks) {
         int total = tasks != null ? tasks.size() : 0;
-        int successCount = 0;       // CONFIRMED
-        int overwrittenCount = 0;   // OVERWRITTEN
-        int skippedCount = 0;       // SKIPPED
-        int cancelledCount = 0;     // CANCELLED
-        int failedCount = 0;        // FAILED
+        int successCount = 0;
+        int overwrittenCount = 0;
+        int skippedCount = 0;
+        int cancelledCount = 0;
+        int failedCount = 0;
 
         if (tasks != null) {
             for (TaskDetail task : tasks) {
@@ -33,12 +60,37 @@ public class TaskSummaryUtils {
                 }
             }
         }
+        return new StatusCounts(total, successCount, overwrittenCount, skippedCount, cancelledCount, failedCount);
+    }
 
-        FinalStatus legacyStatus = computeLegacyFinalStatus(total, successCount, overwrittenCount, skippedCount, failedCount);
-        // 交互维度的 FinalStatus（用于 ReplyTemplate 选择模板）
-        FinalStatus replyStatus = computeReplyFinalStatus(total, successCount, overwrittenCount, skippedCount, cancelledCount, failedCount);
+    // ===== P2-1-2：两条轨道的独立 FinalStatus 计算（均暴露 public 独立方法）=====
 
-        return new SummaryResult(total, successCount, overwrittenCount, skippedCount, cancelledCount, failedCount, legacyStatus, replyStatus);
+    /**
+     * 业务结果轨道：原有统计维度（跳过/失败优先，覆盖整体区分）。
+     * 等价于旧版 SummaryResult.finalStatus，保持向后兼容。
+     */
+    public static FinalStatus computeLegacyFinalStatus(List<TaskDetail> tasks) {
+        StatusCounts c = countStatuses(tasks);
+        return computeLegacyFinalStatus(c.total, c.successCount, c.overwrittenCount, c.skippedCount, c.failedCount);
+    }
+
+    /**
+     * 交互结果轨道：按"创建类 / 取消 / 跳过 / 失败"四象限组合判定。
+     * 等价于旧版 SummaryResult.replyFinalStatus，用于 ReplyTemplateService 选择不同回复模板。
+     */
+    public static FinalStatus computeReplyFinalStatus(List<TaskDetail> tasks) {
+        StatusCounts c = countStatuses(tasks);
+        return computeReplyFinalStatus(c.total, c.successCount, c.overwrittenCount, c.skippedCount, c.cancelledCount, c.failedCount);
+    }
+
+    // ===== P2-1-3：一次性汇总入口（调用以上三块组合）=====
+
+    /** 一次性汇总入口：计数 + 双轨 FinalStatus 计算 + 组装 SummaryResult。 */
+    public static SummaryResult computeSummary(List<TaskDetail> tasks) {
+        StatusCounts c = countStatuses(tasks);
+        FinalStatus legacyStatus = computeLegacyFinalStatus(c.total, c.successCount, c.overwrittenCount, c.skippedCount, c.failedCount);
+        FinalStatus replyStatus = computeReplyFinalStatus(c.total, c.successCount, c.overwrittenCount, c.skippedCount, c.cancelledCount, c.failedCount);
+        return new SummaryResult(c.total, c.successCount, c.overwrittenCount, c.skippedCount, c.cancelledCount, c.failedCount, legacyStatus, replyStatus);
     }
 
     // 原有统计维度（保持向后兼容：跳过/失败优先）

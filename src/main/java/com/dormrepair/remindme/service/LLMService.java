@@ -91,13 +91,15 @@ public class LLMService {
         }
     }
 
-    // 带工具调用的对话：拼装系统提示词、历史消息和当前输入，调用 LLM 返回响应文本（带重试）
-    public String chatWithTools(String userInput, List<ToolDefinition> tools, List<Message> history) {
-        log.info("开始带工具调用的对话: userInput={}, toolCount={}, historySize={}", userInput, tools.size(), history.size());
+    // ===== P1-2：统一 LLM 调用重试骨架（消除 chatWithTools / chatWithoutTools 两份 ~40 行重复 while 循环）=====
 
-        List<org.springframework.ai.chat.messages.Message> messages = buildMessagesWithTools(userInput, tools, history);
-        Prompt prompt = new Prompt(messages);
-
+    /**
+     * 统一 ChatModel 调用 + 重试骨架：
+     * - 最大重试 3 次，指数退避 100ms → 200ms → 400ms
+     * - 仅对 RestClientException 重试；4xx HttpStatusCodeException、JsonProcessingException 等立即失败
+     * - 调用 label 用于日志区分（"chatWithTools" / "chatWithoutTools"）
+     */
+    private ChatResponse doChatWithRetry(Prompt prompt, String label) {
         int maxRetries = 3;
         int attempt = 0;
         Exception lastException = null;
@@ -121,7 +123,7 @@ public class LLMService {
                     break;
                 }
                 lastException = e;
-                log.warn("chatWithTools 调用失败，第 {} 次重试: {}", attempt, e.getMessage());
+                log.warn("{} 调用失败，第 {} 次重试: {}", label, attempt, e.getMessage());
 
                 if (attempt >= maxRetries) {
                     break;
@@ -138,8 +140,19 @@ public class LLMService {
         }
 
         if (response == null) {
-            throw new RuntimeException("chatWithTools 调用失败，已重试 " + maxRetries + " 次", lastException);
+            throw new RuntimeException(label + " 调用失败，已重试 " + maxRetries + " 次", lastException);
         }
+        return response;
+    }
+
+    // 带工具调用的对话：拼装系统提示词、历史消息和当前输入，调用 LLM 返回响应文本（带重试）
+    public String chatWithTools(String userInput, List<ToolDefinition> tools, List<Message> history) {
+        log.info("开始带工具调用的对话: userInput={}, toolCount={}, historySize={}", userInput, tools.size(), history.size());
+
+        List<org.springframework.ai.chat.messages.Message> messages = buildMessagesWithTools(userInput, tools, history);
+        Prompt prompt = new Prompt(messages);
+
+        ChatResponse response = doChatWithRetry(prompt, "chatWithTools");
 
         String content = response.getResult().getOutput().getText();
         log.info("工具调用对话响应: {}", content);
@@ -180,48 +193,7 @@ public class LLMService {
 
         Prompt prompt = new Prompt(messages);
 
-        int maxRetries = 3;
-        int attempt = 0;
-        Exception lastException = null;
-        ChatResponse response = null;
-
-        while (attempt < maxRetries) {
-            attempt++;
-            try {
-                response = chatModel.call(prompt);
-                break;
-            } catch (RestClientException e) {
-                boolean is4xx = false;
-                if (e instanceof HttpStatusCodeException) {
-                    int statusCode = ((HttpStatusCodeException) e).getStatusCode().value();
-                    if (statusCode >= 400 && statusCode < 500) {
-                        is4xx = true;
-                    }
-                }
-                if (is4xx) {
-                    lastException = e;
-                    break;
-                }
-                lastException = e;
-                log.warn("chatWithoutTools 调用失败，第 {} 次重试: {}", attempt, e.getMessage());
-
-                if (attempt >= maxRetries) {
-                    break;
-                }
-
-                long waitMs = (long) (Math.pow(2, attempt - 1) * 100);
-                try {
-                    Thread.sleep(waitMs);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-            }
-        }
-
-        if (response == null) {
-            throw new RuntimeException("chatWithoutTools 调用失败，已重试 " + maxRetries + " 次", lastException);
-        }
+        ChatResponse response = doChatWithRetry(prompt, "chatWithoutTools");
 
         String content = response.getResult().getOutput().getText();
         log.info("纯文本对话响应: {}", content);
@@ -1005,6 +977,41 @@ public class LLMService {
         return messages;
     }
 
+    // ===== P1-1：公共抽取规则（两套提示词共用，消除重复文本）=====
+
+    /** 地点提取规则：buildSystemPromptWithTools 和 buildPrompt 共用，统一编号式完整版 */
+    private String buildLocationExtractionRules() {
+        return """
+            地点提取规则（提取 location 字段时严格遵守）：
+            1. 识别"去XX"、"到XX"、"在XX"、"回XX"等介词后的场所名词作为 location
+            2. 常见校园场所：食堂、图书馆、教室、操场、宿舍、超市、快递站、教学楼、体育馆、实验室、自习室、打印店等
+            3. "去食堂吃饭" → location="食堂", title="吃饭"
+            4. "去图书馆看书" → location="图书馆", title="看书"
+            5. "到操场跑步" → location="操场", title="跑步"
+            6. "去拿快递" → location="快递站", title="拿快递"
+            7. "在三教开会" → location="三教", title="开会"
+            8. "回宿舍" → location="宿舍", title="回宿舍"
+            9. 地点词应从标题中排除，title 只保留动作/事项
+            10. 如果没有明确地点，location 传/设为 null
+            """;
+    }
+
+    /** 备注提取规则：buildSystemPromptWithTools 和 buildPrompt 共用，统一编号式完整版 */
+    private String buildNoteExtractionRules() {
+        return """
+            备注提取规则（提取 note 字段时严格遵守）：
+            1. 当用户输入中包含对提醒事项的补充说明、注意事项、需要准备的物品时，必须提取为 note 参数
+            2. 常见模式："记得..."、"别忘了..."、"要带..."、"带上..."、"带XX"、"注意..."、"穿XX"等
+            3. 物品类（雨伞、笔记本、借书证、学生证、礼物、水杯、钥匙等）一律放入 note，不要塞进 title
+            4. "明天3点提醒我还书，记得带借书证" → title="还书", note="记得带借书证"
+            5. "周五10点在三教开会，记得带笔记本电脑" → title="开会", location="三教", note="记得带笔记本电脑"
+            6. "一分钟后提醒我带雨伞去快递站拿快递" → title="拿快递", location="快递站", note="带雨伞"
+            7. "明天上午去图书馆，穿外套" → title="去图书馆", location="图书馆", note="穿外套"
+            8. note 必须从 title 中排除，避免 title 出现"带XX"等冗余词
+            9. 如果用户没有提供任何补充信息，note 传/设为 null
+            """;
+    }
+
     // 构建包含工具定义的系统提示词，拼入当前时间和工具列表
     private String buildSystemPromptWithTools(List<ToolDefinition> tools) {
         String currentDate = TimeUtils.getCurrentBeijingTime();
@@ -1113,27 +1120,8 @@ public class LLMService {
             4. 工具调用失败可以重试，但不能用文本回复替代工具调用
             5. 只有用户的意图不是创建提醒时（如闲聊、问天气），才允许直接文本回复
 
-            地点提取规则（调用 create_reminder 时严格遵守）：
-            1. 识别"去XX"、"到XX"、"在XX"、"回XX"等介词后的场所名词作为 location 参数
-            2. 常见校园场所：食堂、图书馆、教室、操场、宿舍、超市、快递站、教学楼、体育馆、实验室、自习室、打印店等
-            3. "去食堂吃饭" → location="食堂", title="吃饭"
-            4. "去图书馆看书" → location="图书馆", title="看书"
-            5. "到操场跑步" → location="操场", title="跑步"
-            6. "去拿快递" → location="快递站", title="拿快递"
-            7. 地点词应从标题中排除，title 只保留动作/事项
-            8. 如果没有明确地点，location 传 null
-
-            备注提取规则（调用 create_reminder 时严格遵守）：
-            1. 当用户输入中包含对提醒事项的补充说明、注意事项、需要准备的物品时，必须提取为 note 参数
-            2. 常见模式："记得..."、"别忘了..."、"要带..."、"带上..."、"带XX"、"注意..."、"穿XX"等
-            3. 物品类（雨伞、笔记本、借书证、学生证、礼物、水杯、钥匙等）一律放入 note，不要塞进 title
-            4. "明天3点提醒我还书，记得带借书证" → title="还书", note="记得带借书证"
-            5. "周五10点在三教开会，记得带笔记本电脑" → title="开会", location="三教", note="记得带笔记本电脑"
-            6. "一分钟后提醒我带雨伞去快递站拿快递" → title="拿快递", location="快递站", note="带雨伞"
-            7. "明天上午去图书馆，穿外套" → title="去图书馆", location="图书馆", note="穿外套"
-            8. note 必须从 title 中排除，避免 title 出现"带XX"等冗余词
-            9. 如果用户没有提供任何补充信息，note 传 null
-
+            %s
+            %s
             提前到场规则（处理大通知中"提前X分钟到场/签到"等要求）：
             当通知中明确要求"请提前X分钟到场/签到/到达/入场"时，必须按下面方式处理：
             1. remindTime = 通知原始开始时间 − X 分钟 − 10 分钟
@@ -1830,7 +1818,7 @@ public class LLMService {
             6. 如果你不确定是否应该调用工具，默认调用工具，而不是默认不调用
 
             请根据用户的请求，决定是直接回复还是调用工具。
-            """.formatted(currentDate, toolsJson);
+            """.formatted(currentDate, toolsJson, buildLocationExtractionRules(), buildNoteExtractionRules());
     }
 
     // 将工具参数定义转换为 JSON 字符串，失败时返回空对象兜底
@@ -1908,24 +1896,8 @@ public class LLMService {
             - 如果用户只指定了开始时间，没有明确结束时间，则 endTime 设为 null
             - 如果用户说"X点到Y点"格式，需要同时提取开始和结束时间
 
-            备注提取规则（note 字段）：
-            - 当用户输入中包含对提醒事项的补充说明、注意事项、需要准备的物品等信息时，提取为 note 字段
-            - 常见模式："记得..."、"别忘了..."、"要带..."、"注意..."等
-            - 例："明天下午3点提醒我还书，记得带借书证" → note="记得带借书证"
-            - 例："周五上午10点开会，地点会议室A，记得带笔记本电脑" → location="会议室A", note="记得带笔记本电脑"
-            - 如果用户没有提供备注信息，note 设为 null
-
-            地点提取规则（location 字段）：
-            - 识别"去XX"、"到XX"、"在XX"、"回XX"等介词后的场所名词作为地点
-            - 常见校园场所：食堂、图书馆、教室、操场、宿舍、超市、快递站、教学楼、体育馆、实验室、自习室、打印店等
-            - "去食堂吃饭" → location="食堂", title="吃饭"
-            - "去图书馆看书" → location="图书馆", title="看书"
-            - "到操场跑步" → location="操场", title="跑步"
-            - "在三教开会" → location="三教", title="开会"
-            - "回宿舍" → location="宿舍", title="回宿舍"
-            - 地点词应从标题中排除，标题只保留动作/事项
-            - 如果没有明确地点，location 设为 null
-
+            %s
+            %s
             示例输入1（单点提醒）："明天下午3点还书"
             示例输出1：{"title":"还书","remindTime":"%s","endTime":null,"intentType":"REMINDER","location":null,"priority":"NORMAL","note":null}
 
@@ -1939,7 +1911,7 @@ public class LLMService {
             示例输出4：{"title":"吃饭","remindTime":"2026-07-31 12:00:00","endTime":null,"intentType":"REMINDER","location":"食堂","priority":"NORMAL","note":null}
 
             用户输入: %s
-            """.formatted(currentDate, currentDate, currentDate, userInput);
+            """.formatted(currentDate, buildNoteExtractionRules(), buildLocationExtractionRules(), currentDate, userInput);
     }
 
     // 解析日期时间字符串，失败返回 null

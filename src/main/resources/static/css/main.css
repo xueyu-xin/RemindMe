@@ -160,7 +160,7 @@ html, body {
 }
 
 /* ===== 卡片 ===== */
-.card {
+.rm-card {
     background: var(--cream-card);
     border: 2px solid var(--peach-pale);
     border-radius: 24px;
@@ -174,7 +174,7 @@ html, body {
 }
 
 /* ===== 聊天页面卡片 ===== */
-#page-chat .card {
+#page-chat .rm-card {
     flex: 0 1 auto;
     height: calc(100vh - 64px - 68px - 40px);
     min-height: 350px;
@@ -184,7 +184,7 @@ html, body {
 }
 
 /* ===== 日历页面卡片 ===== */
-#page-calendar .card {
+#page-calendar .rm-card {
     flex: 1;
     min-height: 0;
     margin-top: 8px;
@@ -192,7 +192,7 @@ html, body {
 }
 
 /* ===== 我的页面卡片 ===== */
-#page-profile .card {
+#page-profile .rm-card {
     flex: 1;
     min-height: 0;
     margin-top: 8px;
@@ -452,12 +452,12 @@ button:disabled {
         padding: 8px 20px;
     }
     
-    .card {
+    .rm-card {
         padding: 20px;
         border-radius: 20px;
     }
     
-    #page-chat .card {
+    #page-chat .rm-card {
         height: calc(100vh - 60px - 64px - 40px);
         min-height: 300px;
     }
@@ -471,7 +471,7 @@ button:disabled {
         padding-bottom: 76px;
     }
 
-    .card {
+    .rm-card {
         padding: 16px;
         border-radius: 18px;
     }
@@ -530,7 +530,7 @@ button:disabled {
         border-radius: 20px;
     }
 
-    .card {
+    .rm-card {
         padding: 14px;
         border-radius: 16px;
     }

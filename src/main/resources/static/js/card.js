@@ -237,9 +237,9 @@ var CardSystem = (function() {
                     window.removeTempMessages();
                 }
 
-                // 设置会话标记，防止 WebSocket card_confirmed 重复显示
-                if (window.processedSessionIds) {
-                    window.processedSessionIds[sessionId] = 'done';
+                // 设置会话标记，防止 WebSocket card_confirmed 重复显示（P0 统一用 CardHelpers）
+                if (window.CardHelpers) {
+                    window.CardHelpers.markSessionDone(sessionId);
                 }
 
                 // 使用全局 addMessage 显示确认回复（保存到后端，触发副作用）
@@ -285,9 +285,9 @@ var CardSystem = (function() {
                     window.removeTempMessages();
                 }
 
-                // 设置会话标记
-                if (window.processedSessionIds) {
-                    window.processedSessionIds[sessionId] = 'done';
+                // 设置会话标记（P0 统一用 CardHelpers）
+                if (window.CardHelpers) {
+                    window.CardHelpers.markSessionDone(sessionId);
                 }
 
                 // 使用全局 addMessage 显示取消回复
@@ -371,7 +371,7 @@ var CardSystem = (function() {
         }
 
         var formHtml = '';
-        formHtml += '<div class="card-edit-form">';
+        formHtml += '<div class="rm-card-edit-form">';
         formHtml += '<input type="hidden" class="edit-is-recurring" value="' + String(isRecurring ? '1' : '0') + '">';
         formHtml += '<div class="form-group"><label>标题</label><input type="text" class="edit-title" value="' + escapeHtml(data.title || '') + '"></div>';
 
@@ -470,7 +470,7 @@ var CardSystem = (function() {
         var cardEntry = cards[sessionId];
         if (!cardEntry || !cardEntry.card.element) return;
 
-        var form = cardEntry.card.element.querySelector('.card-edit-form');
+        var form = cardEntry.card.element.querySelector('.rm-card-edit-form');
         if (form) {
             form.remove();
         }
@@ -706,8 +706,9 @@ var CardSystem = (function() {
             window.removeTempMessages();
         }
 
-        if (window.processedSessionIds) {
-            window.processedSessionIds[sessionId] = 'done';
+        // 超时自动确认：标记会话已处理（P0 统一用 CardHelpers）
+        if (window.CardHelpers) {
+            window.CardHelpers.markSessionDone(sessionId);
         }
 
         // 使用全局 addMessage
@@ -760,8 +761,9 @@ var CardSystem = (function() {
                         window.removeTempMessages();
                     }
 
-                    if (window.processedSessionIds) {
-                        window.processedSessionIds[sessionId] = 'done';
+                    // 终结操作：标记会话已处理（P0 统一用 CardHelpers）
+                    if (window.CardHelpers) {
+                        window.CardHelpers.markSessionDone(sessionId);
                     }
 
                     if (typeof window.addMessage === 'function') {
@@ -838,47 +840,34 @@ var CardSystem = (function() {
     }
 
     /**
-     * 设置卡片按钮 loading 状态（禁用 + 显示 ⏳ 文案 + 半透明）
+     * 设置卡片按钮 loading 状态：统一转发给 window.CardHelpers（P0 统一多套体系）
      */
     function setCardButtonsLoading(cardEl) {
-        if (!cardEl) return;
-        var btns = cardEl.querySelectorAll('.action-btn');
-        btns.forEach(function(btn) {
-            btn.disabled = true;
-            btn.style.pointerEvents = 'none';
-            btn.style.opacity = '0.6';
-            if (!btn.dataset.originalText) {
-                btn.dataset.originalText = btn.textContent;
-            }
-            btn.textContent = '⏳ ' + (btn.dataset.originalText || '处理中...');
-        });
+        if (window.CardHelpers) {
+            window.CardHelpers.setButtonsLoading(cardEl);
+        }
     }
 
     /**
-     * 恢复卡片按钮状态（启用 + 恢复原文案）
+     * 恢复卡片按钮状态：统一转发给 window.CardHelpers（P0 统一多套体系）
      */
     function restoreCardButtons(cardEl) {
-        if (!cardEl) return;
-        var btns = cardEl.querySelectorAll('.action-btn');
-        btns.forEach(function(btn) {
-            btn.disabled = false;
-            btn.style.pointerEvents = '';
-            btn.style.opacity = '';
-            if (btn.dataset.originalText) {
-                btn.textContent = btn.dataset.originalText;
-            }
-        });
+        if (window.CardHelpers) {
+            window.CardHelpers.restoreButtons(cardEl);
+        }
     }
 
     /**
-     * 获取请求头
+     * 获取请求头：统一转发给 window.CardHelpers（P0 统一多套体系）
      */
     function getHeaders() {
+        if (window.CardHelpers) {
+            return window.CardHelpers.getAuthHeaders();
+        }
+        // 兜底：CardHelpers 未加载时临时构造（极端场景）
         var headers = { 'Content-Type': 'application/json' };
         var token = localStorage.getItem('token');
-        if (token) {
-            headers['Authorization'] = 'Bearer ' + token;
-        }
+        if (token) { headers['Authorization'] = 'Bearer ' + token; }
         return headers;
     }
 
@@ -928,7 +917,7 @@ var CardSystem = (function() {
         html += '</div>';
 
         // 条目列表（复用项目已有 card-list 容器类）
-        html += '<div class="card-list multi-item-list">';
+        html += '<div class="rm-card-list multi-item-list">';
         html += renderMultiItems(items, sessionId);
         html += '</div>';
 
@@ -981,7 +970,7 @@ var CardSystem = (function() {
             var item = items[i];
             var status = item.status || 'PENDING';
             // 复用 card-list-item 基础样式，叠加多卡片特有修饰类
-            var cls = 'card-list-item multi-item-row';
+            var cls = 'rm-card-list-item multi-item-row';
             if (status === 'CONFIRMED') cls += ' confirmed';
             else if (status === 'CANCELLED') cls += ' cancelled';
             else cls += ' pending';
@@ -1190,7 +1179,7 @@ var CardSystem = (function() {
         var item = items[itemIndex];
 
         // 移除已有编辑表单
-        var existingForm = card.element.querySelector('.card-edit-form');
+        var existingForm = card.element.querySelector('.rm-card-edit-form');
         if (existingForm) existingForm.remove();
 
         // datetime-local 回填：yyyy-MM-dd HH:mm:ss → yyyy-MM-ddTHH:mm
@@ -1200,7 +1189,7 @@ var CardSystem = (function() {
         }
 
         var formHtml = '';
-        formHtml += '<div class="card-edit-form multi-item-edit-form">';
+        formHtml += '<div class="rm-card-edit-form multi-item-edit-form">';
         formHtml += '<div class="form-group"><label>标题</label><input type="text" class="edit-title" value="' + escapeHtml(item.title || '') + '"></div>';
         formHtml += '<div class="form-group"><label>时间</label><input type="datetime-local" class="edit-remindTime-single" value="' + escapeHtml(dtLocalVal) + '"></div>';
         formHtml += '<div class="form-group"><label>地点</label><input type="text" class="edit-location" value="' + escapeHtml(item.location || '') + '"></div>';
@@ -1231,7 +1220,7 @@ var CardSystem = (function() {
         }
         if (cancelBtn) {
             cancelBtn.addEventListener('click', function() {
-                var form = card.element.querySelector('.card-edit-form');
+                var form = card.element.querySelector('.rm-card-edit-form');
                 if (form) form.remove();
             });
         }
@@ -1268,7 +1257,7 @@ var CardSystem = (function() {
         .then(function(result) {
             if (result.success) {
                 // 移除编辑表单
-                var form = card.element.querySelector('.card-edit-form');
+                var form = card.element.querySelector('.rm-card-edit-form');
                 if (form) form.remove();
                 // 刷新卡片数据
                 fetchCardData(sessionId, userId);

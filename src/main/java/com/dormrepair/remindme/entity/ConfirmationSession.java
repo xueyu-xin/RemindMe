@@ -125,6 +125,10 @@ public class ConfirmationSession {
 
     // 会话状态内部枚举：PENDING-待用户操作、CONFIRMED-用户已确认、CANCELLED-用户已取消、EXPIRED-超时未操作
     public enum SessionStatus {
+        // 【P2-3 语义：确认会话级·整会话待处理】
+        // 归属阶段：confirmation_sessions 粒度的外部生命周期。Agent/用户通过 sessionId 关联整张卡片。
+        // 与 TaskStatus.PENDING（子任务单条目）区分：SessionStatus 是整体会话；与 ConfirmStatus.PENDING（单提醒 confirm 阶段）区分：
+        //   SessionStatus 覆盖单任务/多任务/周期冲突等所有卡片类型，ConfirmStatus 只对 reminders 表中的单提醒确认生效。
         PENDING,
         CONFIRMED,
         CANCELLED,

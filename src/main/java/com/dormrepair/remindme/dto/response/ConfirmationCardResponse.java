@@ -1,11 +1,14 @@
 package com.dormrepair.remindme.dto.response;
 
+import com.dormrepair.remindme.dto.BaseReminderFields;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import lombok.experimental.SuperBuilder;
 
 import java.util.List;
 import java.util.Map;
@@ -159,25 +162,18 @@ public class ConfirmationCardResponse {
 
     // 多项事务确认场景中的单条事务条目，每条对应一项独立提醒
     @Data
-    @Builder
+    @SuperBuilder
     @NoArgsConstructor
     @AllArgsConstructor
+    @EqualsAndHashCode(callSuper = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class MultiItem {
+    public static class MultiItem extends BaseReminderFields {
         // 条目索引（从 0 开始，与前端列表位置对应）
         private Integer id;
-        // 事务标题
-        private String title;
         // 提醒时间（完整时间字符串 yyyy-MM-dd HH:mm:ss）
         private String remindTime;
         // 结束时间（可选）
         private String endTime;
-        // 地点（可选）
-        private String location;
-        // 备注（可选）
-        private String note;
-        // 优先级：HIGH/NORMAL/LOW
-        private String priority;
         // 提前提醒分钟数
         private Integer advanceMinutes;
         // 条目状态：PENDING / CONFIRMED / CANCELLED

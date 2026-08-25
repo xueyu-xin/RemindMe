@@ -33,13 +33,6 @@ function startPromptRotation() {
     }, 5000);
 }
 
-function getAuthHeaders() {
-    var headers = { 'Content-Type': 'application/json' };
-    var token = localStorage.getItem('token');
-    if (token) { headers['Authorization'] = 'Bearer ' + token; }
-    return headers;
-}
-
 // ===== 增强版 WebSocket 消息处理 =====
 function handleWebSocketMessageV2(msg) {
     if (!msg || !msg.type) {
@@ -190,7 +183,7 @@ function handleWebSocketMessageV2(msg) {
             if (typeof clearPendingSession === 'function') clearPendingSession(timeoutSessionId);
             return true;
         }
-        if (timeoutSessionId) processedSessionIds[timeoutSessionId] = 'done';
+        if (timeoutSessionId) CardHelpers.markSessionDone(timeoutSessionId);
 
         // 按 sessionId 清理对应的引导语和卡片
         if (timeoutSessionId) {
@@ -216,7 +209,7 @@ function handleWebSocketMessageV2(msg) {
 
 function handleConfirmationActionV2(actionId, sessionId) {
     var userId = localStorage.getItem('userId');
-    var headers = getAuthHeaders();
+    var headers = CardHelpers.getAuthHeaders();
     var endpoint = '/api/confirmations/' + sessionId + '/' + (actionId === 'confirm' ? 'confirm' : actionId === 'cancel' ? 'cancel' : actionId);
     fetch(endpoint + '?userId=' + userId, { method: 'POST', headers: headers })
         .then(function(res) { return res.json(); })
@@ -245,7 +238,7 @@ function handleConfirmationActionV2(actionId, sessionId) {
 // 由 card.js 的批量按钮和冲突弹窗调用；itemIds 缺省时从卡片复选框收集
 function handleMultiCardAction(actionId, sessionId, itemIds) {
     var userId = localStorage.getItem('userId');
-    var headers = getAuthHeaders();
+    var headers = CardHelpers.getAuthHeaders();
     var cardEl = document.getElementById('card-' + sessionId);
 
     // 收集选中的条目索引（复选框 data-item-id）
@@ -281,7 +274,7 @@ function handleMultiCardAction(actionId, sessionId, itemIds) {
     }
 
     // 覆盖操作按项目约束直接执行（不弹 confirm 窗），所有操作统一 loading 反馈
-    setMultiCardButtonsLoading(cardEl, actionId);
+    CardHelpers.setButtonsLoading(cardEl, { actionId: actionId });
 
     fetch(endpoint + '?userId=' + userId, {
         method: 'POST',
@@ -300,7 +293,7 @@ function handleMultiCardAction(actionId, sessionId, itemIds) {
                 if (typeof removeMessagesByGroup === 'function') removeMessagesByGroup('card-' + sessionId);
                 if (window.CardSystem) CardSystem.removeCard(sessionId);
                 if (typeof clearPendingSession === 'function') clearPendingSession(sessionId);
-                if (sessionId && processedSessionIds) processedSessionIds[sessionId] = 'done';
+                CardHelpers.markSessionDone(sessionId);
                 if (typeof addMessage === 'function') {
                     addMessage('bot', result.message || '✅ 多项事务已处理完成', { skipSave: false });
                 }
@@ -319,49 +312,17 @@ function handleMultiCardAction(actionId, sessionId, itemIds) {
             }
         } else {
             // 失败：恢复按钮，提示错误
-            restoreMultiCardButtons(cardEl);
+            CardHelpers.restoreButtons(cardEl);
             if (typeof addMessage === 'function') {
                 addMessage('bot', '❌ ' + (result.message || '操作失败'), { skipSave: false });
             }
         }
     }).catch(function(err) {
-        restoreMultiCardButtons(cardEl);
+        CardHelpers.restoreButtons(cardEl);
         if (typeof addMessage === 'function') {
             addMessage('bot', '❌ 请求失败：' + (err && err.message ? err.message : '请重试'), { skipSave: false });
         }
     });
-}
-
-// 多项卡片批量按钮统一 loading 反馈：禁用所有按钮，触发按钮显示加载文案
-function setMultiCardButtonsLoading(cardEl, actionId) {
-    if (!cardEl) return;
-    var btns = cardEl.querySelectorAll('.multi-card-actions .action-btn');
-    var loadingText = {
-        confirm_selected: '⏳ 确认中...',
-        cancel_selected: '⏳ 取消中...',
-        overwrite_selected: '⏳ 覆盖中...'
-    };
-    for (var i = 0; i < btns.length; i++) {
-        btns[i].disabled = true;
-        if (btns[i].getAttribute('data-action-id') === actionId) {
-            btns[i].setAttribute('data-original-text', btns[i].textContent);
-            btns[i].textContent = loadingText[actionId] || '⏳ 处理中...';
-        }
-    }
-}
-
-// 恢复多项卡片批量按钮状态
-function restoreMultiCardButtons(cardEl) {
-    if (!cardEl) return;
-    var btns = cardEl.querySelectorAll('.multi-card-actions .action-btn');
-    for (var i = 0; i < btns.length; i++) {
-        btns[i].disabled = false;
-        var orig = btns[i].getAttribute('data-original-text');
-        if (orig) {
-            btns[i].textContent = orig;
-            btns[i].removeAttribute('data-original-text');
-        }
-    }
 }
 
 // ===== 导出全局接口 =====
@@ -390,8 +351,88 @@ window.saveMessageToBackend = saveMessageToBackend;
 
         var stompClient = null;
         var isProcessing = false;
-        var processedSessionIds = {}; // 已处理的 sessionId -> true，用于去重
+        var processedSessionIds = {}; // 已处理的 sessionId -> 'done'，用于去重（统一值，不再混用 true/'done'）
         window.processedSessionIds = processedSessionIds;
+
+        // ===== 统一 CardHelpers：跨 main.js/card.js 共用的会话/按钮/请求头工具（P0 统一多套体系）=====
+        window.CardHelpers = {
+            /** 统一请求头：Content-Type + Bearer Token；替换 main.js getAuthHeaders() 和 card.js getHeaders() */
+            getAuthHeaders: function() {
+                var headers = { 'Content-Type': 'application/json' };
+                var token = localStorage.getItem('token');
+                if (token) { headers['Authorization'] = 'Bearer ' + token; }
+                return headers;
+            },
+            /**
+             * 统一按钮 loading：兼容两种风格
+             * - opts 空 / 无 actionId：所有 .action-btn 都替换为 "⏳ 原文案"（单确认卡片风格）
+             * - 有 opts.actionId：所有按钮禁用，命中 data-action-id=actionId 的那个替换为 opts.loadingTextMap[actionId]
+             */
+            setButtonsLoading: function(cardEl, opts) {
+                if (!cardEl) return;
+                opts = opts || {};
+                var btns = cardEl.querySelectorAll('.action-btn');
+                var loadingTextMap = opts.loadingTextMap || {
+                    confirm_selected: '⏳ 确认中...',
+                    cancel_selected: '⏳ 取消中...',
+                    overwrite_selected: '⏳ 覆盖中...'
+                };
+                for (var i = 0; i < btns.length; i++) {
+                    var btn = btns[i];
+                    btn.disabled = true;
+                    btn.style.pointerEvents = 'none';
+                    btn.style.opacity = '0.6';
+                    if (opts.actionId) {
+                        // 多项卡片风格：只改触发按钮文案
+                        if (btn.getAttribute('data-action-id') === opts.actionId) {
+                            btn.setAttribute('data-original-text', btn.textContent);
+                            btn.textContent = loadingTextMap[opts.actionId] || '⏳ 处理中...';
+                        }
+                    } else {
+                        // 单卡片风格：所有按钮统一加 ⏳ 前缀
+                        if (!btn.dataset.originalText) {
+                            btn.dataset.originalText = btn.textContent;
+                        }
+                        btn.textContent = '⏳ ' + (btn.dataset.originalText || '处理中...');
+                    }
+                }
+            },
+            /** 统一按钮恢复：清除禁用/半透明/原文案缓存 */
+            restoreButtons: function(cardEl) {
+                if (!cardEl) return;
+                var btns = cardEl.querySelectorAll('.action-btn');
+                for (var i = 0; i < btns.length; i++) {
+                    var btn = btns[i];
+                    btn.disabled = false;
+                    btn.style.pointerEvents = '';
+                    btn.style.opacity = '';
+                    var origAttr = btn.getAttribute('data-original-text');
+                    var origData = btn.dataset && btn.dataset.originalText;
+                    var orig = origAttr || origData;
+                    if (orig) {
+                        btn.textContent = orig;
+                        btn.removeAttribute('data-original-text');
+                        if (btn.dataset) { delete btn.dataset.originalText; }
+                    }
+                }
+            },
+            /** 标记会话已处理（终结类操作调用），统一值 'done' */
+            markSessionDone: function(sessionId) {
+                if (!sessionId) return;
+                if (window.processedSessionIds) {
+                    window.processedSessionIds[sessionId] = 'done';
+                } else {
+                    processedSessionIds[sessionId] = 'done';
+                }
+            },
+            /** 会话是否已处理（兼容历史 true 和新统一 'done'） */
+            isSessionDone: function(sessionId) {
+                if (!sessionId) return false;
+                var val = (window.processedSessionIds || processedSessionIds)[sessionId];
+                return val === 'done' || val === true;
+            }
+        };
+
         var lastUserInput = '';
         var conflictStates = {};
         var currentConflictList = [];
@@ -1454,57 +1495,6 @@ window.saveMessageToBackend = saveMessageToBackend;
             });
         }
 
-        function handleWebSocketMessage(msg) {
-            if (!msg || !msg.type) {
-                addMessage('bot', msg.message || JSON.stringify(msg));
-                return;
-            }
-
-            // 优先使用增强版处理（集成 CardSystem 和 NotificationSystem）
-            if (typeof handleWebSocketMessageV2 === 'function') {
-                var handled = handleWebSocketMessageV2(msg);
-                if (handled) return;
-            }
-
-            if (msg.type === 'single_confirm_card') {
-                // 使用 CardSystem 处理
-                if (window.CardSystem) {
-                    CardSystem.show({
-                        message: msg.message || '请确认信息',
-                        data: msg.data || {},
-                        actions: msg.actions || [{ id: 'confirm', label: '✅ 确认', style: 'primary' }, { id: 'cancel', label: '❌ 取消', style: 'danger' }],
-                        expiresAt: msg.expiresAt || null
-                    });
-                } else {
-                    renderSingleConfirmCard(msg);
-                }
-            } else if (msg.type === 'multi_confirm_card') {
-                renderMultiConfirmCard(msg);
-            } else if (msg.type === 'pending_summary') {
-                addMessage('bot', msg.message);
-            } else if (msg.type === 'timeout_auto_create') {
-                handleTimeoutAutoCreate(msg);
-            } else if (msg.type === 'batch_confirm_result') {
-                handleBatchResult(msg);
-            } else if (msg.type === 'batch_cancel_result') {
-                handleBatchResult(msg);
-            } else if (msg.type === 'card_confirmed') {
-                handleCardConfirmed(msg);
-            } else if (msg.type === 'card_cancelled') {
-                handleCardCancelled(msg);
-            } else if (msg.type === 'import_result') {
-                addMessage('bot', msg.message);
-                renderCalendar();
-            } else if (msg.type === 'AGENT_STATUS') {
-                // 兜底：如果 V2 没命中，由 AgentStatusFlow 统一处理
-                if (window.AgentStatusFlow) {
-                    window.AgentStatusFlow.onStatusEvent(msg);
-                }
-            } else {
-                addMessage('bot', msg.message || JSON.stringify(msg));
-            }
-        }
-
         function handleTimeoutAutoCreate(msg) {
             if (timerInterval) clearInterval(timerInterval);
 
@@ -1544,7 +1534,7 @@ window.saveMessageToBackend = saveMessageToBackend;
                         item.remove();
                         // 如果multi卡片中没有更多item，移除整个卡片
                         var multiCard = document.getElementById('multiConfirmCard');
-                        if (multiCard && multiCard.querySelectorAll('.card-list-item').length === 0) {
+                        if (multiCard && multiCard.querySelectorAll('.rm-card-list-item').length === 0) {
                             multiCard.remove();
                         }
                     } else {
@@ -1586,7 +1576,7 @@ window.saveMessageToBackend = saveMessageToBackend;
                     if (item) {
                         item.remove();
                         var multiCard = document.getElementById('multiConfirmCard');
-                        if (multiCard && multiCard.querySelectorAll('.card-list-item').length === 0) {
+                        if (multiCard && multiCard.querySelectorAll('.rm-card-list-item').length === 0) {
                             multiCard.remove();
                         }
                     } else {
@@ -1733,9 +1723,9 @@ window.saveMessageToBackend = saveMessageToBackend;
             var container = document.getElementById('confirmationContainer');
             var html = '<div class="confirmation-card" id="multiConfirmCard" data-session-id="multi">';
             html += '<div class="card-title">📋 您有 ' + card.count + ' 个待确认行程，请选择：</div>';
-            html += '<div class="card-list">';
+            html += '<div class="rm-card-list">';
             card.items.forEach(function(item, index) {
-                html += '<div class="card-list-item" id="item-' + item.sessionId + '">';
+                html += '<div class="rm-card-list-item" id="item-' + item.sessionId + '">';
                 html += '<span class="item-number">' + (index + 1) + '.</span>';
                 html += '<span class="item-title">' + item.title + '</span>';
                 html += '<span class="item-time">，' + item.remindTime + '</span>';
@@ -1993,7 +1983,7 @@ window.saveMessageToBackend = saveMessageToBackend;
                 || action === 'schedule_direct' || action === 'schedule_skip' || action === 'schedule_overwrite');
             
             // 会话级去重：同一个 sessionId 的终结操作不重复处理
-            if (isTerminalAction && sessionId && processedSessionIds[sessionId]) {
+            if (isTerminalAction && sessionId && CardHelpers.isSessionDone(sessionId)) {
                 console.warn('会话已处理，忽略重复请求: sessionId=' + sessionId);
                 return;
             }
@@ -2002,7 +1992,7 @@ window.saveMessageToBackend = saveMessageToBackend;
             isProcessing = true;
             
             // 仅终结操作标记会话为已处理，修改(edit)不标记
-            if (isTerminalAction && sessionId) processedSessionIds[sessionId] = true;
+            if (isTerminalAction && sessionId) CardHelpers.markSessionDone(sessionId);
             
             // 立即禁用所有操作按钮（包括卡片内的）
             var allButtons = document.querySelectorAll('.action-btn, .mini-btn, .confirmation-card button, .card-action-btn');

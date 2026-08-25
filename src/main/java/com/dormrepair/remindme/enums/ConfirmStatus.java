@@ -3,7 +3,10 @@ package com.dormrepair.remindme.enums;
 // 确认状态枚举。对应 reminders.confirm_status / users.period_confirm_status 字段，存储为 VARCHAR(20)，默认值 PENDING
 public enum ConfirmStatus {
 
-    // 待确认：提醒/行程卡片已下发，等待用户点击「确认」或「取消」
+    // 【P2-3 语义：确认阶段·待用户点确认/取消】
+    // 归属阶段：两阶段确认的"信息确认阶段"，即 reminders.confirm_status 字段。
+    // 调度器推送 confirm 卡片（用户点击确认前）或 Agent 生成 confirm 卡片（用户点击前）都进入此 PENDING。
+    // 确认成功后流转为 CONFIRMED，超时无操作流转为 DEFAULTED；不涉及推送后执行阶段。
     PENDING("待确认"),
     // 已确认：用户主动点击确认，提醒后续进入待推送/待执行链路
     CONFIRMED("已确认"),

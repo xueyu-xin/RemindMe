@@ -3,7 +3,10 @@ package com.dormrepair.remindme.enums;
 // 提醒生命周期状态枚举。对应 reminders.status 字段，存储为 VARCHAR(20)，默认值 PENDING；标记单条提醒当前所处阶段
 public enum ReminderStatus {
 
-    // 待推送：提醒已创建且未到推送时间，等待调度器触发
+    // 【P2-3 语义：提醒生命周期级·待推送】
+    // 归属阶段：提醒已创建且已确认（confirmStatus=CONFIRMED），但当前时间尚未到达推送触发时刻。
+    // 等待 SchedulerService 扫描写入推送队列。
+    // 与 ExecutionStatus.PENDING（已经推送了，等用户点"已执行"）区分：ReminderStatus.PENDING 发生在推送前。
     PENDING("待推送"),
     // 已推送待确认：调度器已推送执行卡片，等待用户确认/稍后/取消，不会重复推送
     REMINDED("已推送待确认"),

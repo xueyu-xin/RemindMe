@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
@@ -18,13 +19,27 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-// 对话历史内存存储。按用户维度承载消息、30 分钟过期自动清理；超过 20 条按"首条用户请求+最近 19 条"策略裁剪，并可转换为 Spring AI Message 供 LLM 消费
+// 对话历史内存存储。按用户维度承载消息、30 分钟过期自动清理；超过 N 条按"首条用户请求+最近 N-1 条"策略裁剪，并可转换为 Spring AI Message 供 LLM 消费
 @Slf4j
 @Component
 public class ConversationMemory {
 
     // 会话过期阈值：距最后访问超过 30 分钟即被 cleanExpiredSessions 移除
     private static final int EXPIRATION_MINUTES = 30;
+
+    // ===== P1-3：历史上限改为配置注入，对齐 application.yml 中 agent.max-history =====
+    // 历史上限（配置注入）：application.yml agent.max-history=10，缺省默认值 10。
+    // 注：旧版本 ConversationMemory 硬编码 DEFAULT_HISTORY_LIMIT=20，与 yml=10 不一致，已统一改为走配置。
+    @Value("${agent.max-history:10}")
+    private int historyLimit;
+
+    // 兜底常量：若 historyLimit 被错误注入为 <=0（或单元测试直接 new ConversationMemory()），回退到 10。
+    private static final int FALLBACK_HISTORY_LIMIT = 10;
+
+    // 历史上限：首条用户请求 + 最近 N-1 条。优先取配置注入值，异常情况回退兜底。
+    private int getHistoryLimit() {
+        return historyLimit > 0 ? historyLimit : FALLBACK_HISTORY_LIMIT;
+    }
 
     // 存储容器：userId → MemoryEntry（消息列表 + 最后访问时间），线程安全 ConcurrentHashMap
     private final Map<Long, MemoryEntry> memoryStore = new ConcurrentHashMap<>();
@@ -138,9 +153,9 @@ public class ConversationMemory {
             }
         });
 
-        // 超过上限 20 条 → 按"首条用户请求 + 最近 19 条"策略裁剪
-        if (entry.getMessages().size() > DEFAULT_HISTORY_LIMIT) {
-            trimHistory(userId, DEFAULT_HISTORY_LIMIT);
+        // 超过上限 → 按"首条用户请求 + 最近 N-1 条"策略裁剪（N 由 agent.max-history 配置）
+        if (entry.getMessages().size() > getHistoryLimit()) {
+            trimHistory(userId, getHistoryLimit());
         }
 
         log.debug("添加消息: userId={}, role={}, messageCount={}", userId, message.getRole(), getMessageCount(userId));
@@ -215,9 +230,6 @@ public class ConversationMemory {
         cleanExpiredSessions();
         return memoryStore.size();
     }
-
-    // 消息上限：20 = 首条用户原始请求 + 最近 19 条消息
-    private static final int DEFAULT_HISTORY_LIMIT = 20;
 
     // ---------- Spring AI 消息适配 ----------
 
@@ -305,8 +317,8 @@ public class ConversationMemory {
 
     // ---------- 裁剪策略 ----------
 
-    // 把用户历史裁剪到 limit 条；保留"末尾 limit 条"，首条用户原始请求在 DEFAULT_HISTORY_LIMIT=20 的策略下已自然处于末尾集合之前
-    // （注：超过 20 即被裁剪，相当于丢弃中间较旧的消息，保留最新 20）
+    // 把用户历史裁剪到 limit 条；保留"末尾 limit 条"，首条用户原始请求在 N=agent.max-history 的策略下已自然处于末尾集合之前
+    // （注：超过 N 即被裁剪，相当于丢弃中间较旧的消息，保留最新 N 条）
     public void trimHistory(Long userId, int limit) {
         MemoryEntry entry = memoryStore.get(userId);
         if (entry != null && entry.getMessages().size() > limit) {
@@ -318,8 +330,8 @@ public class ConversationMemory {
         }
     }
 
-    // 使用默认上限裁剪
+    // 使用配置注入的默认上限裁剪（agent.max-history，默认 10）
     public void trimHistory(Long userId) {
-        trimHistory(userId, DEFAULT_HISTORY_LIMIT);
+        trimHistory(userId, getHistoryLimit());
     }
 }

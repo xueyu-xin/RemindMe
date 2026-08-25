@@ -12,12 +12,14 @@ import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-// Agent 时间计算服务。向 Agent 暴露两个工具方法：
+// P3-7 命名歧义修复：原名 TimeTools 与静态工具类 TimeUtils 形成"双胞胎"极易混淆；
+// 改名为 AgentDateService 明确两点：① 这是 Spring @Service（非静态 final 工具类）；② 面向 Agent 提供日期计算工具。
+// 对外暴露两个 Agent 工具方法：
 // get_current_time（查询现在时刻/日期/星期）、calculate_date（按自然语言表达式算相对日期）；
 // 内部工具 getWeekDayChinese 把 ISO 星期值 (1..7) 映射为中文星期名
 @Slf4j
 @Service
-public class TimeTools {
+public class AgentDateService {
 
     // ISO 星期值 → 中文名的固定映射数组，下标 0=星期一…6=星期日，dayOfWeek(1..7) 取下标需 -1
     private static final String[] WEEK_DAYS_CN = {"星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"};

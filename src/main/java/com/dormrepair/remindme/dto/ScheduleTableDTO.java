@@ -4,6 +4,7 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import lombok.experimental.SuperBuilder;
 
 import java.util.List;
 import java.util.Map;
@@ -38,12 +39,10 @@ public class ScheduleTableDTO {
 
     // 单门课程的解析结果
     @Data
-    @Builder
+    @SuperBuilder
     @NoArgsConstructor
     @AllArgsConstructor
-    public static class CourseItem {
-        // 课程名（如「高等数学」）
-        private String title;
+    public static class CourseItem extends BaseReminderFields {
 
         // 任课教师
         private String teacher;
@@ -62,9 +61,6 @@ public class ScheduleTableDTO {
 
         // 是否仅双周上课：true 则 weeks 里只在偶数周生效
         private Boolean evenWeek;
-
-        // 上课地点/教室（如「教 3-201」）
-        private String location;
     }
 
     // 单节次的时间区段

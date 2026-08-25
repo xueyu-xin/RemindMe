@@ -1,4 +1,4 @@
-﻿﻿<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -149,7 +149,7 @@
         }
 
         /* ===== 卡片 ===== */
-        .card {
+        .rm-card {
             background: var(--cream-card);
             border: 2px solid var(--peach-pale);
             border-radius: 24px;
@@ -163,7 +163,7 @@
         }
 
         /* ===== 聊天页面卡片 ===== */
-        #page-chat .card {
+        #page-chat .rm-card {
             flex: 0 1 auto;
             height: calc(100vh - 64px - 68px - 40px);
             min-height: 350px;
@@ -173,7 +173,7 @@
         }
 
         /* ===== 日历页面卡片  ===== */
-        #page-calendar .card {
+        #page-calendar .rm-card {
             flex: 1;
             min-height: 0;
             margin-top: 8px;
@@ -181,7 +181,7 @@
         }
 
         /* ===== 我的页面卡片 - 自适应内容 ===== */
-        #page-profile .card {
+        #page-profile .rm-card {
             flex: 1;
             min-height: 0;
             margin-top: 8px;
@@ -1465,8 +1465,8 @@
         }
 
         /* ===== 卡片列表项（多确认卡片用） ===== */
-        .card-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
-        .card-list-item {
+        .rm-card-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }
+        .rm-card-list-item {
             display: flex;
             align-items: center;
             padding: 10px 12px;
@@ -1748,7 +1748,7 @@
 
     <main class="content-area">
         <div id="page-chat" class="tab-page active">
-            <div class="card">
+            <div class="rm-card">
                 <div class="prompt-bar">
                     <span id="promptText">你可以这样问我：明天下午3点提醒我还书</span>
                 </div>
@@ -1764,7 +1764,7 @@
         </div>
 
         <div id="page-calendar" class="tab-page">
-            <div class="card">
+            <div class="rm-card">
                 <div class="calendar-header">
                     <div class="calendar-title-wrap">
                         <h3>🌷 日程日历</h3>
@@ -1797,7 +1797,7 @@
         </div>
 
         <div id="page-profile" class="tab-page">
-            <div class="card">
+            <div class="rm-card">
                 <div class="profile-card">
                     <div class="avatar-wrapper" onclick="triggerAvatarUpload()">
                         <div class="avatar-circle" id="avatarCircle">🐰</div>

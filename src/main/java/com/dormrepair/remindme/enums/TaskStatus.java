@@ -17,7 +17,9 @@ public enum TaskStatus {
     SKIPPED("已跳过", "⏭️"),
     // 系统创建失败（对应 ❌）
     FAILED("创建失败", "⚠️"),
-    // 等待用户确认（对应 ⏳）
+    // 【P2-3 语义：多任务子任务级待确认】
+    // 归属阶段：多任务卡片中的单个 item。用户尚未点击"确认/取消/跳过/修改"此条目，仍处于待用户决策或勾选状态。
+    // 与 SessionStatus.PENDING（整会话）/ ConfirmStatus.PENDING（单提醒卡片）区分粒度：TaskStatus 是 items 维度。
     PENDING("待确认", "⏳");
 
     // 中文展示名

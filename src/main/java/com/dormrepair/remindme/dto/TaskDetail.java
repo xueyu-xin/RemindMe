@@ -3,9 +3,10 @@ package com.dormrepair.remindme.dto;
 import com.dormrepair.remindme.enums.TaskStatus;
 import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.AllArgsConstructor;
-import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import lombok.experimental.SuperBuilder;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -15,21 +16,16 @@ import java.util.Map;
 // 作为 ReplyTemplateService 的输入，用于生成结构化回复。
 // 同时提供 toMap()/fromMap() 用于与 ConfirmationService 中的 item Map 互转。
 @Data
-@Builder
+@SuperBuilder
 @NoArgsConstructor
 @AllArgsConstructor
-public class TaskDetail {
+@EqualsAndHashCode(callSuper = true)
+public class TaskDetail extends BaseReminderFields {
 
     // 任务序号（从 0 开始）
     private int index;
-    // 任务标题
-    private String title;
     // 提醒时间
     private LocalDateTime remindTime;
-    // 地点，可为空
-    private String location;
-    // 优先级 LOW/NORMAL/HIGH
-    private String priority;
     // 任务状态
     private TaskStatus status;
     // 是否有冲突
@@ -43,10 +39,10 @@ public class TaskDetail {
     public Map<String, Object> toMap() {
         Map<String, Object> map = new HashMap<>();
         map.put("index", index);
-        map.put("title", title);
+        map.put("title", getTitle());
         map.put("remindTime", remindTime != null ? remindTime.format(TimeUtils.FORMATTER) : null);
-        map.put("location", location);
-        map.put("priority", priority);
+        map.put("location", getLocation());
+        map.put("priority", getPriority());
         map.put("status", status != null ? status.name() : TaskStatus.PENDING.name());
         map.put("hasConflict", hasConflict);
         map.put("conflictOriginalTitle", conflictOriginalTitle);

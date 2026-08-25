@@ -5,7 +5,7 @@
  */
 
 /* ===== 卡片消息容器 ===== */
-.card-message {
+.rm-card-message {
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -610,14 +610,14 @@
 }
 
 /* ===== 卡片列表项（多确认卡片用）===== */
-.card-list {
+.rm-card-list {
     display: flex;
     flex-direction: column;
     gap: 10px;
     margin-bottom: 14px;
 }
 
-.card-list-item {
+.rm-card-list-item {
     display: flex;
     align-items: center;
     padding: 10px 12px;
@@ -688,7 +688,7 @@
 }
 
 /* ===== 编辑表单 ===== */
-.confirmation-card .card-edit-form {
+.confirmation-card .rm-card-edit-form {
     margin-top: 14px;
     padding: 14px;
     background: var(--cream-bg);
@@ -696,15 +696,15 @@
     border: 1px solid var(--peach-pale);
 }
 
-.card-edit-form .form-group {
+.rm-card-edit-form .form-group {
     margin-bottom: 12px;
 }
 
-.card-edit-form .form-group:last-child {
+.rm-card-edit-form .form-group:last-child {
     margin-bottom: 0;
 }
 
-.card-edit-form label {
+.rm-card-edit-form label {
     display: block;
     margin-bottom: 6px;
     color: var(--brown-deep);
@@ -712,8 +712,8 @@
     padding-left: 4px;
 }
 
-.card-edit-form input,
-.card-edit-form select {
+.rm-card-edit-form input,
+.rm-card-edit-form select {
     width: 100%;
     padding: 8px 12px;
     background: var(--cream-card);
@@ -727,19 +727,19 @@
     transition: all 0.25s ease;
 }
 
-.card-edit-form input:focus,
-.card-edit-form select:focus {
+.rm-card-edit-form input:focus,
+.rm-card-edit-form select:focus {
     border-color: var(--peach);
     box-shadow: 0 0 0 4px rgba(255, 159, 122, 0.12);
 }
 
-.card-edit-form .form-actions {
+.rm-card-edit-form .form-actions {
     display: flex;
     gap: 8px;
     margin-top: 14px;
 }
 
-.card-edit-form .form-actions button {
+.rm-card-edit-form .form-actions button {
     flex: 1;
 }
 
@@ -1067,7 +1067,7 @@
         width: 100%;
     }
 
-    .card-list-item {
+    .rm-card-list-item {
         padding: 8px 10px;
     }
 
