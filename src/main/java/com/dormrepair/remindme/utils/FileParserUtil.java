@@ -122,34 +122,15 @@ public final class FileParserUtil {
         }
     }
 
-    // 图片转 Base64。先读字节再 Base64 编码；contentType 优先取 MultipartFile#getContentType；
-    // 若为空或非 image/* 则根据扩展名兜底：.jpg/jpeg→image/jpeg，.png→image/png，gif/webp 同理；
-    // 最终拼成 data:<mime>;base64,<base64> 完整 data URI 字符串
+    // 图片转 Base64。先读字节再 Base64 编码，直接返回纯 Base64 字符串（不带 data: 前缀）；
+    // 调用方（如 QwenRecognitionService）会将其包装进 MultiModalMessageItemImage，由 SDK 自行处理前缀
     public static String parseImage(MultipartFile file) {
         try {
             byte[] bytes = file.getBytes();
             String base64 = Base64.getEncoder().encodeToString(bytes);
 
-            String contentType = file.getContentType();
-            if (contentType == null || !contentType.startsWith("image/")) {
-                // 根据扩展名兜底推断 MIME
-                String name = file.getOriginalFilename().toLowerCase();
-                if (name.endsWith(".jpg") || name.endsWith(".jpeg")) {
-                    contentType = "image/jpeg";
-                } else if (name.endsWith(".png")) {
-                    contentType = "image/png";
-                } else if (name.endsWith(".gif")) {
-                    contentType = "image/gif";
-                } else if (name.endsWith(".webp")) {
-                    contentType = "image/webp";
-                } else {
-                    contentType = "image/jpeg";
-                }
-            }
-
-            String result = "data:" + contentType + ";base64," + base64;
             log.info("图片转换 Base64 成功：{}，大小：{} bytes", file.getOriginalFilename(), bytes.length);
-            return result;
+            return base64;
         } catch (IOException e) {
             log.error("图片解析失败：{}", file.getOriginalFilename(), e);
             throw new RuntimeException("图片解析失败：" + e.getMessage(), e);

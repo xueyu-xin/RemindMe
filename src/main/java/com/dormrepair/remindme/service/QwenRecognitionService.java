@@ -27,7 +27,10 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.net.SocketTimeoutException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -149,13 +152,16 @@ public class QwenRecognitionService {
         try {
             MultiModalConversation conv = new MultiModalConversation();
 
+            String tempFilePath = saveBase64ToTempFile(base64Image);
+            log.info("通义千问图片识别使用临时文件：{}", tempFilePath);
+
             MultiModalConversationParam param = MultiModalConversationParam.builder()
                     .apiKey(apiKey)
                     .model("qwen-vl-plus")
                     .message(MultiModalConversationMessage.builder()
                             .role("user")
                             .content(java.util.Arrays.asList(
-                                    new MultiModalMessageItemImage(base64Image),
+                                    new MultiModalMessageItemImage(tempFilePath),
                                     new MultiModalMessageItemText(IMAGE_PROMPT)
                             ))
                             .build())
@@ -264,7 +270,8 @@ public class QwenRecognitionService {
     }
 
     // 从 MultiModalConversationResult 提取文本
-    // 多模态返回的 content 是 List<Map>，需要筛出 type 为 text 的内容拼接
+    // 多模态返回的 content 是 List<?>，其中每个元素为 Map，键 "text" 对应 JSON 文本片段
+    // 使用 instanceof 安全类型判断，避免 SDK 内部类型变化导致 ClassCastException
     private String extractMultiModalText(MultiModalConversationResult result) {
         if (result == null || result.getOutput() == null) {
             log.warn("MultiModalConversationResult output 为空");
@@ -278,15 +285,17 @@ public class QwenRecognitionService {
             try {
                 var message = output.getChoices().get(0).getMessage();
                 if (message != null && message.getContent() != null) {
-                    // MultiModalMessage.getContent() 返回 List<Map<String, Object>>
-                    // 需要找到类型为 text 的内容
-                    List<Map<String, Object>> contentList = message.getContent();
+                    Object contentObj = message.getContent();
                     StringBuilder sb = new StringBuilder();
-                    for (Map<String, Object> item : contentList) {
-                        if (item != null && "text".equals(item.get("type"))) {
-                            Object textVal = item.get("text");
-                            if (textVal != null) {
-                                sb.append(textVal.toString());
+                    if (contentObj instanceof List) {
+                        List<?> contentList = (List<?>) contentObj;
+                        for (Object item : contentList) {
+                            if (item instanceof Map) {
+                                Map<?, ?> map = (Map<?, ?>) item;
+                                Object textObj = map.get("text");
+                                if (textObj != null) {
+                                    sb.append(textObj.toString());
+                                }
                             }
                         }
                     }
@@ -537,13 +546,16 @@ public class QwenRecognitionService {
                     如果无法识别课表，返回 {"success": false, "confidence": 0.0, "courses": [], "timeSections": [], "semesterStartDate": null, "suggestedWeeks": 16}
                     """;
 
+            String tempFilePath = saveBase64ToTempFile(base64Image);
+            log.info("图片课表识别使用临时文件：{}", tempFilePath);
+
             MultiModalConversationParam param = MultiModalConversationParam.builder()
                     .apiKey(apiKey)
                     .model("qwen-vl-plus")
                     .message(MultiModalConversationMessage.builder()
                             .role("user")
                             .content(java.util.Arrays.asList(
-                                    new MultiModalMessageItemImage(base64Image),
+                                    new MultiModalMessageItemImage(tempFilePath),
                                     new MultiModalMessageItemText(schedulePrompt)
                             ))
                             .build())
@@ -623,5 +635,49 @@ public class QwenRecognitionService {
         }
         // IO 异常（网络层），排除 JSON 解析错误
         return e instanceof IOException && !(e instanceof JsonProcessingException);
+    }
+
+    // 构造 DashScope MultiModalMessageItemImage 所需的 data URI：若入参已是 data:image/* 形式则原样返回，
+    // 否则按 png 兜底拼接前缀。用于兼容纯 Base64 与 data URI 两种入参形态
+    private static String buildDataUri(String base64Image) {
+        if (base64Image == null) {
+            return null;
+        }
+        if (base64Image.startsWith("data:image/")) {
+            return base64Image;
+        }
+        return "data:image/png;base64," + base64Image;
+    }
+
+    // 将纯 Base64 图片数据保存为临时文件，并返回 file:/// 形式的 URL 字符串
+    // 供 DashScope MultiModalMessageItemImage 通过文件 URL 方式读取图片（SDK 最稳定的调用方式）
+    // 入参 pureBase64 必须为不含 data: 前缀的纯 Base64 字符串；若误传了 data URI 会自动剥离前缀
+    private static String saveBase64ToTempFile(String pureBase64) {
+        if (pureBase64 == null || pureBase64.isEmpty()) {
+            throw new RuntimeException("Base64 图片数据为空，无法保存为临时文件");
+        }
+
+        // 兼容误传 data URI 的情况：剥离 data:image/...;base64, 前缀
+        String rawBase64 = pureBase64;
+        int commaIdx = pureBase64.indexOf(",");
+        if (pureBase64.startsWith("data:") && commaIdx > 0) {
+            rawBase64 = pureBase64.substring(commaIdx + 1);
+        }
+
+        try {
+            byte[] bytes = Base64.getDecoder().decode(rawBase64);
+            Path tempFile = Files.createTempFile("qwen_img_", ".png");
+            Files.write(tempFile, bytes);
+
+            // 构造 file:/// 形式的 URL 字符串（Windows 绝对路径如 C:\... 需转成 /C:/... 形式）
+            String path = tempFile.toAbsolutePath().toString().replace('\\', '/');
+            String fileUrl = "file:///" + (path.startsWith("/") ? path.substring(1) : path);
+
+            log.info("Base64 图片已保存为临时文件：{}", fileUrl);
+            return fileUrl;
+        } catch (IOException e) {
+            log.error("保存 Base64 图片到临时文件失败", e);
+            throw new RuntimeException("保存 Base64 图片到临时文件失败：" + e.getMessage(), e);
+        }
     }
 }
