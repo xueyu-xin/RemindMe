@@ -3,6 +3,7 @@ package com.dormrepair.remindme.service;
 import com.dormrepair.remindme.agent.AgentTool;
 import com.dormrepair.remindme.dto.response.KnowledgeResult;
 import com.dormrepair.remindme.enums.MemoryCategory;
+import com.dormrepair.remindme.agent.event.PrivateMemoryChangedEvent;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
@@ -16,6 +17,7 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.HttpStatusCodeException;
@@ -48,6 +50,15 @@ public class RagService {
     private final ChromaVectorStore vectorStore;
     private final ChromaApi chromaApi;
     private final EmbeddingModel embeddingModel;
+
+    // LLM 服务：记忆标题由 AI 概括生成（新增/更新时自动触发）
+    private final LLMService llmService;
+
+    // 主动检索的相似度门槛：低于该分数的弱相关结果直接过滤，避免"问A答B"式罗列
+    private static final double RETRIEVE_SIMILARITY_THRESHOLD = 0.35;
+
+    // Spring 事件发布器：记忆增删成功后发布变更事件，由监听器推送 WebSocket 通知前端
+    private final ApplicationEventPublisher eventPublisher;
 
     // Chroma 多租户与数据库配置，构建用户私有库时使用
     @Value("${spring.ai.vectorstore.chroma.tenant-name:default_tenant}")
@@ -85,13 +96,17 @@ public class RagService {
     }
 
     // 把 Spring AI 的 Document 统一转成对外暴露的 KnowledgeResult，
-    // 顺便解析 metadata 里的 category、userId、createTime 等字段。
+    // 顺便解析 metadata 里的 title、category、remark、userId、createTime 等字段。
     private KnowledgeResult toKnowledgeResult(Document doc, String source) {
         Map<String, Object> metadata = doc.getMetadata();
         String categoryStr = metadata != null && metadata.get("category") != null
                 ? metadata.get("category").toString() : null;
         Long docUserId = metadata != null && metadata.get("userId") != null
                 ? Long.valueOf(metadata.get("userId").toString()) : null;
+        String titleStr = metadata != null && metadata.get("title") != null
+                ? metadata.get("title").toString() : null;
+        String remarkStr = metadata != null && metadata.get("remark") != null
+                ? metadata.get("remark").toString() : null;
 
         LocalDateTime createTime = null;
         if (metadata != null && metadata.get("createTime") != null) {
@@ -105,14 +120,29 @@ public class RagService {
             }
         }
 
+        LocalDateTime updateTime = null;
+        if (metadata != null && metadata.get("updateTime") != null) {
+            try {
+                updateTime = LocalDateTime.ofInstant(
+                        Instant.parse(metadata.get("updateTime").toString()),
+                        ZoneId.systemDefault()
+                );
+            } catch (Exception e) {
+                log.warn("解析 updateTime 失败: {}", metadata.get("updateTime"));
+            }
+        }
+
         return KnowledgeResult.builder()
                 .id(doc.getId())
                 .content(doc.getText())
+                .title(titleStr)
                 .score(doc.getScore())
                 .category(categoryStr)
+                .remark(remarkStr)
                 .userId(docUserId)
                 .source(source)
                 .createTime(createTime)
+                .updateTime(updateTime)
                 .metadata(metadata)
                 .build();
     }
@@ -163,27 +193,58 @@ public class RagService {
 
     // ==================== 私有记忆管理 ====================
 
-    // 新增一条私有记忆，写入用户独立 collection，返回生成的文档 ID；失败返回 null
-    public String addPrivateMemory(Long userId, String content, MemoryCategory category) {
-        log.info("添加私有记忆: userId={}, category={}", userId, category);
+    // 新增一条私有记忆，写入用户独立 collection，返回生成的文档 ID；失败返回 null。
+    // 分类与标题均由 AI 按内容生成，成功后发布 ADD 变更事件
+    public String addPrivateMemory(Long userId, String content) {
+        return addPrivateMemoryInternal(userId, content, null, null);
+    }
+
+    // 完整写入入口：title 透传（null 时 AI 生成），remark 透传（null 时不写），新建时 id 与创建时间均为新生成
+    private String addPrivateMemoryInternal(Long userId, String content, String title, String remark) {
+        return addMemoryDocument(userId, UUID.randomUUID().toString(), content, title, remark, null, "添加私有记忆");
+    }
+
+    // 通用写入入口：docId 与 createTime 由调用方决定（新建时传 null 即新生成/取当前时刻），
+    // 写库成功后发布 ADD 变更事件，失败返回 null
+    private String addMemoryDocument(Long userId, String docId, String content, String title, String remark,
+                                     Instant createTime, String logAction) {
+        log.info("{}: userId={}, docId={}", logAction, userId, docId);
         try {
             ChromaVectorStore userStore = getUserVectorStore(userId);
-
-            String docId = UUID.randomUUID().toString();
-            Map<String, Object> metadata = new HashMap<>();
-            metadata.put("userId", userId);
-            metadata.put("category", category.name());
-            metadata.put("createTime", Instant.now().toString());
+            Map<String, Object> metadata = buildMemoryMetadata(userId, content, title, remark, createTime);
 
             Document document = new Document(docId, content, metadata);
-            callWithRetry(() -> { userStore.add(List.of(document)); return true; }, "添加私有记忆");
+            callWithRetry(() -> { userStore.add(List.of(document)); return true; }, logAction);
 
-            log.info("私有记忆添加成功: docId={}, userId={}", docId, userId);
+            log.info("{}成功: docId={}, userId={}", logAction, docId, userId);
+            eventPublisher.publishEvent(new PrivateMemoryChangedEvent("ADD", userId, docId));
             return docId;
         } catch (Exception e) {
-            log.error("添加私有记忆失败: userId={}, error={}", userId, e.getMessage(), e);
+            log.error("{}失败: userId={}, error={}", logAction, userId, e.getMessage(), e);
             return null;
         }
+    }
+
+    // 构建记忆 metadata：分类由 AI 从 MemoryCategory 枚举中选定（失败降级 OTHER），标题由 AI 概括，备注透传。
+    // createTime 为空时取当前时刻（新建），非空时沿用原值（更新场景）；updateTime 始终为当前时刻
+    private Map<String, Object> buildMemoryMetadata(Long userId, String content, String title, String remark,
+                                                    Instant createTime) {
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("userId", userId);
+        metadata.put("createTime", createTime != null ? createTime.toString() : Instant.now().toString());
+        metadata.put("updateTime", Instant.now().toString());
+
+        String category = llmService.classifyMemoryCategory(content);
+        metadata.put("category", category != null ? category : MemoryCategory.OTHER.name());
+
+        String effectiveTitle = title != null && !title.isEmpty() ? title : generateTitle(content);
+        if (effectiveTitle != null && !effectiveTitle.isEmpty()) {
+            metadata.put("title", effectiveTitle);
+        }
+        if (remark != null && !remark.isEmpty()) {
+            metadata.put("remark", remark);
+        }
+        return metadata;
     }
 
     // 删除指定私有记忆，参数非法或库中不存在时返回 false
@@ -198,6 +259,7 @@ public class RagService {
             ChromaVectorStore userStore = getUserVectorStore(userId);
             callWithRetry(() -> { userStore.delete(List.of(memoryId)); return true; }, "删除私有记忆");
             log.info("私人记忆删除成功: memoryId={}, userId={}", memoryId, userId);
+            eventPublisher.publishEvent(new PrivateMemoryChangedEvent("DELETE", userId, memoryId));
             return true;
         } catch (Exception e) {
             log.error("删除私人记忆失败: memoryId={}, userId={}, error={}",
@@ -206,50 +268,120 @@ public class RagService {
         }
     }
 
-    // 更新私有记忆：先查出旧分类 → 删旧文档 → 按原分类新增新文档。
-    // 删除成功但新增失败时会丢失原记忆，调用方需注意返回值。
-    public boolean updatePrivateMemory(String memoryId, Long userId, String newContent) {
+    // 更新私有记忆内容：先删旧文档，再复用原 id 与创建时间重写，内容/分类/标题更新、备注保留、
+    // 更新时间刷新为当前时刻；返回该记忆 id，失败返回 null。写入成功后发布 ADD 变更事件
+    public String updatePrivateMemory(String memoryId, Long userId, String newContent) {
         if (memoryId == null || memoryId.isEmpty()
                 || userId == null
                 || newContent == null || newContent.isEmpty()) {
             log.warn("更新记忆参数非法: memoryId={}, userId={}, newContent={}",
                     memoryId, userId, newContent);
-            return false;
+            return null;
         }
 
         log.info("更新私人记忆: memoryId={}, userId={}", memoryId, userId);
         try {
-            MemoryCategory oldCategory = findMemoryCategory(memoryId, userId);
-            if (oldCategory == null) {
+            KnowledgeResult oldMemory = findMemoryById(memoryId, userId);
+            if (oldMemory == null) {
                 log.warn("更新失败：旧文档不存在, memoryId={}, userId={}", memoryId, userId);
+                return null;
+            }
+
+            ChromaVectorStore userStore = getUserVectorStore(userId);
+            callWithRetry(() -> { userStore.delete(List.of(memoryId)); return true; }, "删除旧私有记忆");
+
+            // 复用原 id 与创建时间重写新文档，更新时间由 buildMemoryMetadata 刷新为当前时刻
+            Instant oldCreateTime = oldMemory.getCreateTime() == null
+                    ? null
+                    : oldMemory.getCreateTime().atZone(ZoneId.systemDefault()).toInstant();
+            String newDocId = addMemoryDocument(userId, memoryId, newContent, null,
+                    oldMemory.getRemark(), oldCreateTime, "更新私有记忆");
+            if (newDocId == null) {
+                log.error("更新失败：添加新文档失败，旧文档已删除！memoryId={}, userId={}",
+                        memoryId, userId);
+                return null;
+            }
+
+            log.info("私人记忆更新成功: memoryId={}, userId={}", memoryId, userId);
+            return newDocId;
+        } catch (Exception e) {
+            log.error("更新私人记忆异常: memoryId={}, userId={}, error={}",
+                    memoryId, userId, e.getMessage(), e);
+            return null;
+        }
+    }
+
+    // 更新记忆备注：仅替换备注并刷新更新时间，其余字段保持不变（备注是用户唯一可手动编辑的字段）
+    public boolean updateMemoryRemark(String memoryId, Long userId, String remark) {
+        if (memoryId == null || memoryId.isEmpty() || userId == null) {
+            log.warn("更新备注参数非法: memoryId={}, userId={}", memoryId, userId);
+            return false;
+        }
+
+        log.info("更新记忆备注: memoryId={}, userId={}", memoryId, userId);
+        try {
+            KnowledgeResult oldMemory = findMemoryById(memoryId, userId);
+            if (oldMemory == null) {
+                log.warn("更新备注失败：旧文档不存在, memoryId={}, userId={}", memoryId, userId);
                 return false;
             }
 
             boolean deleted = deletePrivateMemory(memoryId, userId);
             if (!deleted) {
-                log.error("更新失败：删除旧文档失败, memoryId={}, userId={}", memoryId, userId);
+                log.error("更新备注失败：删除旧文档失败, memoryId={}, userId={}", memoryId, userId);
                 return false;
             }
 
-            String newDocId = addPrivateMemory(userId, newContent, oldCategory);
-            if (newDocId == null) {
-                log.error("更新失败：添加新文档失败，旧文档已删除！memoryId={}, userId={}",
-                        memoryId, userId);
-                return false;
+            ChromaVectorStore userStore = getUserVectorStore(userId);
+            // 复用原文档 id，仅替换备注重写
+            String docId = memoryId;
+            Map<String, Object> metadata = new HashMap<>();
+            metadata.put("userId", userId);
+            metadata.put("createTime", oldMemory.getCreateTime() == null
+                    ? Instant.now().toString()
+                    : oldMemory.getCreateTime().atZone(ZoneId.systemDefault()).toInstant().toString());
+            metadata.put("updateTime", Instant.now().toString());
+            if (oldMemory.getCategory() != null && !oldMemory.getCategory().isEmpty()) {
+                metadata.put("category", oldMemory.getCategory());
+            }
+            if (oldMemory.getTitle() != null && !oldMemory.getTitle().isEmpty()) {
+                metadata.put("title", oldMemory.getTitle());
+            }
+            if (remark != null && !remark.isEmpty()) {
+                metadata.put("remark", remark);
             }
 
-            log.info("私人记忆更新成功: oldMemoryId={}, newDocId={}, userId={}",
-                    memoryId, newDocId, userId);
+            Document document = new Document(docId, oldMemory.getContent(), metadata);
+            callWithRetry(() -> { userStore.add(List.of(document)); return true; }, "更新记忆备注");
+
+            log.info("记忆备注更新成功: oldMemoryId={}, newDocId={}, userId={}", memoryId, docId, userId);
             return true;
         } catch (Exception e) {
-            log.error("更新私人记忆异常: memoryId={}, userId={}, error={}",
-                    memoryId, userId, e.getMessage(), e);
+            log.error("更新记忆备注异常: memoryId={}, userId={}, error={}", memoryId, userId, e.getMessage(), e);
             return false;
         }
     }
 
-    // 反查某条记忆的 MemoryCategory：先拉全量记忆再按 ID 过滤，找不到返回 null
-    private MemoryCategory findMemoryCategory(String memoryId, Long userId) {
+    // 生成记忆标题：先让 AI 概括核心内容，失败时降级为正文开头截断
+    private String generateTitle(String content) {
+        String aiTitle = llmService.generateMemoryTitle(content);
+        if (aiTitle != null && !aiTitle.isBlank()) {
+            return aiTitle;
+        }
+        return autoGenerateTitle(content);
+    }
+
+    // 自动生成记忆标题：取正文去掉换行后的开头若干字，供 AI 标题失败时降级使用
+    private String autoGenerateTitle(String content) {
+        if (content == null || content.isEmpty()) {
+            return null;
+        }
+        String plain = content.replaceAll("\\s+", " ").trim();
+        return plain.length() <= 20 ? plain : plain.substring(0, 20);
+    }
+
+    // 按 ID 查找某条记忆：拉全量记忆后过滤，找不到返回 null
+    private KnowledgeResult findMemoryById(String memoryId, Long userId) {
         List<KnowledgeResult> allMemories = getAllPrivateMemories(userId);
         if (allMemories == null || allMemories.isEmpty()) {
             return null;
@@ -257,16 +389,6 @@ public class RagService {
 
         return allMemories.stream()
                 .filter(item -> memoryId.equals(item.getId()))
-                .map(KnowledgeResult::getCategory)
-                .filter(categoryStr -> categoryStr != null && !categoryStr.isEmpty())
-                .map(categoryStr -> {
-                    try {
-                        return MemoryCategory.valueOf(categoryStr);
-                    } catch (IllegalArgumentException e) {
-                        log.warn("未知的记忆分类: {}, memoryId={}", categoryStr, memoryId);
-                        return null;
-                    }
-                })
                 .findFirst()
                 .orElse(null);
     }
@@ -308,7 +430,7 @@ public class RagService {
     // ==================== 知识检索 ====================
 
     // 在用户私有记忆中做向量相似度检索，topK 未指定时按记忆总量动态计算，
-    // 结果按相似度分数倒序返回。
+    // 低于相似度门槛的弱相关结果会被过滤，结果按相似度分数倒序返回。
     public List<KnowledgeResult> retrievePrivateKnowledge(Long userId, String query, Integer topK) {
         int actualTopK = calculateTopK(userId, topK);
         log.info("检索私人记忆: userId={}, query={}, topK={}", userId, query, actualTopK);
@@ -318,6 +440,7 @@ public class RagService {
             SearchRequest searchRequest = SearchRequest.builder()
                     .query(query)
                     .topK(actualTopK)
+                    .similarityThreshold(RETRIEVE_SIMILARITY_THRESHOLD)
                     .build();
             List<Document> documents = callWithRetry(
                     () -> userStore.similaritySearch(searchRequest), "检索私有记忆");
@@ -381,6 +504,7 @@ public class RagService {
     @AgentTool(
             name = "retrieve_private_knowledge",
             description = "从用户私有知识库中检索记忆，用于回答关于用户个人信息、偏好、计划等个性化问题。"
+                    + "返回的每条记忆包含分类、标题、内容和备注（备注是用户手写的补充说明），回答前请连同备注一起阅读。"
     )
     public Map<String, Object> retrievePrivateKnowledgeForAgent(Long userId, String query, Integer topK) {
         log.info("Agent调用检索私有记忆: userId={}, query={}, topK={}", userId, query, topK);
@@ -390,7 +514,8 @@ public class RagService {
 
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);
-            result.put("message", results.isEmpty() ? "未找到相关记忆" : "检索成功，共找到 " + results.size() + " 条记忆");
+            result.put("message", results.isEmpty() ? "未找到相关记忆"
+                    : "已返回 " + results.size() + " 条候选记忆");
             result.put("count", results.size());
             result.put("memories", results);
 
@@ -411,22 +536,32 @@ public class RagService {
     @AgentTool(
             name = "add_private_memory",
             description = """
-                    将用户提供的任何关于自己的信息存储到私有知识库中，包括但不限于：
-                    - 个人信息（如"我是大三学生"、"我是计算机专业"）
-                    - 饮食偏好（如"我喜欢吃苹果"）
-                    - 课程安排（如"每周三下午有高数课"）
-                    - 长期计划（如"我要考研"）
-                    - 考试安排（如"6月有四级考试"）
-                    - 日常习惯（如"我每天跑步"）
-                    - 兴趣爱好（如"我喜欢打篮球"）
+                    把对方告诉你的、关于 TA 自己的信息存入助手记忆，包括但不限于：
+                    - 个人信息（如"你是大三学生"、"你是计算机专业"）
+                    - 活动事务（如"你国庆要去长沙旅游"、"你下周三要社团摆摊"）
+                    - 重要日期（如"你妈妈的生日是10月16号"）
+                    - 长期计划（如"你要考研"）
+                    - 考试安排（如"你6月有四级考试"）
+                    - 健康状况（如"你对海鲜过敏"）
+                    - 饮食偏好（如"你喜欢吃苹果"）
+                    - 日常习惯（如"你每天12点半睡"、"你每周三下午有高数课"）
+                    - 兴趣爱好（如"你喜欢打篮球"）
+                    - 语言风格（如"你喜欢简洁的回答"）
 
-                    注意：只要用户提供了关于自己的事实信息，都应该调用此工具存储。"""
+                    重要——content 的人称规则：一般直接记录事实本身，不写人称
+                    （如"大三计算机专业学生"、"6月20日期末考试"、"每天早上7点起床"）；
+                    如果必须涉及人称，一律用"你"称呼用户（如"你喜欢打篮球"），
+                    严禁写成"用户喜欢打篮球"或"我喜欢打篮球"（"我"是助手，会混淆）。
+                    只要对方说了关于自己的事实信息，都应该调用此工具存储。
+
+                    注意：只需传 content，分类与标题由 AI 按内容自动生成；
+                    备注由用户在记忆库页面手写，助手无需（也无法）写入。"""
     )
-    public Map<String, Object> addPrivateMemoryForAgent(Long userId, String content, MemoryCategory category) {
-        log.info("Agent调用添加私有记忆: userId={}, category={}", userId, category);
+    public Map<String, Object> addPrivateMemoryForAgent(Long userId, String content) {
+        log.info("Agent调用添加私有记忆: userId={}", userId);
 
         try {
-            String memoryId = addPrivateMemory(userId, content, category);
+            String memoryId = addPrivateMemory(userId, content);
 
             Map<String, Object> result = new HashMap<>();
             if (memoryId != null && !memoryId.isEmpty()) {
@@ -434,7 +569,6 @@ public class RagService {
                 result.put("message", "记忆已成功存储");
                 result.put("memoryId", memoryId);
                 result.put("content", content);
-                result.put("category", category.name());
                 log.info("Agent添加私有记忆成功: userId={}, memoryId={}", userId, memoryId);
             } else {
                 result.put("success", false);
@@ -454,20 +588,22 @@ public class RagService {
     // Agent 工具：更新用户私有记忆
     @AgentTool(
             name = "update_private_memory",
-            description = "更新用户私有知识库中的某条记忆内容。"
+            description = "更新用户私有知识库中的某条记忆内容。调用前必须先用 retrieve_private_knowledge 或 "
+                    + "get_all_private_memories 查到目标记忆的 ID。更新后分类与标题由 AI 按新内容重新生成，用户手写的备注会保留。"
     )
     public Map<String, Object> updatePrivateMemoryForAgent(Long userId, String memoryId, String newContent) {
         log.info("Agent调用更新私有记忆: userId={}, memoryId={}", userId, memoryId);
 
         try {
-            boolean updated = updatePrivateMemory(memoryId, userId, newContent);
+            // 更新采用"先删后写"，返回新文档 ID；分类与标题由 AI 重新生成，备注保留
+            String newDocId = updatePrivateMemory(memoryId, userId, newContent);
 
             Map<String, Object> result = new HashMap<>();
-            if (updated) {
+            if (newDocId != null) {
                 result.put("success", true);
                 result.put("message", "记忆已成功更新");
-                result.put("memoryId", memoryId);
-                log.info("Agent更新私有记忆成功: userId={}, memoryId={}", userId, memoryId);
+                result.put("memoryId", newDocId);
+                log.info("Agent更新私有记忆成功: oldMemoryId={}, newMemoryId={}, userId={}", memoryId, newDocId, userId);
             } else {
                 result.put("success", false);
                 result.put("message", "记忆更新失败，可能是memoryId不存在或参数非法");
@@ -518,7 +654,8 @@ public class RagService {
     // Agent 工具：列出用户全部私有记忆
     @AgentTool(
             name = "get_all_private_memories",
-            description = "获取用户私有知识库中的所有记忆。"
+            description = "获取用户私有知识库中的所有记忆，每条包含分类、标题、内容和备注。"
+                    + "适合用户想整体回顾记忆、或按分类/关键词浏览全部记忆时使用。"
     )
     public Map<String, Object> getAllPrivateMemoriesForAgent(Long userId) {
         log.info("Agent调用获取所有私有记忆: userId={}", userId);
@@ -528,7 +665,7 @@ public class RagService {
 
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);
-            result.put("message", results.isEmpty() ? "私有记忆库为空" : "检索成功，共找到 " + results.size() + " 条记忆");
+            result.put("message", results.isEmpty() ? "记忆库为空" : "已返回 " + results.size() + " 条记忆");
             result.put("count", results.size());
             result.put("memories", results);
 
@@ -558,7 +695,7 @@ public class RagService {
 
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);
-            result.put("message", results.isEmpty() ? "未找到相关公共知识" : "检索成功，共找到 " + results.size() + " 条知识");
+            result.put("message", results.isEmpty() ? "未找到相关公共知识" : "已返回 " + results.size() + " 条知识");
             result.put("count", results.size());
             result.put("knowledge", results);
 

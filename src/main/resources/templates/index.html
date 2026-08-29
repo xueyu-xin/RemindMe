@@ -1,12 +1,13 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html xmlns:th="http://www.thymeleaf.org" lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>校园生活提醒助手</title>
-    <link rel="stylesheet" href="/css/main.css">
-    <link rel="stylesheet" href="/css/notification.css">
-    <link rel="stylesheet" href="/css/card.css">
+    <link rel="stylesheet" href="/css/main.css?v=20260829b">
+    <link rel="stylesheet" href="/css/notification.css?v=20260829b">
+    <link rel="stylesheet" href="/css/card.css?v=20260829b">
+    <link rel="stylesheet" href="/css/memory.css?v=20260829d">
     <!-- 以下内联样式保留作为兼容回退，核心样式已迁移到外部 CSS 文件 -->
     <style>
         /* ===== 字体定义 ===== */
@@ -272,8 +273,11 @@
         .btn-success { background: linear-gradient(135deg, #8ED4A6 0%, #ABDFBE 100%) !important; box-shadow: 0 4px 14px rgba(142, 212, 166, 0.35) !important; }
 
         /* ===== 聊天区域 ===== */
-        .chat-input { display: flex; gap: 12px; margin-top: auto; flex-shrink: 0; }
-        .chat-input input { flex: 1; }
+        .chat-input { display: flex; gap: 12px; margin-top: auto; flex-shrink: 0; align-items: flex-end; }
+        .chat-input textarea#chatInput { flex: 1; resize: none; height: 52px; min-height: 52px; max-height: 120px; overflow-y: auto; font-family: inherit; line-height: 1.5; padding-top: 14px; padding-bottom: 14px; }
+        /* 助手回复期间锁定态：输入框与按钮置灰、光标禁用 */
+        .chat-input textarea#chatInput:disabled { background: #F7F1EC; color: #B9A79B; cursor: not-allowed; }
+        .chat-input button:disabled, .chat-input .upload-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none !important; }
         .upload-btn {
             background: var(--peach-pale);
             border: 1px solid var(--peach-border);
@@ -1755,7 +1759,7 @@
                 <div id="confirmationContainer"></div>
                 <div class="chat-history" id="chatHistory"></div>
                 <div class="chat-input">
-                    <input type="text" id="chatInput" placeholder="输入提醒，如：明天下午3点还书">
+                    <textarea id="chatInput" rows="1" placeholder="输入提醒，如：明天下午3点还书（Shift+Enter 换行）"></textarea>
                     <input type="file" id="fileInput" accept=".xlsx,.xls,.pdf,image/*" style="display:none">
                     <button class="upload-btn" onclick="document.getElementById('fileInput').click()" title="上传日程文件">📎</button>
                     <button onclick="sendMessage()">发送</button>
@@ -1891,6 +1895,37 @@
             </div>
         </div>
 
+        <div id="page-memory" class="tab-page">
+            <div class="rm-card memory-card">
+                <div class="memory-toolbar">
+                    <h3 class="memory-title">🧠 助手记忆</h3>
+                    <div class="memory-search-box">
+                        <input type="text" id="memorySearchInput" placeholder="输入关键词搜索记忆"
+                               oninput="MemoryPage.onSearchInput()">
+                    </div>
+                    <div class="memory-toolbar-actions">
+                        <label class="memory-scope-chip memory-select-all-global" title="勾选当前筛选下的全部记忆，取消则清空勾选">
+                            <input type="checkbox" id="memorySelectAllGlobalBox" onchange="MemoryPage.toggleSelectAllGlobal(this.checked)">全选
+                        </label>
+                        <button class="memory-btn memory-btn-danger" id="memoryBatchDeleteBtn" onclick="MemoryPage.batchDelete()" disabled>删除选中(0)</button>
+                        <div class="memory-export-wrap">
+                            <button class="memory-btn memory-btn-plain" onclick="MemoryPage.toggleExportMenu()">📤 导出 ▾</button>
+                            <div class="memory-export-menu" id="memoryExportMenu" style="display:none;">
+                                <div class="memory-export-item" onclick="MemoryPage.exportAs('json')">JSON 文件</div>
+                                <div class="memory-export-item" onclick="MemoryPage.exportAs('txt')">TXT 文本</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="memory-layout">
+                    <aside class="memory-category-bar" id="memoryCategoryBar"></aside>
+                    <div class="memory-list" id="memoryList"></div>
+                    <aside class="memory-detail" id="memoryDetailPanel"></aside>
+                </div>
+            </div>
+        </div>
+
         <div id="modalOverlay" class="modal-overlay">
             <div class="modal-content">
                 <div class="modal-title" id="modalTitle">编辑</div>
@@ -1920,6 +1955,17 @@
                 <div class="modal-buttons">
                     <button class="modal-btn cancel" onclick="hideLogoutModal()">取消</button>
                     <button class="modal-btn confirm" style="background:#e74c3c;" onclick="confirmLogout()">退出</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="memoryConfirmModal" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-title">确认删除</div>
+                <div id="memoryConfirmText" style="color:#666; margin-bottom:20px; text-align:center; line-height:1.8;">确定要删除这条记忆吗？</div>
+                <div class="modal-buttons">
+                    <button class="modal-btn cancel" onclick="MemoryPage.hideConfirm()">取消</button>
+                    <button class="modal-btn confirm" style="background:#e74c3c;" onclick="MemoryPage.confirmAction()">删除</button>
                 </div>
             </div>
         </div>
@@ -1960,6 +2006,10 @@
             <span class="nav-icon">📅</span>
             <span class="nav-label">日程</span>
         </div>
+        <div class="nav-item" data-tab="memory" onclick="switchTab('memory')">
+            <span class="nav-icon">🧠</span>
+            <span class="nav-label">助手记忆</span>
+        </div>
         <div class="nav-item" data-tab="profile" onclick="switchTab('profile')">
             <span class="nav-icon">👤</span>
             <span class="nav-label">我的</span>
@@ -1972,10 +2022,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.12/cropper.min.js"></script>
 
     <!-- 外部 JS 模块（按依赖顺序加载）-->
-    <script src="/js/sound.js"></script>
-    <script src="/js/notification.js"></script>
-    <script src="/js/card.js"></script>
-    <script src="/js/main.js"></script>
+    <script src="/js/sound.js?v=20260829b"></script>
+    <script src="/js/notification.js?v=20260829b"></script>
+    <script src="/js/card.js?v=20260829b"></script>
+    <script src="/js/main.js?v=20260829c"></script>
+    <script src="/js/memory.js?v=20260829f"></script>
 
     
     <!-- 内联 JavaScript 已迁移到 main.js -->

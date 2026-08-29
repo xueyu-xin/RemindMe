@@ -14,16 +14,21 @@
 
 | 功能模块 | 说明 |
 |---------|------|
-| **AI 对话提醒** | 基于 ReAct 模式的 Agent，支持自然语言创建、查询、修改、取消提醒 |
-| **课表智能导入** | 支持 Excel / PDF / 图片上传，AI 自动识别课表结构并批量生成提醒 |
-| **天气查询** | 实时天气、天气预报、空气质量、天气预警查询（对接和风天气 API） |
-| **天气联动提醒** | 根据天气状况（高温/低温/暴雨）自动生成关联提醒 |
-| **经期管理** | 经期追踪、状态预测、经期提醒自动生成 |
-| **个人记忆系统 (RAG)** | 基于 ChromaDB + Ollama 的向量知识库，实现用户信息长期记忆 |
-| **周期提醒** | 支持按日/周/月重复的周期性提醒，每日自动生成实例 |
-| **日历视图** | 可视化月/周/日日历展示，支持农历显示与日期跳转（1900-3000 年） |
-| **实时推送** | 基于 WebSocket 的卡片式提醒推送与交互确认 |
-| **冲突检测** | 创建提醒时自动检测时间冲突，支持覆盖/跳过策略 |
+| **AI 对话提醒** | 基于 ReAct 模式的 Agent，支持自然语言创建（含批量一句话多事务）、查询、修改、取消提醒 |
+| **Agent 状态流可视化** | 每一步思考/工具调用通过事件+WebSocket 实时推送到前端，以带 emoji 的步骤条展示进度 |
+| **课表智能导入** | 支持 Excel / PDF / 图片上传，通义千问多模态识别课表结构并批量生成提醒 |
+| **天气查询** | 实时天气、天气预报、空气质量、天气预警查询（对接和风天气 API，城市搜索+AI 消歧义+错别字纠正） |
+| **天气联动提醒** | 定时根据用户地址与提醒地点的天气状况（高温/低温/暴雨）自动生成关联提醒 |
+| **经期管理** | 经期追踪、状态预测、周期参数维护、经期状态确认卡片、经期提醒自动生成 |
+| **个人记忆系统 (RAG)** | 基于 ChromaDB + Ollama 的向量知识库，AI 对话中自动提取事实存储，11 类记忆分类与标题由 AI 生成，用户可写备注；记忆库页面支持分类筛选、批量删除、导出，WebSocket 实时同步；另含公共使用手册库 |
+| **周期提醒** | 支持按日/周/月重复的周期性提醒，每日自动生成实例，实例与实际提醒 1:1 对应 |
+| **日历视图** | 可视化月/周/日日历展示，支持农历显示与日期跳转（1900-3000 年）、农历转公历 |
+| **实时推送** | 基于 Spring WebSocket（STOMP/SockJS）的卡片式提醒推送、交互确认、Agent 状态流消息 |
+| **冲突检测** | 创建提醒时自动检测时间冲突，支持覆盖/跳过策略，冲突详情结构化返回 |
+| **两阶段确认** | 提醒创建→信息确认→到点执行确认的两阶段流程，含重试次数、超时默认、编辑重解析 |
+| **用户偏好管理** | 默认城市、默认提前提醒分钟、确认间隔、经期参数等，Agent 可直接读写 |
+| **课表批量导入管理** | 文件解析→AI 识别→批量确认卡片→逐条创建，记录导入任务与明细表 |
+| **对话历史与统计** | 每轮对话按 sessionId 落库 user_dialog_stats，支持历史消息回显与意图分类统计 |
 
 ### 1.3 适用场景
 
@@ -193,6 +198,7 @@ spring:
           temperature: 0.3
           max-tokens: 4096
 
+    # Chroma向量数据库配置
     vectorstore:
       chroma:
         client:
@@ -203,6 +209,7 @@ spring:
         collection-name: public_knowledge
         initialize-schema: true
 
+    # Ollama配置（用于Embedding）
     ollama:
       base-url: http://localhost:11434
       embedding:
@@ -212,7 +219,9 @@ spring:
 weather:
   api:
     key: ${WEATHER_API_KEY:your-weather-api-key}
-    host: ${WEATHER_API_HOST:your-weather-api-host}
+    host: ${WEATHER_API_HOST:https://your-weather-api-host}
+    connect-timeout: 10000
+    read-timeout: 10000
 
 logging:
   level:
@@ -220,13 +229,9 @@ logging:
     org.hibernate.SQL: WARN
 
 agent:
-  enabled: true
-  max-history: 10
-  timeout-seconds: 15
-
-amap:
-  api:
-    key: ${AMAP_API_KEY:your-amap-api-key}
+  enabled: true  # Agent 开关，设为 false 时回退到原有逻辑
+  max-history: 10  # 最多保留的对话历史条数
+  timeout-seconds: 15  # Agent 处理超时时间
 
 dashscope:
   api:
@@ -262,8 +267,12 @@ dashscope:
 |-------|------|---------|
 | `weather.api.key` | 和风天气 API Key | 否（天气功能需要时配置） |
 | `weather.api.host` | 和风天气 API 主机地址 | 否（天气功能需要时配置） |
-| `amap.api.key` | 高德地图 API Key | 否（地理编码功能需要时配置） |
+| `weather.api.connect-timeout` | 天气 API 连接超时（毫秒），默认 10000 | 否 |
+| `weather.api.read-timeout` | 天气 API 读取超时（毫秒），默认 10000 | 否 |
 | `dashscope.api.key` | 通义千问 API Key | 否（课表图片识别需要时配置） |
+| `agent.enabled` | Agent 模式开关，true 走 ReAct Agent 模式，false 回退传统 LLM 解析卡片 | 是 |
+| `agent.max-history` | 每用户会话历史上限（超 30 分钟未访问自动清理） | 是 |
+| `agent.timeout-seconds` | Agent 单次请求超时秒数 | 是 |
 
 ---
 
@@ -276,10 +285,9 @@ dashscope:
 | `DEEPSEEK_API_KEY` | `spring.ai.openai.api-key` | 主对话 AI 模型（Agent 核心） | [https://platform.deepseek.com](https://platform.deepseek.com) 注册后获取 |
 | `WEATHER_API_KEY` | `weather.api.key` | 和风天气 API Key | [https://dev.qweather.com](https://dev.qweather.com) 申请 |
 | `WEATHER_API_HOST` | `weather.api.host` | 和风天气 API 主机地址 | 与 Weather API Key 同源 |
-| `AMAP_API_KEY` | `amap.api.key` | 高德地图 API（地理编码/城市搜索） | [https://lbs.amap.com](https://lbs.amap.com) 申请 Key |
 | `DASHSCOPE_API_KEY` | `dashscope.api.key` | 通义千问多模态识别（课表图片识别） | [https://dashscope.console.aliyun.com](https://dashscope.console.aliyun.com) 开通服务后获取 |
 
-> **说明**：以上变量均有默认值兜底，不配也能启动（对应功能不可用）。如需完整功能，请配置对应变量。
+> **说明**：城市搜索/地理编码已接入 LLM + 和风天气城市搜索接口（LocationService），不再需要独立的高德 Key。以上变量均有默认值兜底，不配也能启动（对应功能不可用）。如需完整功能，请配置对应变量。
 
 ### 5.2 设置环境变量
 
@@ -290,7 +298,6 @@ dashscope:
 $env:DEEPSEEK_API_KEY = "your-deepseek-api-key"
 $env:WEATHER_API_KEY = "your-weather-api-key"
 $env:WEATHER_API_HOST = "https://your-weather-api-host"
-$env:AMAP_API_KEY = "your-amap-api-key"
 $env:DASHSCOPE_API_KEY = "your-dashscope-api-key"
 
 # 启动项目
@@ -303,7 +310,6 @@ $env:DASHSCOPE_API_KEY = "your-dashscope-api-key"
 export DEEPSEEK_API_KEY="your-deepseek-api-key"
 export WEATHER_API_KEY="your-weather-api-key"
 export WEATHER_API_HOST="https://your-weather-api-host"
-export AMAP_API_KEY="your-amap-api-key"
 export DASHSCOPE_API_KEY="your-dashscope-api-key"
 
 ./mvnw spring-boot:run
@@ -315,8 +321,7 @@ export DASHSCOPE_API_KEY="your-dashscope-api-key"
 java -jar target/life-reminder-0.0.1-SNAPSHOT.jar \
   -DDEEPSEEK_API_KEY=your-deepseek-api-key \
   -DWEATHER_API_KEY=your-weather-api-key \
-  -DWEATHER_API_HOST=https://https://your-weather-api-host \
-  -DAMAP_API_KEY=your-amap-api-key \
+  -DWEATHER_API_HOST=https://your-weather-api-host \
   -DDASHSCOPE_API_KEY=your-dashscope-api-key
 ```
 
@@ -341,8 +346,8 @@ JPA 配置为 `ddl-auto: update`，首次启动时自动创建以下 10 张表�
 | `users` | 用户表：账号信息、偏好设置、经期参数等等 |
 | `reminders` | 提醒表：所有用户提醒，支持单点和时间段，含确认状态、执行状态 |
 | `push_logs` | 推送日志表：记录每一次推送动作 |
-| `confirmation_sessions` | 确认会话表：提醒创建两阶段确认流程的会话管理 |
-| `verification_codes` | 验证码表：手机验证码存储与校验（模拟验证码） |
+| `confirmation_sessions` | 确认会话表：提醒创建两阶段确认流程的会话管理（含 stage、尝试次数、parsed 结构化字段等） |
+| `verification_codes` | 验证码表：手机验证码存储与校验（模拟验证码，前端弹窗展示） |
 | `user_dialog_stats` | 对话统计表：用户对话记录，用于 RAG 知识库 |
 | `schedule_imports` | 课表导入表：文件导入任务记录 |
 | `schedule_import_items` | 课表导入明细表：每一条待创建提醒 |
@@ -367,7 +372,7 @@ reminders ──1:N──> push_logs
 
 ### 6.4 完整建表 SQL
 
-如需手动建表，参考 `sql/reminder-仅结构.sql` 文件。
+如需手动建表，参考 `sql/reminder.sql`（Navicat 导出的完整结构 + 初始数据脚本）。
 
 ---
 
@@ -382,14 +387,14 @@ reminders ──1:N──> push_logs
 
 ### 7.2 配置数据库连接
 
-修改 `src/main/resources/application.yml` 中的数据库配置：
+修改 `src/main/resources/application.yml` 中的数据库配置（注意当前默认端口为 3306，MySQL 原生默认端口；若本地安装时用了其它端口如 3307，请自行调整）：
 
 ```yaml
 spring:
   datasource:
-    url: jdbc:mysql://localhost:3307/reminder?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://localhost:3306/reminder?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
     username: root
-    password: your-password
+    password: 123456
 ```
 
 ### 7.3 设置环境变量
@@ -406,7 +411,6 @@ $env:DEEPSEEK_API_KEY = "your-deepseek-api-key"
 ```powershell
 $env:WEATHER_API_KEY = "your-weather-api-key"
 $env:WEATHER_API_HOST = "https://your-weather-api-host"
-$env:AMAP_API_KEY = "your-amap-api-key"
 $env:DASHSCOPE_API_KEY = "your-dashscope-api-key"
 ```
 
@@ -456,9 +460,15 @@ com.dormrepair.remindme
 │   ├── ToolCall.java               # 工具调用记录
 │   ├── ToolDefinition.java         # 工具定义
 │   ├── ToolRegistry.java           # 工具注册中心（扫描 @AgentTool）
-│   └── event/                      # Agent 事件
+│   └── event/                      # Agent 事件（状态流/提醒/记忆变更）
 │       ├── AgentEvent.java
+│       ├── AgentStatus.java
+│       ├── AgentStatusEvent.java
+│       ├── AgentStatusEventListener.java
+│       ├── AgentStatusMapper.java
 │       ├── EventPublisher.java
+│       ├── PrivateMemoryChangedEvent.java
+│       ├── PrivateMemoryChangedEventListener.java
 │       ├── ReminderCancelledEvent.java
 │       ├── ReminderConfirmedEvent.java
 │       └── ReminderCreatedEvent.java
@@ -478,7 +488,7 @@ com.dormrepair.remindme
 │   ├── CityController.java         # 城市搜索接口
 │   ├── ConfirmationController.java # 确认流程接口（多阶段）
 │   ├── IndexController.java        # 首页路由
-│   ├── RagController.java          # RAG 知识库接口
+│   ├── MemoryController.java       # 记忆库页面接口（列表/备注编辑/删除/批量删除/导出）
 │   ├── RecurringReminderController.java  # 周期提醒接口
 │   ├── ReminderController.java     # 提醒 CRUD 接口
 │   ├── ScheduleImportController.java    # 课表导入接口
@@ -487,8 +497,10 @@ com.dormrepair.remindme
 ├── dto/                            # 数据传输对象
 │   ├── request/                    # 请求 DTO
 │   │   ├── LoginRequest.java       # 登录请求
+│   │   ├── MemoryRequest.java      # 记忆库页面请求（更新备注/删除/批量删除）
+│   │   ├── MultiBatchRequest.java  # 批量多项事务确认请求
+│   │   ├── MultiItemModifyRequest.java # 批量多项事务明细编辑请求
 │   │   ├── PeriodConfirmRequest.java  # 经期确认请求
-│   │   ├── RagTestRequest.java     # RAG 测试请求
 │   │   ├── RegisterRequest.java    # 注册请求
 │   │   ├── ReminderCreateRequest.java # 创建提醒请求
 │   │   ├── ReminderUpdateRequest.java # 更新提醒请求
@@ -499,7 +511,7 @@ com.dormrepair.remindme
 │   │   ├── CitySearchResult.java   # 城市搜索结果
 │   │   ├── ConfirmationCardResponse.java # 确认卡片响应
 │   │   ├── ConflictResponse.java   # 冲突响应
-│   │   ├── KnowledgeResult.java    # 知识检索结果
+│   │   ├── KnowledgeResult.java    # 知识/记忆检索结果（含分类、标题、备注）
 │   │   ├── LoginResponse.java      # 登录响应
 │   │   ├── PeriodStatusResponse.java   # 经期状态响应
 │   │   ├── ReminderResponse.java   # 提醒响应
@@ -568,9 +580,10 @@ com.dormrepair.remindme
 │   ├── WeatherService.java         # 天气服务（和风天气 API 封装）
 │   └── WebSocketPushService.java   # WebSocket 推送服务
 ├── utils/                          # 工具类
-│   ├── FileParserUtil.java         # 文件解析工具
-│   ├── TimeTools.java              # 时间工具（含 Agent 工具）
-│   └── TimeUtils.java              # 时间通用工具
+│   ├── FileParserUtil.java         # 文件解析工具（Excel/PDF 课表文件）
+│   ├── AgentDateService.java       # 日期工具（Agent @AgentTool 暴露 calculate_date、get_location 等）
+│   ├── TaskSummaryUtils.java       # 提醒任务摘要与文本聚合工具
+│   └── TimeUtils.java              # 时间通用工具（格式化、相对时间解析等）
 └── RemindMeApplication.java        # 启动类
 ```
 
@@ -586,9 +599,11 @@ src/main/resources/
 │   ├── css/
 │   │   ├── card.css                # 卡片样式
 │   │   ├── main.css                # 主样式
+│   │   ├── memory.css              # 记忆库页面样式
 │   │   └── notification.css        # 通知样式
 │   ├── js/
 │   │   ├── main.js                 # 主逻辑（对话、日历、表单等）
+│   │   ├── memory.js               # 记忆库页面逻辑（分类筛选/批量删除/备注编辑/导出）
 │   │   ├── card.js                 # 卡片组件逻辑
 │   │   ├── notification.js         # 通知/Toast 逻辑
 │   │   └── sound.js                # 音效逻辑
@@ -602,17 +617,19 @@ src/main/resources/
 
 | 模块 | 包路径 | 说明 |
 |------|-------|------|
-| **AI Agent** | `agent/` | 基于 ReAct 模式的 AI 调度器，支持工具调用、对话记忆、事件驱动、兜底总结 |
-| **LLM 服务** | `service/LLMService.java` | DeepSeek API 封装，含系统提示词铁律、兜底总结、防幻觉 |
-| **RAG 知识库** | `service/RagService.java` | 基于 ChromaDB + Ollama 的向量检索，支持私有记忆+公共手册 |
-| **课表识别** | `service/QwenRecognitionService.java` | 通义千问多模态课表识别 |
-| **课表导入** | `service/ScheduleImportService.java` | 文件解析 → AI 识别 → 批量创建 |
+| **AI Agent** | `agent/` | 基于 ReAct 模式的 AI 调度器，支持工具调用、对话记忆、事件驱动、兜底总结、批量多事务提醒创建、状态流事件发布 |
+| **Agent 状态流** | `agent/event/` | 基于 Spring Event + 异步线程池的事件总线，将 Agent 每一步阶段（思考/工具/完成）异步通过 WebSocket 推送前端，与 ReAct 主循环完全解耦 |
+| **LLM 服务** | `service/LLMService.java` | DeepSeek API 封装，含系统提示词铁律、地点类型分类 resolveReminderLocation、错别字纠正候选、兜底总结、防幻觉 |
+| **地点服务** | `service/LocationService.java` | 统一城市搜索入口（searchCity），为天气查询、偏好设置、提醒天气三类流程提供标准 displayName+坐标；AI 负责错别字纠正与消歧义 |
+| **RAG 知识库** | `service/RagService.java` | 基于 ChromaDB + Ollama 的向量检索，用户私有 collection（user_{id}_knowledge）+ 公共手册库；对 Agent 暴露检索/新增/更新/删除/列出私有记忆与检索公共手册共 6 个工具；记忆分类（11 种 MemoryCategory）与标题由 AI 自动生成，备注由用户手写；相似度门槛 0.35 过滤弱相关结果 |
+| **课表识别** | `service/QwenRecognitionService.java` | 通义千问 DashScope SDK 多模态课表识别（支持图片） |
+| **课表导入** | `service/ScheduleImportService.java` | 文件解析 → AI 识别 → 批量确认卡片 → 逐条创建；schedule_imports 任务表与 schedule_import_items 明细表 |
 | **提醒核心** | `service/ReminderService.java` | 提醒 CRUD、冲突检测、优先级处理、Agent 工具 |
-| **确认流程** | `service/ConfirmationService.java` | 两阶段确认卡片、覆盖操作、5 分钟超时 |
-| **定时调度** | `service/SchedulerService.java` | 每日 1 点扫描生成周期提醒实例 |
-| **WebSocket 推送** | `service/WebSocketPushService.java` | 实时卡片推送到前端 |
-| **安全认证** | `config/SecurityConfig.java` | BCrypt 密码加密（登录用），接口放行 |
-| **天气服务** | `service/WeatherService.java` | 和风天气 API 封装（实时/预报/空气质量/预警） |
+| **确认流程** | `service/ConfirmationService.java` | 两阶段确认卡片（INFO_CONFIRM 信息确认 → REMINDER_EXECUTE 到点执行确认），含覆盖/编辑重解析/批量多事务确认/重试次数/超时默认策略 |
+| **定时调度** | `service/SchedulerService.java` | 每分钟扫描到期推送、每小时检查超时未确认、每日 1 点生成周期提醒实例、按用户/提醒地点分组天气查询联动提醒 |
+| **WebSocket 推送** | `service/WebSocketPushService.java` | 实时卡片、消息、Agent 状态事件推送到前端 |
+| **安全认证** | `config/SecurityConfig.java` | BCrypt 密码加密（登录用），静态资源/接口放行 |
+| **天气服务** | `service/WeatherService.java` | 和风天气 API 封装（实时/预报/空气质量/预警）；失败时统一返回用户友好文案，隐藏技术细节 |
 
 ---
 
@@ -736,7 +753,8 @@ ollama pull qwen3-embedding:4b
 | POST | `/api/auth/login` | 用户登录 |
 | POST | `/api/auth/send-code` | 发送验证码（模拟，前端弹窗显示） |
 | POST | `/api/chat/send` | 发送对话消息（Agent 入口） |
-| GET | `/api/chat/history` | 获取对话历史 |
+| GET | `/api/chat/history` | 获取对话历史（最近 N 条，按时间倒序） |
+| POST | `/api/chat/save-message` | 异步落库单条聊天消息（前端展示后回传） |
 | POST | `/api/reminders/create` | 创建提醒 |
 | GET | `/api/reminders/list` | 查询提醒列表 |
 | PUT | `/api/reminders/{id}` | 更新提醒 |
@@ -748,6 +766,8 @@ ollama pull qwen3-embedding:4b
 | POST | `/api/confirmations/{sessionId}/cancel` | 取消确认 |
 | POST | `/api/confirmations/{sessionId}/overwrite` | 覆盖冲突 |
 | POST | `/api/confirmations/{sessionId}/reparse` | 重新解析 |
+| POST | `/api/confirmations/{sessionId}/multi-batch` | 批量多项事务创建（批量确认卡片提交） |
+| POST | `/api/confirmations/{sessionId}/modify-items` | 编辑多项事务明细 |
 | GET | `/api/calendar/month` | 月视图日历数据 |
 | GET | `/api/calendar/week` | 周视图日历数据 |
 | GET | `/api/calendar/day` | 日视图日历数据 |
@@ -757,43 +777,64 @@ ollama pull qwen3-embedding:4b
 | POST | `/api/schedule/manual-add` | 手动添加课程 |
 | GET | `/api/weather/now` | 查询实时天气 |
 | GET | `/api/weather/forecast` | 查询天气预报 |
-| POST | `/api/rag/query` | RAG 知识库查询 |
-| POST | `/api/rag/store` | 存储知识到 RAG |
+| GET | `/api/weather/air` | 查询空气质量 |
+| GET | `/api/weather/alert` | 查询天气预警 |
+| GET | `/api/city/search` | 城市搜索（返回 displayName+坐标+多级行政区，支持 AI 消歧义） |
+| GET | `/api/memory/list` | 记忆库列表（按创建时间倒序） |
+| POST | `/api/memory/update-remark` | 更新记忆备注（用户唯一可编辑字段） |
+| POST | `/api/memory/delete` | 删除单条记忆 |
+| POST | `/api/memory/batch-delete` | 批量删除记忆（返回成功/失败计数） |
+| GET | `/api/memory/export` | 导出记忆（format=json/txt） |
+| GET | `/api/period/status` | 查询经期状态 |
+| POST | `/api/period/update-start` | 更新经期开始日期 |
+| POST | `/api/period/update-settings` | 更新经期参数 |
+| POST | `/api/period/confirm` | 经期状态卡片确认/推迟 |
+| GET | `/api/user/profile` | 获取用户信息（含偏好、经期参数、默认城市） |
+| PUT | `/api/user/profile` | 更新用户信息（昵称、头像、性别、默认城市、提前分钟数等） |
+| POST | `/api/user/avatar` | 上传用户头像 |
+| GET | `/api/recurring/list` | 周期提醒模板列表 |
+| POST | `/api/recurring/create` | 创建周期提醒模板 |
+| PUT | `/api/recurring/{id}` | 更新周期提醒模板 |
+| DELETE | `/api/recurring/{id}` | 删除周期提醒模板 |
 
 ### B. WebSocket 端点
 
 | 端点 | 说明 |
 |------|------|
-| `/ws` | WebSocket 连接端点（需携带 `user-id` 参数） |
+| `/ws` | WebSocket 连接端点（需携带 `user-id` 参数，支持 SockJS 回退） |
 | `/queue/confirmations` | 确认卡片推送目的地 |
-| `/queue/messages` | 通用消息推送目的地 |
+| `/queue/messages` | 通用消息推送目的地（含 `AGENT_STATUS` 类型状态流事件） |
 
-### C. Agent 工具列表（部分）
+### C. Agent 工具列表
 
 | 工具名 | 说明 |
 |-------|------|
-| `create_reminder` | 创建提醒 |
+| `create_reminder` | 创建单个提醒 |
+| `create_multi_reminders` | 批量创建多提醒（一句话多事务） |
 | `query_reminders` | 查询提醒 |
 | `update_reminder` | 修改提醒 |
 | `cancel_reminder` | 取消单个提醒 |
 | `cancel_reminders_by_date` | 按日期取消提醒 |
 | `get_reminder_detail` | 查看提醒详情 |
 | `create_recurring_reminder` | 创建周期提醒 |
-| `query_weather_now` | 查询实时天气 |
+| `query_weather_now` | 查询实时天气（通过统一 searchCity 解析地点，AI 消歧与错别字纠正） |
 | `query_weather_forecast` | 查询天气预报 |
 | `query_air_quality` | 查询空气质量 |
 | `query_weather_alert` | 查询天气预警 |
-| `retrieve_private_knowledge` | 检索用户私有记忆 |
-| `add_private_memory` | 存储用户记忆 |
+| `retrieve_private_knowledge` | 检索用户私有记忆（语义检索，相似度门槛 0.35 过滤弱相关） |
+| `add_private_memory` | 存储用户私有记忆（只需传 content，分类与标题由 AI 自动生成） |
+| `update_private_memory` | 更新用户私有记忆（先删后写，复用原 id 与创建时间，备注保留） |
+| `delete_private_memory` | 删除用户私有记忆 |
+| `get_all_private_memories` | 全量拉取用户私有记忆（按创建时间倒序） |
 | `retrieve_public_knowledge` | 检索系统使用手册 |
-| `get_user_preferences` | 获取用户偏好 |
-| `set_user_preferences` | 修改用户偏好 |
-| `get_location` | 获取用户位置 |
-| `search_city` | 城市搜索 |
-| `calculate_date` | 日期计算（如"3天后"） |
-| `get_period_status` | 查询经期状态 |
-| `update_period_start` | 更新经期开始日期 |
-| `update_period_settings` | 更新经期参数 |
+| `get_user_preferences` | 获取用户偏好（默认城市、提前分钟、确认间隔、经期参数等） |
+| `set_user_preferences` | 修改用户偏好（写回 users 表；命中错别字会通知用户纠正） |
+| `get_location` | 获取用户默认城市（displayName+经纬度） |
+| `search_city` | 城市搜索：返回候选列表标准 displayName+经纬度+多级行政区 |
+| `calculate_date` | 日期计算（如"3天后"、"下周一"、"距今天 N 天"） |
+| `get_period_status` | 查询经期状态（周期/持续天数/下一次预测等） |
+| `update_period_start` | 更新经期开始日期（触发本期状态重置） |
+| `update_period_settings` | 更新经期参数（周期天数、经期天数、提醒时间等） |
 
 ### D. 技术版本速查
 

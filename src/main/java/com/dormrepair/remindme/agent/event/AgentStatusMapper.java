@@ -62,18 +62,18 @@ public class AgentStatusMapper {
         TOOL_STATUS_MAP.put("delete_private_memory",      AgentStatus.CALLING_MEMORY_DELETE);
         TOOL_STATUS_MAP.put("get_all_private_memories",   AgentStatus.CALLING_MEMORY_RETRIEVE);
         TOOL_STATUS_MAP.put("retrieve_public_knowledge",  AgentStatus.CALLING_MEMORY_RETRIEVE);
-        TOOL_CN_NAME_MAP.put("retrieve_private_knowledge", "私人记忆检索");
-        TOOL_CN_NAME_MAP.put("add_private_memory",         "添加私人记忆");
-        TOOL_CN_NAME_MAP.put("update_private_memory",      "更新私人记忆");
-        TOOL_CN_NAME_MAP.put("delete_private_memory",      "删除私人记忆");
-        TOOL_CN_NAME_MAP.put("get_all_private_memories",   "获取全部记忆");
-        TOOL_CN_NAME_MAP.put("retrieve_public_knowledge",  "公共知识库检索");
+        TOOL_CN_NAME_MAP.put("retrieve_private_knowledge", "检索记忆");
+        TOOL_CN_NAME_MAP.put("add_private_memory",         "添加记忆");
+        TOOL_CN_NAME_MAP.put("update_private_memory",      "更新记忆");
+        TOOL_CN_NAME_MAP.put("delete_private_memory",      "删除记忆");
+        TOOL_CN_NAME_MAP.put("get_all_private_memories",   "检索记忆");
+        TOOL_CN_NAME_MAP.put("retrieve_public_knowledge",  "检索记忆");
 
         // ===== 用户设置 =====
         TOOL_STATUS_MAP.put("get_user_preferences",     AgentStatus.CALLING_PREFERENCES_GET);
         TOOL_STATUS_MAP.put("set_user_preferences",     AgentStatus.CALLING_PREFERENCES_SET);
-        TOOL_CN_NAME_MAP.put("get_user_preferences",     "读取用户偏好");
-        TOOL_CN_NAME_MAP.put("set_user_preferences",     "保存用户偏好");
+        TOOL_CN_NAME_MAP.put("get_user_preferences",     "查看偏好设置");
+        TOOL_CN_NAME_MAP.put("set_user_preferences",     "保存偏好设置");
 
         // ===== 时间/位置工具 =====
         TOOL_STATUS_MAP.put("get_current_time",         AgentStatus.CALLING_TIME);

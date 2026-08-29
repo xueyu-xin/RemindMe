@@ -261,13 +261,12 @@ public class ToolRegistry implements SmartInitializingSingleton {
         ));
         paramDescriptions.put("addPrivateMemoryForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",
-                "content", "要存储的记忆内容，如'用户是大三计算机专业学生'",
-                "category", "记忆分类，可选值：PERSONAL_INFO / ACTIVITY / EVENT / PLAN / EXAM_SCHEDULE / DAILY_ROUTINE / HEALTH_CONDITION / DIET_PREFERENCE / HABIT / INTEREST / LANGUAGE_STYLE / OTHER。\n⚠️ category必须传字符串，比如 \"PERSONAL_INFO\"，禁止传 {PERSONAL_INFO:true、数组、对象等格式。\n✅ 正确示例：{\"category\":\"PERSONAL_INFO\"}\n❌ 错误示例：{\"category\":{\"PERSONAL_INFO\":true}}"
+                "content", "要存储的记忆内容，一般直接记录事实本身（如'大三计算机专业学生'）；必须涉及人称时用\"你\"称呼用户。分类与标题由 AI 按内容自动生成，无需也不允许传 category 参数"
         ));
         paramDescriptions.put("updatePrivateMemoryForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",
-                "memoryId", "要更新的记忆ID",
-                "newContent", "新的记忆内容"
+                "memoryId", "要更新的记忆ID，必须来自 retrieve_private_knowledge 或 get_all_private_memories 的返回结果",
+                "newContent", "新的记忆内容，分类与标题会按新内容重新生成，用户手写的备注自动保留"
         ));
         paramDescriptions.put("deletePrivateMemoryForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",

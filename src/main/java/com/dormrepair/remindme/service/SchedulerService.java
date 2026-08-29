@@ -168,9 +168,15 @@ public class SchedulerService {
             String coord = null;
             String displayName = null;
 
-            // 第一步：LLM先判断location类型（不传候选，省得乱码/省级也白调searchCity）
-            String type = llmService.judgeLocationType(location);
-            log.info("地点{}识别为{}", location, type);
+            // 第一步：判断location类型（空地点代码直接判POI，不调LLM；非空交给LLM判断）
+            String type;
+            if (location == null || location.isBlank()) {
+                type = "POI";
+                log.info("地点为空，直接按POI处理（用默认城市）");
+            } else {
+                type = llmService.judgeLocationType(location);
+                log.info("地点{}识别为{}", location, type);
+            }
 
             if ("GARBAGE".equals(type) || "PROVINCE".equals(type)) {
                 // 乱码/省级：不查天气，不获取偏好、不searchCity

@@ -5,20 +5,57 @@
  */
 
 // ===== 应用初始化 =====
-function initApp() {
-    if (window.SoundSystem) { SoundSystem.init(); }
-    if (window.NotificationSystem) { NotificationSystem.init(); }
-    if (typeof connectWebSocket === 'function') { connectWebSocket(); }
-    var chatInput = document.getElementById('chatInput');
-    if (chatInput) {
-        chatInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                if (typeof sendMessage === 'function') { sendMessage(); }
-            }
-        });
+
+// 聊天输入框高度自适应：随内容增高，超过上限后内部滚动，清空时回落
+function adjustChatInputHeight() {
+    var el = document.getElementById('chatInput');
+    if (!el || el.tagName !== 'TEXTAREA') return;
+    // height 重算会把 scrollTop 重置为 0，先保存再恢复，避免选中的内容视图跳回顶部
+    var prevScrollTop = el.scrollTop;
+    el.style.height = 'auto';
+    var max = 120;
+    el.style.height = Math.min(el.scrollHeight, max) + 'px';
+    el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
+    el.scrollTop = prevScrollTop;
+}
+
+// ===== 回复期间输入锁 =====
+// AI 回复期间禁止用户输入文字与附件，防止打断回复链路
+var replyLockActive = false;
+var replyLockFallbackTimer = null;
+var CHAT_INPUT_PLACEHOLDER = '输入提醒，如：明天下午3点还书（Shift+Enter 换行）';
+var CHAT_INPUT_LOCKED_PLACEHOLDER = '助手正在回复中...';
+
+// 加锁：禁用输入框、发送按钮与附件上传；设置 120 秒兜底，防止异常时永久锁死
+function lockChatInput() {
+    if (replyLockActive) return;
+    replyLockActive = true;
+    setInputLockState(true);
+    if (replyLockFallbackTimer) clearTimeout(replyLockFallbackTimer);
+    replyLockFallbackTimer = setTimeout(unlockChatInput, 120000);
+}
+
+// 解锁：恢复输入框、发送按钮与附件上传
+function unlockChatInput() {
+    if (!replyLockActive) return;
+    replyLockActive = false;
+    if (replyLockFallbackTimer) { clearTimeout(replyLockFallbackTimer); replyLockFallbackTimer = null; }
+    setInputLockState(false);
+}
+
+// 按锁状态切换聊天输入区各控件的可用性与占位提示
+function setInputLockState(locked) {
+    var input = document.getElementById('chatInput');
+    var sendBtn = document.querySelector('.chat-input button[onclick*="sendMessage"]');
+    var uploadBtn = document.querySelector('.chat-input .upload-btn');
+    var fileInput = document.getElementById('fileInput');
+    if (input) {
+        input.disabled = locked;
+        input.placeholder = locked ? CHAT_INPUT_LOCKED_PLACEHOLDER : CHAT_INPUT_PLACEHOLDER;
     }
-    if (typeof startPromptRotation === 'function') { startPromptRotation(); }
+    if (sendBtn) sendBtn.disabled = locked;
+    if (uploadBtn) uploadBtn.disabled = locked;
+    if (fileInput) fileInput.disabled = locked;
 }
 
 function startPromptRotation() {
@@ -42,6 +79,13 @@ function handleWebSocketMessageV2(msg) {
     if (msg.type === 'AGENT_STATUS') {
         if (window.AgentStatusFlow) {
             window.AgentStatusFlow.onStatusEvent(msg);
+        }
+        return true;
+    }
+    // 私有记忆变更事件：Agent 或其他页面修改了记忆，记忆库页面静默刷新
+    if (msg.type === 'PRIVATE_MEMORY_CHANGED') {
+        if (window.MemoryPage) {
+            MemoryPage.onRemoteChange(msg);
         }
         return true;
     }
@@ -326,7 +370,6 @@ function handleMultiCardAction(actionId, sessionId, itemIds) {
 }
 
 // ===== 导出全局接口 =====
-window.initApp = initApp;
 window.handleWebSocketMessageV2 = handleWebSocketMessageV2;
 // 兼容：WS订阅处调用 handleWebSocketMessage
 window.handleWebSocketMessage = handleWebSocketMessageV2;
@@ -2652,15 +2695,17 @@ window.saveMessageToBackend = saveMessageToBackend;
             setInterval(rotatePrompt, 5000);
             connectWebSocket();
 
-            // 回车发送消息
+            // 回车发送消息，Shift+Enter 换行（textarea 默认行为），输入时高度自适应
             var chatInput = document.getElementById('chatInput');
             if (chatInput) {
                 chatInput.addEventListener('keydown', function(e) {
+                    if (e.isComposing || e.keyCode === 229) return;
                     if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         sendMessage();
                     }
                 });
+                chatInput.addEventListener('input', function() { adjustChatInputHeight(); });
             }
 
             // 文件上传
@@ -2735,10 +2780,14 @@ window.saveMessageToBackend = saveMessageToBackend;
             var titles = {
                 'chat': '🍑 生活提醒助手',
                 'calendar': '🌷 日程',
+                'memory': '🧠 助手记忆',
                 'profile': '🍑 我的'
             };
             document.getElementById('headerTitle').textContent = titles[tabName] || '生活提醒助手';
 
+            if (tabName === 'memory') {
+                if (window.MemoryPage) { MemoryPage.enter(); }
+            }
             if (tabName === 'profile') loadProfile();
             if (tabName === 'calendar') {
                 loadProfile();
@@ -2864,12 +2913,16 @@ window.saveMessageToBackend = saveMessageToBackend;
             var input = document.getElementById('chatInput');
             var text = input.value.trim();
             if (!text) return;
+            if (replyLockActive) return; // 助手回复期间禁止发送
             lastUserInput = text; // 保存用户输入，用于重试
+            lockChatInput(); // 回复链路开始，锁定输入直到回复显示
 
             // 位置问法检测
             if (isAskingLocation(text)) {
-                addMessage('user', text);
+                // 先清空输入框再显示消息，避免后续异常导致输入残留
                 input.value = '';
+                adjustChatInputHeight();
+                addMessage('user', text);
 
                 if (!navigator.geolocation) {
                     addMessage('bot', '😅 你的浏览器不支持定位功能哦～');
@@ -2895,8 +2948,10 @@ window.saveMessageToBackend = saveMessageToBackend;
                 return;
             }
 
-            addMessage('user', text);
+            // 先清空输入框，再显示消息与发起请求，避免异常导致输入残留、发送中断
             input.value = '';
+            adjustChatInputHeight();
+            addMessage('user', text);
 
             try {
                 var headers = { 'Content-Type': 'application/json' };
@@ -2988,6 +3043,7 @@ window.saveMessageToBackend = saveMessageToBackend;
             formData.append('file', file);
             formData.append('userId', currentUserId);
 
+            lockChatInput(); // 解析处理期间锁定输入
             addMessage('user', '📎 上传文件：' + file.name);
 
             try {
@@ -2997,7 +3053,7 @@ window.saveMessageToBackend = saveMessageToBackend;
                     headers['Authorization'] = 'Bearer ' + token;
                 }
 
-                addMessage('bot', '⏳ 正在解析文件并识别日程...');
+                addMessage('bot', '⏳ 正在解析文件并识别日程...', { skipSave: true, isTemp: true });
 
                 var response = await fetch('/api/schedule/upload', {
                     method: 'POST',
@@ -3007,6 +3063,7 @@ window.saveMessageToBackend = saveMessageToBackend;
                 var result = await response.json();
 
                 if (result.success) {
+                    removeTempMessages(); // 清理⏳临时提示
                     if (result.needTimeConfig) {
                         // 课表场景：卡片由 WebSocket 推送
                         addMessage('bot', '✅ ' + (result.message || '课表识别完成'));
@@ -3058,9 +3115,11 @@ window.saveMessageToBackend = saveMessageToBackend;
                         showConfirmationCard(card);
                     }
                 } else {
+                    removeTempMessages(); // 清理⏳临时提示
                     addMessage('bot', '❌ 识别失败：' + (result.message || '请重试'));
                 }
             } catch (e) {
+                removeTempMessages(); // 清理⏳临时提示
                 addMessage('bot', '❌ 上传失败：网络错误，请重试');
             }
         }
@@ -3169,6 +3228,11 @@ window.saveMessageToBackend = saveMessageToBackend;
             // Bot 正式回复出现 → 标记状态流气泡已结束（防止被 removeTempMessages 误删）
             if (role === 'bot' && !opts.isTemp && window.AgentStatusFlow) {
                 window.AgentStatusFlow.onFinalBotMessageArrived();
+            }
+
+            // Bot 正式回复出现 → 解锁输入框（临时引导语不解锁，等最终回复）
+            if (role === 'bot' && !opts.isTemp) {
+                unlockChatInput();
             }
 
             // 非跳过存储场景：异步保存消息到后端
@@ -3305,7 +3369,7 @@ window.saveMessageToBackend = saveMessageToBackend;
             if (!userId) return;
             // 先调用后端获取有效 pending 会话列表，只恢复后端确认有效的会话
             // 避免 sessionStorage 堆积已超时/已确认的旧会话导致刷新后冒出无效卡片
-            fetch('/api/confirmations/pending?userId=' + userId, { headers: getHeaders() })
+            fetch('/api/confirmations/pending?userId=' + userId, { headers: window.CardHelpers.getAuthHeaders() })
                 .then(function(res) { return res.json(); })
                 .then(function(result) {
                     var validSessionIds = (result && result.sessionIds) ? result.sessionIds : [];
@@ -3453,6 +3517,7 @@ window.saveMessageToBackend = saveMessageToBackend;
                 addMessage('bot', '❌ 没有可重试的消息');
                 return;
             }
+            lockChatInput(); // 重试走完整回复链路，锁定输入
 
             // 清除之前的错误消息
             if (errorMsgId) {
@@ -3585,6 +3650,8 @@ window.saveMessageToBackend = saveMessageToBackend;
             } else {
                 var weekRange = getTodayWeekRange(currentWeekOffset);
                 var tempDate = new Date(weekRange.monday);
+                // 周范围异常时回退今天，避免发出 NaN-NaN-NaN 的日期请求
+                if (isNaN(tempDate.getTime())) tempDate = new Date();
                 var dayInfo = {};
                 var fetchPromises = [];
 
@@ -3961,13 +4028,19 @@ window.saveMessageToBackend = saveMessageToBackend;
             var sundayDay = weekRange.sunday.getDate();
 
             if (isNaN(mondayYear) || isNaN(mondayMonth) || isNaN(mondayDay)) {
+                // 周范围异常时回退本周（以今天推算周一），用日期对象计算避免日期加减溢出
                 var now = new Date();
-                mondayYear = now.getFullYear();
-                mondayMonth = now.getMonth() + 1;
-                mondayDay = now.getDate();
-                sundayYear = mondayYear;
-                sundayMonth = mondayMonth;
-                sundayDay = mondayDay + 6;
+                var dow = now.getDay();
+                var mondayDate = new Date(now);
+                if (dow !== 1) mondayDate.setDate(now.getDate() - (dow === 0 ? 6 : dow - 1));
+                var sundayDate = new Date(mondayDate);
+                sundayDate.setDate(mondayDate.getDate() + 6);
+                mondayYear = mondayDate.getFullYear();
+                mondayMonth = mondayDate.getMonth() + 1;
+                mondayDay = mondayDate.getDate();
+                sundayYear = sundayDate.getFullYear();
+                sundayMonth = sundayDate.getMonth() + 1;
+                sundayDay = sundayDate.getDate();
             }
 
             var mondayStr = mondayYear + '-' + String(mondayMonth).padStart(2, '0') + '-' + String(mondayDay).padStart(2, '0');
