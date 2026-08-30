@@ -2426,4 +2426,47 @@ public class LLMService {
         // 正常天气：晴、多云、阴
         return text.contains("晴") || text.contains("多云") || text.contains("阴");
     }
+
+    // 生成提醒话术模板：调用 LLM 生成含 {weather}/{title}/{memory} 占位符的一句话模板
+    // memories 为空时模板只含 {weather}/{title}；调用失败返回 null，不影响主流程
+    public String generateReminderTemplate(String title, List<String> memories) {
+        try {
+            boolean hasMemory = memories != null && !memories.isEmpty();
+            StringBuilder promptBuilder = new StringBuilder();
+            promptBuilder.append("请为提醒生成一句话话术模板，包含占位符。要求：\n");
+            promptBuilder.append("1. 模板必须包含 {weather}、{title} 两个占位符\n");
+            if (hasMemory) {
+                promptBuilder.append("2. 模板还应包含 {memory} 占位符\n");
+            }
+            promptBuilder.append("3. 语气自然，像朋友提醒\n");
+            promptBuilder.append("4. 只返回模板本身，不要任何解释\n");
+            promptBuilder.append("5. 不超过25字\n");
+            promptBuilder.append("示例：\n");
+            if (hasMemory) {
+                promptBuilder.append("- {weather}，记得{title}，{memory}哦\n");
+            } else {
+                promptBuilder.append("- {weather}，该{title}啦\n");
+            }
+            promptBuilder.append("\n提醒标题：").append(title);
+
+            String response = chatWithoutTools(promptBuilder.toString(), null);
+            if (response == null || response.isBlank()) {
+                log.warn("生成提醒模板返回空: title={}", title);
+                return null;
+            }
+
+            // 清理换行和多余空白
+            String template = response.replaceAll("\\s+", "").trim();
+            // 校验模板至少包含 {title} 占位符
+            if (!template.contains("{title}")) {
+                log.warn("生成提醒模板不含 {title} 占位符: title={}, template={}", title, template);
+                return null;
+            }
+            log.info("生成提醒模板成功: title={}, template={}", title, template);
+            return template;
+        } catch (Exception e) {
+            log.warn("生成提醒模板异常，不影响主流程: title={}, error={}", title, e.getMessage());
+            return null;
+        }
+    }
 }

@@ -7,8 +7,14 @@ import com.dormrepair.remindme.agent.event.EventPublisher;
 import com.dormrepair.remindme.agent.event.ReminderCancelledEvent;
 import com.dormrepair.remindme.agent.event.ReminderConfirmedEvent;
 import com.dormrepair.remindme.agent.event.ReminderCreatedEvent;
+import com.dormrepair.remindme.dto.response.KnowledgeResult;
+import com.dormrepair.remindme.dto.response.WeatherHourlyResponse;
+import com.dormrepair.remindme.dto.response.WeatherNowResponse;
 import com.dormrepair.remindme.service.LLMService;
+import com.dormrepair.remindme.service.LocationService;
+import com.dormrepair.remindme.service.RagService;
 import com.dormrepair.remindme.service.UserService;
+import com.dormrepair.remindme.service.WeatherService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -16,10 +22,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 // Agent 核心调度器。实现 ReAct（思考-行动-观察）循环：解析用户输入→调用 LLM→决定是否执行工具→收集结果→再次迭代，
 // 直至生成最终回复；集成空响应降级、演戏格式拦截、重复调用去重+卡死兜底、确认卡片生成、事件监听等能力；
@@ -35,6 +43,9 @@ public class AgentService {
     private final ObjectMapper objectMapper;
     private final UserService userService;
     private final EventPublisher eventPublisher;
+    private final WeatherService weatherService;
+    private final RagService ragService;
+    private final LocationService locationService;
 
     // 启动开关：可通过配置 agent.enabled=false 临时关闭 Agent
     @Value("${agent.enabled:false}")
@@ -802,24 +813,40 @@ public class AgentService {
             boolean isRecurring = Boolean.TRUE.equals(resultMap.get("isRecurring"));
             log.info("buildConfirmationResponse: 检测到确认会话 sessionId={}, title={}, isRecurring={}", sessionId, title, isRecurring);
 
-            Map<String, Object> confirmationData = new HashMap<>();
-            confirmationData.put("title", title);
-            confirmationData.put("remindTime", remindTime);
-            confirmationData.put("location", location);
-            if (resultMap.containsKey("endTime")) {
-                confirmationData.put("endTime", resultMap.get("endTime"));
-            }
-            if (resultMap.containsKey("priority")) {
-                confirmationData.put("priority", resultMap.get("priority"));
-            }
-            if (isRecurring) {
-                confirmationData.put("isRecurring", true);
-                // 周期提醒卡片不超时
-                confirmationData.put("noTimeout", true);
-            }
+            // 并行执行：卡片数据构建 + 引导语生成
+            // 将原本串行的 confirmationData 构建和 buildConfirmationLead 调用并行化，
+            // 总耗时从 (卡片耗时 + 引导语耗时) 变为 max(卡片耗时, 引导语耗时)
+            CompletableFuture<Map<String, Object>> dataFuture =
+                    CompletableFuture.supplyAsync(() -> {
+                        Map<String, Object> data = new HashMap<>();
+                        data.put("title", title);
+                        data.put("remindTime", remindTime);
+                        data.put("location", location);
+                        if (resultMap.containsKey("endTime")) {
+                            data.put("endTime", resultMap.get("endTime"));
+                        }
+                        if (resultMap.containsKey("priority")) {
+                            data.put("priority", resultMap.get("priority"));
+                        }
+                        if (isRecurring) {
+                            data.put("isRecurring", true);
+                            // 周期提醒卡片不超时
+                            data.put("noTimeout", true);
+                        }
+                        return data;
+                    });
 
-            // LLM 生成卡片前的引导语
-            String llmLead = buildConfirmationLead(userId, title, remindTime, location, isRecurring);
+            CompletableFuture<String> leadFuture =
+                    CompletableFuture.supplyAsync(() ->
+                            buildConfirmationLead(userId, title, remindTime, location, isRecurring)
+                    );
+
+            // 等待两者都完成
+            CompletableFuture.allOf(dataFuture, leadFuture).join();
+
+            // 获取结果
+            Map<String, Object> confirmationData = dataFuture.get();
+            String llmLead = leadFuture.get();
 
             return AgentResponse.confirmation(sessionId, llmLead, confirmationData);
         } catch (Exception e) {
@@ -829,64 +856,263 @@ public class AgentService {
     }
 
     // 生成确认卡片前的自然语言引导语（纯文本、不允许再出工具调用）；
-    // LLM 不可用时走默认文案兜底
+    // 引入天气/记忆决策因素，仅当存在影响决策的因素时才调用 LLM 融合；否则返回默认文案
     private String buildConfirmationLead(Long userId, String title, String remindTime,
                                          String location, boolean isRecurring) {
-        // 兜底文案：根据提醒类型使用不同风格
-        String defaultText;
-        if (isRecurring) {
-            defaultText = "好啦，周期提醒已准备好，帮你设为" + (title != null ? "「" + title + "」" : "") +
-                    (remindTime != null ? "，时间" + remindTime : "") + "，在下方卡片确认一下吧～";
-        } else {
-            defaultText = "好啦，" + (title != null ? "「" + title + "」" : "提醒") +
-                    (remindTime != null ? "已设为" + remindTime : "") + "，在下方卡片确认一下吧～";
-        }
+        // 1. 默认文案
+        String defaultText = "给你设了" + title + (remindTime != null ? "，" + remindTime : "") + "的提醒，记得确认一下哦～";
 
+        // 2. 收集决策因素
+        List<String> decisionFactors = new ArrayList<>();
+
+        // 2.1 天气（使用逐小时预报，匹配提醒时间的小时条目）
         try {
-            StringBuilder sb = new StringBuilder();
-            sb.append("请根据以下提醒信息，生成一句自然、口语化的引导语，引导用户在确认卡片上确认或取消。\n\n");
-            sb.append("要求：\n");
-            sb.append("- 直接用朋友的语气告诉用户你创建了什么提醒，包含标题和时间\n");
-            sb.append("- 不要输出任何JSON、工具调用、演戏格式\n");
-            sb.append("- 不要使用'正在生成'、'请稍候'等过程性语言\n");
-            sb.append("- 50字以内，自然友好\n");
-            sb.append("- 日常提醒轻松随意，重要/周期提醒更认真清晰\n\n");
-
-            sb.append("提醒标题：").append(title == null ? "(未命名)" : title).append("\n");
-            sb.append("提醒时间：").append(remindTime == null ? "(未设置)" : remindTime).append("\n");
-            if (location != null && !location.isBlank()) {
-                sb.append("提醒地点：").append(location).append("\n");
+            String city = getUserCity(userId);
+            if (city != null) {
+                String coord = getCityCoordinate(city);
+                if (coord != null) {
+                    WeatherHourlyResponse hourly = weatherService.getWeatherHourly(coord);
+                    if (hourly != null && hourly.getHourly() != null && !hourly.getHourly().isEmpty()) {
+                        WeatherHourlyResponse.HourlyForecast matched =
+                                findHourlyByRemindTime(hourly.getHourly(), remindTime);
+                        if (matched != null) {
+                            String weatherText = matched.getText();
+                            String temp = matched.getTemp();
+                            String weatherDecision = checkWeatherDecision(weatherText, temp, title);
+                            if (weatherDecision != null) {
+                                decisionFactors.add(weatherDecision);
+                            }
+                        }
+                    }
+                }
             }
-            if (isRecurring) {
-                sb.append("类型：周期提醒（按周期重复）\n");
-            }
-
-            String hint = sb.toString();
-            List<ToolDefinition> noTools = List.of();
-            List<Message> history = conversationMemory.getHistory(userId);
-
-            // 使用纯文本对话（不带工具定义），防止 LLM 误判为需要调用工具
-            String reply = llmService.chatWithoutTools(hint, history);
-
-            // 检测 LLM 是否返回了 JSON/工具调用，若是则重试一次
-            if (reply != null && reply.contains("tool_call")) {
-                log.warn("引导语生成返回工具调用JSON，重试一次");
-                String retryHint = "严格禁止输出JSON或工具调用。请用一句话自然地告诉用户：已创建提醒「"
-                        + (title != null ? title : "提醒") + "」，"
-                        + (remindTime != null ? remindTime : "") + "，请在卡片上确认。";
-                reply = llmService.chatWithoutTools(retryHint, history);
-            }
-
-            reply = sanitizeLlmOutput(reply);
-            if (reply == null || reply.isBlank() || reply.contains("tool_call")) {
-                log.warn("引导语LLM输出无效，使用兜底文案");
-                return defaultText;
-            }
-            return reply;
         } catch (Exception e) {
-            log.warn("生成确认卡片引导语失败，使用兜底文案: {}", e.getMessage());
-            return defaultText;
+            log.warn("引导语查天气失败: {}", e.getMessage());
         }
+
+        // 2.2 记忆
+        try {
+            List<KnowledgeResult> memories = ragService.retrievePrivateKnowledge(userId, title, 5);
+            for (KnowledgeResult memory : memories) {
+                String content = memory.getContent();
+                String memoryDecision = checkMemoryDecision(content);
+                if (memoryDecision != null) {
+                    decisionFactors.add(memoryDecision);
+                    break;  // 只取第一条影响决策的记忆
+                }
+            }
+        } catch (Exception e) {
+            log.warn("引导语查记忆失败: {}", e.getMessage());
+        }
+
+        // 3. 如果有决策因素，生成融合引导语
+        if (!decisionFactors.isEmpty()) {
+            String decisionText = String.join(" ", decisionFactors);
+            return generateLeadWithDecision(defaultText, decisionText);
+        }
+
+        // 4. 无决策因素，返回默认文案
+        return defaultText;
+    }
+
+    /**
+     * 从逐小时预报列表中找到与提醒时间最接近的条目
+     * 优先找"同一天 同一小时"精确匹配；
+     * 找不到则同一天内找"小时差最小"的条目；
+     * 仍找不到则取列表第一条作为兜底。
+     *
+     * @param hourly      和风逐小时预报列表，fxTime 格式如 "2026-08-31T12:00+08:00"
+     * @param remindTime  提醒时间，格式 "yyyy-MM-dd HH:mm:ss"（如 "2026-08-31 12:30:00"）
+     * @return 匹配到的条目；列表为空时返回 null
+     */
+    private WeatherHourlyResponse.HourlyForecast findHourlyByRemindTime(
+            List<WeatherHourlyResponse.HourlyForecast> hourly, String remindTime) {
+        if (hourly == null || hourly.isEmpty()) {
+            return null;
+        }
+        // remindTime 无法解析时，直接返回第一条（降级）
+        if (remindTime == null || remindTime.length() < 16) {
+            return hourly.get(0);
+        }
+
+        // 从 remindTime 提取日期和小时
+        //   "2026-08-31 12:30:00" -> date="2026-08-31", hour="12"
+        String rtDate = remindTime.substring(0, 10);
+        int rtHour;
+        try {
+            rtHour = Integer.parseInt(remindTime.substring(11, 13));
+        } catch (NumberFormatException e) {
+            return hourly.get(0);
+        }
+
+        WeatherHourlyResponse.HourlyForecast best = null;
+        int bestDiff = Integer.MAX_VALUE;
+
+        for (WeatherHourlyResponse.HourlyForecast item : hourly) {
+            String fxTime = item.getFxTime();
+            if (fxTime == null || fxTime.length() < 14) {
+                continue;
+            }
+            // 从 fxTime 提取日期和小时
+            //   "2026-08-31T12:00+08:00" -> date="2026-08-31", hour="12"
+            String fxDate = fxTime.substring(0, 10);
+            int fxHour;
+            try {
+                fxHour = Integer.parseInt(fxTime.substring(11, 13));
+            } catch (NumberFormatException e) {
+                continue;
+            }
+
+            // 精确匹配：同一天 + 同一小时
+            if (fxDate.equals(rtDate) && fxHour == rtHour) {
+                return item;
+            }
+
+            // 同一天内：记录小时差最小的
+            if (fxDate.equals(rtDate)) {
+                int diff = Math.abs(fxHour - rtHour);
+                if (diff < bestDiff) {
+                    bestDiff = diff;
+                    best = item;
+                }
+            }
+        }
+
+        // 返回小时差最接近的（同一天），否则用第一条降级
+        return best != null ? best : hourly.get(0);
+    }
+
+    /**
+     * 检查天气是否影响决策
+     * 下雨/下雪 → 影响决策；高温≥35°C → 影响决策；低温≤5°C → 影响决策
+     */
+    private String checkWeatherDecision(String weatherText, String temp, String title) {
+        if (weatherText == null) {
+            return null;
+        }
+        if (weatherText.contains("雨") || weatherText.contains("雪")) {
+            return "🌧️ " + weatherText + "，" + title + "建议改室内哦～";
+        }
+        try {
+            int tempInt = Integer.parseInt(temp);
+            if (tempInt >= 35) {
+                return "☀️ 高温 " + tempInt + "°C，" + title + "建议改到傍晚哦～";
+            }
+            if (tempInt <= 5) {
+                return "❄️ 低温 " + tempInt + "°C，注意保暖哦～";
+            }
+        } catch (NumberFormatException e) {
+            // 忽略
+        }
+        return null;
+    }
+
+    /**
+     * 检查记忆是否影响决策
+     * 包含"不想/讨厌/不要/不喜欢/害怕/担心/怕"关键词 → 影响决策
+     */
+    private String checkMemoryDecision(String content) {
+        if (content == null || content.isEmpty()) {
+            return null;
+        }
+        String[] keywords = {"不想", "讨厌", "不要", "不喜欢", "害怕", "担心", "怕"};
+        for (String kw : keywords) {
+            if (content.contains(kw)) {
+                return "💡 你之前说过：" + content;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 获取用户默认城市
+     */
+    private String getUserCity(Long userId) {
+        try {
+            Map<String, Object> preferences = userService.getUserPreferences(userId);
+            Object city = preferences.get("city");
+            return city != null ? city.toString() : null;
+        } catch (Exception e) {
+            log.warn("获取用户城市失败: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 根据城市名获取坐标
+     * @param cityName 城市名（如 "广东省-汕头-潮阳" 或 "潮阳"）
+     * @return 坐标字符串（如 "116.6026,23.26234"），查询失败返回 null
+     */
+    private String getCityCoordinate(String cityName) {
+        if (cityName == null || cityName.isEmpty()) {
+            return null;
+        }
+        try {
+            // 提取关键词（取最后一段）
+            String keyword = cityName;
+            if (cityName.contains("-")) {
+                String[] parts = cityName.split("-");
+                keyword = parts[parts.length - 1];
+            }
+
+            Map<String, Object> result = locationService.searchCity(keyword);
+            if (result == null || !Boolean.TRUE.equals(result.get("success"))) {
+                log.warn("搜索城市失败: keyword={}", keyword);
+                return null;
+            }
+
+            // 检查是否歧义
+            if (Boolean.TRUE.equals(result.get("ambiguous"))) {
+                List<Map<String, Object>> candidates = (List<Map<String, Object>>) result.get("candidates");
+                if (candidates != null && !candidates.isEmpty()) {
+                    Map<String, Object> first = candidates.get(0);
+                    Double lat = (Double) first.get("latitude");
+                    Double lon = (Double) first.get("longitude");
+                    if (lat != null && lon != null) {
+                        return lon + "," + lat;
+                    }
+                }
+                return null;
+            }
+
+            // 唯一结果：优先用 coord
+            String coord = (String) result.get("coord");
+            if (coord != null && !coord.isEmpty()) {
+                return coord;
+            }
+
+            // 降级：用 latitude + longitude 拼接
+            Double lat = (Double) result.get("latitude");
+            Double lon = (Double) result.get("longitude");
+            if (lat != null && lon != null) {
+                return lon + "," + lat;
+            }
+
+        } catch (Exception e) {
+            log.warn("获取城市坐标失败: cityName={}, error={}", cityName, e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * 将默认文案和决策因素融合成一句话
+     */
+    private String generateLeadWithDecision(String defaultText, String decisionText) {
+        String prompt = "请将以下两句话融合成一句自然友好的提醒话术：\n" +
+                        "A：" + defaultText + "\n" +
+                        "B：" + decisionText + "\n" +
+                        "要求：一句话，不超过25字，自然友好，语气像朋友提醒。\n" +
+                        "只返回融合后的话术，不要其他内容。";
+        try {
+            String result = llmService.chatWithoutTools(prompt, null);
+            if (result != null && !result.isBlank()) {
+                return result;
+            }
+        } catch (Exception e) {
+            log.warn("引导语融合失败，使用降级方案: {}", e.getMessage());
+        }
+        // 降级：拼接
+        return defaultText + " " + decisionText;
     }
 
     // 构建兜底引导语模板，确保 LLM 完全失败时仍有有意义的文案
@@ -1058,6 +1284,40 @@ public class AgentService {
                 resultText = sb.toString();
             } else {
                 resultText = "用户已取消提醒创建，请回复一句自然友好的取消话术，30字内，语气轻松。";
+            }
+
+            // ⭐ 在 resultText 构建完成之后，chatWithoutTools 调用之前
+            // 检查 contextData 是否包含天气/冲突/记忆字段，若有则增强 resultText
+            String weather = contextData != null ? (String) contextData.get("weather") : null;
+            @SuppressWarnings("unchecked")
+            List<String> conflicts = contextData != null ? (List<String>) contextData.get("conflicts") : null;
+            String memory = contextData != null ? (String) contextData.get("memory") : null;
+            String memoryType = contextData != null ? (String) contextData.get("memoryType") : null;
+
+            boolean hasContext = (weather != null && !weather.isEmpty())
+                    || (conflicts != null && !conflicts.isEmpty())
+                    || (memory != null && !memory.isEmpty());
+
+            if (hasContext) {
+                // 构建增强的 resultText，包含上下文信息
+                String enhancedResultText = resultText + "\n\n用户创建提醒时的上下文信息：\n";
+                if (weather != null && !weather.isEmpty()) {
+                    enhancedResultText += "- 天气：" + weather + "\n";
+                }
+                if (conflicts != null && !conflicts.isEmpty()) {
+                    enhancedResultText += "- 该时间已有其他安排：" + String.join("、", conflicts) + "\n";
+                }
+                if (memory != null && !memory.isEmpty() && memoryType != null) {
+                    enhancedResultText += "- 用户记忆：" + memory + "\n";
+                    enhancedResultText += "- 记忆类型：" + memoryType + "\n";
+                }
+
+                // 添加润色要求
+                enhancedResultText += "\n请根据以上信息生成一句自然、口语化的回复，像朋友聊天一样，把相关信息自然地融入回复中。\n";
+                enhancedResultText += "要求：1) 必须包含提醒标题和时间 2) 如果天气异常提示天气 3) 如果记忆类型是ACTION提醒用户执行行动 4) 如果记忆类型是CONSTRAINT提醒用户注意限制 5) 如果记忆类型是PREFERENCE不要直接提 6) 50字以内";
+
+                // 使用增强后的文本调用 LLM
+                resultText = enhancedResultText;
             }
 
             conversationMemory.addToolResult(userId, "create_reminder", resultText, confirmed);

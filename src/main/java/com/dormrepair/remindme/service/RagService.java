@@ -55,7 +55,8 @@ public class RagService {
     private final LLMService llmService;
 
     // 主动检索的相似度门槛：低于该分数的弱相关结果直接过滤，避免"问A答B"式罗列
-    private static final double RETRIEVE_SIMILARITY_THRESHOLD = 0.35;
+    // 阈值提高至 0.45，只保留强相关记忆，减少上下文污染
+    private static final double RETRIEVE_SIMILARITY_THRESHOLD = 0.45;
 
     // Spring 事件发布器：记忆增删成功后发布变更事件，由监听器推送 WebSocket 通知前端
     private final ApplicationEventPublisher eventPublisher;
@@ -302,6 +303,9 @@ public class RagService {
                 return null;
             }
 
+            // 更新成功后发布事件，通知记忆变更监听方（与 ADD/DELETE 路径保持一致）
+            eventPublisher.publishEvent(new PrivateMemoryChangedEvent("UPDATE", userId, memoryId));
+
             log.info("私人记忆更新成功: memoryId={}, userId={}", memoryId, userId);
             return newDocId;
         } catch (Exception e) {
@@ -429,17 +433,18 @@ public class RagService {
 
     // ==================== 知识检索 ====================
 
-    // 在用户私有记忆中做向量相似度检索，topK 未指定时按记忆总量动态计算，
+    // 在用户私有记忆中做向量相似度检索，topK 仅作为返回数量上限，实际返回条数由相似度阈值控制；
     // 低于相似度门槛的弱相关结果会被过滤，结果按相似度分数倒序返回。
     public List<KnowledgeResult> retrievePrivateKnowledge(Long userId, String query, Integer topK) {
-        int actualTopK = calculateTopK(userId, topK);
-        log.info("检索私人记忆: userId={}, query={}, topK={}", userId, query, actualTopK);
+        int maxResults = (topK != null && topK > 0) ? topK : 50;
+        log.info("检索私人记忆: userId={}, query={}, topK={}", userId, query, maxResults);
 
         try {
             ChromaVectorStore userStore = getUserVectorStore(userId);
+            // topK 仅作为上限，实际返回数量由 similarityThreshold 控制
             SearchRequest searchRequest = SearchRequest.builder()
                     .query(query)
-                    .topK(actualTopK)
+                    .topK(maxResults)
                     .similarityThreshold(RETRIEVE_SIMILARITY_THRESHOLD)
                     .build();
             List<Document> documents = callWithRetry(
@@ -454,6 +459,13 @@ public class RagService {
                     .map(doc -> toKnowledgeResult(doc, "private"))
                     .sorted(Comparator.comparingDouble(KnowledgeResult::getScore).reversed())
                     .collect(Collectors.toList());
+
+            // 最多返回 10 条记忆，保证 Token 消耗可控
+            // 同时保留 topK 参数作为检索池大小控制（LLM 可传）
+            if (results.size() > 10) {
+                results = results.subList(0, 10);
+                log.debug("检索结果截断: 原始 {} 条，截断后 10 条", documents.size());
+            }
 
             log.info("私有记忆检索成功: userId={}, query={}, count={}", userId, query, results.size());
             return results;
@@ -505,6 +517,8 @@ public class RagService {
             name = "retrieve_private_knowledge",
             description = "从用户私有知识库中检索记忆，用于回答关于用户个人信息、偏好、计划等个性化问题。"
                     + "返回的每条记忆包含分类、标题、内容和备注（备注是用户手写的补充说明），回答前请连同备注一起阅读。"
+                    + " topK：可选参数，含义为「最多返回多少条记忆」，默认 50。实际返回数量由相似度阈值（0.45）决定，只返回强相关记忆。"
+                    + "适用于回答关于用户个人信息、偏好、计划等具体问题。不适用于需要列出全部记忆或从全量数据中筛选的场景（此类场景请使用 get_all_private_memories）。"
     )
     public Map<String, Object> retrievePrivateKnowledgeForAgent(Long userId, String query, Integer topK) {
         log.info("Agent调用检索私有记忆: userId={}, query={}, topK={}", userId, query, topK);
@@ -656,6 +670,7 @@ public class RagService {
             name = "get_all_private_memories",
             description = "获取用户私有知识库中的所有记忆，每条包含分类、标题、内容和备注。"
                     + "适合用户想整体回顾记忆、或按分类/关键词浏览全部记忆时使用。"
+                    + "适用于用户明确要求查看所有记忆、或需要从全量数据中筛选特定内容的场景，如'查看所有记忆'、'把所有健康相关的记忆都列出来'。"
     )
     public Map<String, Object> getAllPrivateMemoriesForAgent(Long userId) {
         log.info("Agent调用获取所有私有记忆: userId={}", userId);
@@ -685,7 +700,10 @@ public class RagService {
     // Agent 工具：检索公共知识库（系统使用手册）
     @AgentTool(
             name = "retrieve_public_knowledge",
-            description = "从公共知识库中检索系统使用手册（提醒管理、天气查询、个人记忆、经期管理、用户设置、位置与时间等功能说明）。注意：公共知识库仅承载使用手册，不再记录生活小常识/科普内容。"
+            description = "从系统使用手册中检索功能帮助信息。手册内容涵盖：提醒管理、天气查询、个人记忆、经期管理、用户设置、位置与时间等功能的操作说明。"
+                    + "调用时机：仅在用户明确询问系统功能/操作/使用方法时调用，例如：\"怎么创建提醒\"、\"能查天气吗\"、\"支持什么功能\"、\"如何设置经期\"、\"这软件能做什么\"。"
+                    + "不调用时机：用户正在执行具体操作（创建提醒、查天气、问个人记忆、管理设置等）时，不要调用此工具。"
+                    + "示例：用户说\"提醒我明天开会\" → 不调用；用户说\"怎么创建提醒\" → 调用。"
     )
     public Map<String, Object> retrievePublicKnowledgeForAgent(Long userId, String query, Integer topK) {
         log.info("Agent调用检索公共知识: userId={}, query={}, topK={}", userId, query, topK);
@@ -709,40 +727,6 @@ public class RagService {
             errorResult.put("count", 0);
             errorResult.put("knowledge", Collections.emptyList());
             return errorResult;
-        }
-    }
-
-    // ==================== 动态topK ====================
-
-    // 计算 topK：调用方显式指定则优先用；否则按用户记忆总量分档（<20→5、≤100→10、其余→15）
-    private int calculateTopK(Long userId, Integer topK) {
-        if (topK != null) {
-            log.debug("使用调用方指定 topK: userId={}, topK={}", userId, topK);
-            return Math.max(1, topK);
-        }
-
-        int memoryCount = getPrivateMemoryCount(userId);
-        int dynamicTopK;
-        if (memoryCount < 20) {
-            dynamicTopK = 5;
-        } else if (memoryCount <= 100) {
-            dynamicTopK = 10;
-        } else {
-            dynamicTopK = 15;
-        }
-
-        log.debug("动态计算 topK: userId={}, memoryCount={}, topK={}", userId, memoryCount, dynamicTopK);
-        return dynamicTopK;
-    }
-
-    // 统计用户私有记忆条数，仅作为动态 topK 的输入，异常时按 0 处理
-    private int getPrivateMemoryCount(Long userId) {
-        try {
-            List<KnowledgeResult> all = getAllPrivateMemories(userId);
-            return all != null ? all.size() : 0;
-        } catch (Exception e) {
-            log.warn("查询用户记忆数量失败: userId={}, error={}", userId, e.getMessage());
-            return 0;
         }
     }
 

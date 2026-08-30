@@ -21,6 +21,9 @@ public interface ReminderRepository extends JpaRepository<Reminder, Long> {
     // 按用户 id + 生命周期状态查提醒列表（如查某用户所有 COMPLETED）
     List<Reminder> findByUserIdAndStatus(Long userId, ReminderStatus status);
 
+    // 按用户 id + 多个生命周期状态查列表（如查 PENDING + REMINDED 两种状态的提醒）
+    List<Reminder> findByUserIdAndStatusIn(Long userId, List<ReminderStatus> statuses);
+
     // 按用户 id + 提醒时间闭区间查列表，日程视图某时间段取数用
     List<Reminder> findByUserIdAndRemindTimeBetween(Long userId, LocalDateTime start, LocalDateTime end);
 

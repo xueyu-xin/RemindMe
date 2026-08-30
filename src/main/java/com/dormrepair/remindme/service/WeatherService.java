@@ -48,6 +48,23 @@ public class WeatherService {
         throw new RuntimeException("实时天气查询失败: code=" + (response != null ? response.getCode() : "null"));
     }
 
+    // 查询逐小时预报，location 为"经度,纬度"或 LocationID，返回未来 24 小时逐小时预报
+    public WeatherHourlyResponse getWeatherHourly(String location) {
+        log.info("查询逐小时预报: location={}", location);
+        String url = buildUrl("/v7/weather/24h")
+                + "?location=" + encode(location)
+                + "&lang=zh-hans";
+
+        String json = httpGet(url);
+        WeatherHourlyResponse response = parseJson(json, WeatherHourlyResponse.class);
+
+        if (response != null && "200".equals(response.getCode())) {
+            log.info("逐小时预报查询成功: location={}, count={}", location, response.getHourly().size());
+            return response;
+        }
+        throw new RuntimeException("逐小时预报查询失败: code=" + (response != null ? response.getCode() : "null"));
+    }
+
     // 查询天气预报，days 支持 3/7/10/15/30，默认 7 天
     public WeatherForecastResponse getWeatherForecast(String location, Integer days) {
         log.info("查询天气预报: location={}, days={}", location, days);

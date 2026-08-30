@@ -123,12 +123,26 @@ public class SchedulerService {
                 try {
                     String weatherSuggestion = null;
                     if (cache.success && cache.weatherText != null && cache.temperature != null) {
-                        weatherSuggestion = llmService.generateWeatherSuggestion(
-                                cache.weatherText,
-                                cache.temperature,
-                                reminder.getTitle(),
-                                query.displayName
-                        );
+                        // 优先使用提醒话术模板（含 {weather}/{title}/{memory} 占位符），无模板则降级为 LLM 天气建议
+                        String template = reminder.getNoteTemplate();
+                        if (template != null && !template.isBlank()) {
+                            String weatherEmoji = getWeatherEmoji(cache.weatherText);
+                            String weatherDesc = weatherEmoji + cache.weatherText + "，" + cache.temperature + "°C";
+                            String memoryNote = reminder.getNote() != null ? reminder.getNote() : "";
+                            weatherSuggestion = template
+                                    .replace("{weather}", weatherDesc)
+                                    .replace("{title}", reminder.getTitle())
+                                    .replace("{memory}", memoryNote);
+                            // 清理残留的未匹配占位符
+                            weatherSuggestion = weatherSuggestion.replaceAll("\\{[^}]*\\}", "");
+                        } else {
+                            weatherSuggestion = llmService.generateWeatherSuggestion(
+                                    cache.weatherText,
+                                    cache.temperature,
+                                    reminder.getTitle(),
+                                    query.displayName
+                            );
+                        }
                     }
 
                     confirmationService.pushExecuteCard(reminder, weatherSuggestion);
@@ -425,5 +439,16 @@ public class SchedulerService {
         } catch (Exception e) {
             log.error("经期提醒检查失败: {}", e.getMessage(), e);
         }
+    }
+
+    // 根据天气文字描述返回对应 emoji，用于话术模板的 {weather} 占位符替换
+    private String getWeatherEmoji(String weatherText) {
+        if (weatherText == null) return "🌤️";
+        if (weatherText.contains("雨")) return "🌧️";
+        if (weatherText.contains("雪")) return "❄️";
+        if (weatherText.contains("晴")) return "☀️";
+        if (weatherText.contains("云")) return "⛅";
+        if (weatherText.contains("雾")) return "🌫️";
+        return "🌤️";
     }
 }

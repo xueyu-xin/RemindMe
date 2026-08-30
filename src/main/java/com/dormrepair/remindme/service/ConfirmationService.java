@@ -9,6 +9,8 @@ import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.Confirmatio
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse.MultiItem;
 import com.dormrepair.remindme.dto.response.ConflictDetailResponse;
 import com.dormrepair.remindme.dto.response.ConflictResponse;
+import com.dormrepair.remindme.dto.response.KnowledgeResult;
+import com.dormrepair.remindme.dto.response.WeatherNowResponse;
 import com.dormrepair.remindme.dto.TaskDetail;
 import com.dormrepair.remindme.entity.ConfirmationSession;
 import com.dormrepair.remindme.entity.ConfirmationSession.SessionStatus;
@@ -43,6 +45,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 // 两阶段确认会话服务：阶段一创建信息确认卡片，阶段二执行确认/稍后/取消，含超时自动确认与周期提醒分支
 @Slf4j
@@ -58,6 +61,7 @@ public class ConfirmationService {
     private final WeatherService weatherService;
     private final LLMService llmService;
     private final ConflictDetectionService conflictDetectionService;
+    private final RagService ragService;
     private final AgentService agentService;
     private final UserService userService;
     private final TransactionTemplate transactionTemplate;
@@ -203,7 +207,75 @@ public class ConfirmationService {
                     coverCtx.put("overwrittenCount", count);
                 }
             }
-            enrichWithAgentReply(result, userId, sessionId, true, coverCtx);
+            // ========== 构建 contextData（天气/冲突/记忆，辅助查询失败不影响主流程） ==========
+            Map<String, Object> contextData = new HashMap<>();
+
+            // 1. 从 coverCtx 复制原有字段（覆盖标题/数量，如果有）
+            if (coverCtx != null) {
+                contextData.putAll(coverCtx);
+            }
+
+            // 2. 获取已创建的提醒对象
+            Long reminderId = (Long) result.get("reminderId");
+            Reminder reminder = null;
+            if (reminderId != null) {
+                reminder = reminderRepository.findById(reminderId).orElse(null);
+            }
+
+            if (reminder != null) {
+                try {
+                    // 3. 查天气（使用用户默认城市）
+                    String defaultCity = (String) userService.getUserPreferences(userId).get("city");
+                    if (defaultCity != null && !defaultCity.isEmpty()) {
+                        WeatherNowResponse weatherResp = weatherService.getWeatherNow(defaultCity);
+                        if (weatherResp != null && weatherResp.getNow() != null) {
+                            String weatherText = weatherResp.getNow().getText();
+                            String weatherTemp = weatherResp.getNow().getTemp();
+                            if (weatherText != null) {
+                                contextData.put("weather", "当前天气：" + weatherText + "，" + weatherTemp + "°C");
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("查天气失败，不影响主流程: userId={}, error={}", userId, e.getMessage());
+                }
+
+                try {
+                    // 4. 查冲突
+                    ConflictResponse conflictResp = conflictDetectionService.checkConflict(
+                            userId, reminder.getRemindTime(), reminderId
+                    );
+                    if (conflictResp != null && conflictResp.isHasConflict() && conflictResp.getConflicts() != null) {
+                        List<String> conflictTitles = conflictResp.getConflicts().stream()
+                                .map(ConflictResponse.ConflictItem::getTitle)
+                                .collect(Collectors.toList());
+                        if (!conflictTitles.isEmpty()) {
+                            contextData.put("conflicts", conflictTitles);
+                        }
+                    }
+                } catch (Exception e) {
+                    log.warn("查冲突失败，不影响主流程: userId={}, error={}", userId, e.getMessage());
+                }
+
+                try {
+                    // 5. 查记忆 + 分类
+                    List<KnowledgeResult> memories = ragService.retrievePrivateKnowledge(
+                            userId, reminder.getTitle(), 3
+                    );
+                    if (memories != null && !memories.isEmpty()) {
+                        String memoryContent = memories.stream()
+                                .map(KnowledgeResult::getContent)
+                                .collect(Collectors.joining("；"));
+                        contextData.put("memory", memoryContent);
+                        contextData.put("memoryType", classifyMemory(memoryContent));
+                    }
+                } catch (Exception e) {
+                    log.warn("查记忆失败，不影响主流程: userId={}, error={}", userId, e.getMessage());
+                }
+            }
+
+            // 6. 调用 enrichWithAgentReply（复用现有扩展点，传入完整 contextData）
+            enrichWithAgentReply(result, userId, sessionId, true, contextData);
             if (result.get("message") == null) {
                 result.put("message", fallbackMsg != null ? fallbackMsg : "提醒已确认");
             }
@@ -1827,6 +1899,32 @@ public class ConfirmationService {
                 (String) parsedData.get("note"),
                 (Integer) parsedData.getOrDefault("advanceMinutes", defaultAdvance),
                 confirmStatus);
+
+        // 生成提醒话术模板（不影响主流程）
+        try {
+            List<KnowledgeResult> memories = ragService.retrievePrivateKnowledge(
+                    userId,
+                    reminder.getTitle(),
+                    3
+            );
+
+            List<String> memoryContents = memories.stream()
+                    .map(KnowledgeResult::getContent)
+                    .collect(Collectors.toList());
+
+            String template = llmService.generateReminderTemplate(
+                    reminder.getTitle(),
+                    memoryContents
+            );
+
+            if (template != null && !template.isBlank()) {
+                reminder.setNoteTemplate(template);
+                log.info("生成提醒模板成功: title={}, template={}", reminder.getTitle(), template);
+            }
+        } catch (Exception e) {
+            log.warn("生成提醒模板失败，不影响主流程: title={}, error={}", reminder.getTitle(), e.getMessage());
+        }
+
         return reminderRepository.save(reminder);
     }
 
@@ -2711,5 +2809,31 @@ public class ConfirmationService {
         };
         String displayTime = remindTime.length() >= 5 ? remindTime.substring(0, 5) : remindTime;
         return label + " " + displayTime + " | " + startDate + " 至 " + endDate + " 共" + totalDays + "天";
+    }
+
+    // 记忆分类：根据记忆文本内容判断类型，用于 Agent 回复润色时决定是否提及
+    // ACTION：可执行的行动（带物品、准备物品）；CONSTRAINT：约束条件；PREFERENCE：偏好；IRRELEVANT：无关
+    private String classifyMemory(String memory) {
+        if (memory == null || memory.isEmpty()) {
+            return "IRRELEVANT";
+        }
+
+        // ACTION：可执行的行动（带物品、准备物品）
+        if (memory.matches(".*(带|准备|会|习惯|总是|每次).*") &&
+                memory.matches(".*(茶|水|伞|外套|耳机|书|本子|充电宝|药|帽子|毛巾|背包).*")) {
+            return "ACTION";
+        }
+
+        // CONSTRAINT：约束条件（不能、注意、不超过）
+        if (memory.matches(".*(不|不能|不要|避免|注意|不超过|少于|大于|限制|只能).*")) {
+            return "CONSTRAINT";
+        }
+
+        // PREFERENCE：偏好（喜欢、讨厌）
+        if (memory.matches(".*(喜欢|讨厌|不喜欢|爱|恨|偏好|偏爱).*")) {
+            return "PREFERENCE";
+        }
+
+        return "IRRELEVANT";
     }
 }

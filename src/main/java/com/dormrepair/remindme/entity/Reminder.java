@@ -60,6 +60,10 @@ public class Reminder {
     @Column(name = "note")
     private String note;
 
+    // 提醒话术模板（含 {weather}/{title}/{memory} 占位符）：由 LLM 在创建提醒时生成，触发时替换占位符后推送
+    @Column(name = "note_template", columnDefinition = "TEXT")
+    private String noteTemplate;
+
     // 优先级：LOW / NORMAL / HIGH，默认 NORMAL；影响推送顺序与失败重试策略
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
