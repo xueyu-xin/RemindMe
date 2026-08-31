@@ -11,11 +11,29 @@
  Target Server Version : 80400 (8.4.0)
  File Encoding         : 65001
 
- Date: 29/08/2026 11:34:13
+ Date: 31/08/2026 21:55:55
 */
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
+
+-- ----------------------------
+-- Table structure for agent_status_flows
+-- ----------------------------
+DROP TABLE IF EXISTS `agent_status_flows`;
+CREATE TABLE `agent_status_flows`  (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键',
+  `flow_id` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '状态流唯一标识',
+  `user_id` bigint NOT NULL COMMENT '用户id',
+  `final_status` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '终态：DONE/ERROR',
+  `total_steps` int NOT NULL DEFAULT 0 COMMENT '总步骤数',
+  `duration_ms` bigint NULL DEFAULT NULL COMMENT '整轮耗时(毫秒)',
+  `steps_json` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL COMMENT '步骤明细JSON数组',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '落库时间',
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE INDEX `uk_asf_flow_id`(`flow_id` ASC) USING BTREE,
+  INDEX `idx_asf_user_created`(`user_id` ASC, `created_at` ASC) USING BTREE
+) ENGINE = InnoDB AUTO_INCREMENT = 12 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'Agent状态流持久化表' ROW_FORMAT = Dynamic;
 
 -- ----------------------------
 -- Table structure for confirmation_sessions
@@ -87,7 +105,7 @@ CREATE TABLE `recurring_instances`  (
   INDEX `idx_status`(`status` ASC) USING BTREE,
   CONSTRAINT `recurring_instances_ibfk_1` FOREIGN KEY (`recurring_id`) REFERENCES `recurring_reminders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT,
   CONSTRAINT `recurring_instances_ibfk_2` FOREIGN KEY (`reminder_id`) REFERENCES `reminders` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 843 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '周期提醒实例表' ROW_FORMAT = DYNAMIC;
+) ENGINE = InnoDB AUTO_INCREMENT = 842 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '周期提醒实例表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Table structure for recurring_reminders
@@ -144,6 +162,7 @@ CREATE TABLE `reminders`  (
   `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
   `execution_status` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT 'PENDING' COMMENT '执行状态：PENDING/CONFIRMED/CANCELLED/DEFAULTED，用于阶段二',
   `note` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT NULL,
+  `note_template` text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
   PRIMARY KEY (`id`) USING BTREE,
   INDEX `idx_reminders_user_status_time`(`user_id` ASC, `status` ASC, `remind_time` ASC) USING BTREE,
   INDEX `idx_reminders_remind_time`(`remind_time` ASC) USING BTREE,
@@ -152,7 +171,7 @@ CREATE TABLE `reminders`  (
   INDEX `idx_reminders_execution_status`(`execution_status` ASC) USING BTREE,
   INDEX `idx_reminders_user_end_time`(`user_id` ASC, `end_time` ASC) USING BTREE,
   CONSTRAINT `fk_reminders_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 1787 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '提醒表' ROW_FORMAT = DYNAMIC;
+) ENGINE = InnoDB AUTO_INCREMENT = 1771 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '提醒表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Table structure for schedule_import_items
@@ -196,7 +215,7 @@ CREATE TABLE `schedule_imports`  (
   PRIMARY KEY (`id`) USING BTREE,
   INDEX `idx_user_created`(`user_id` ASC, `created_at` ASC) USING BTREE,
   CONSTRAINT `schedule_imports_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 45 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '日程导入记录表' ROW_FORMAT = DYNAMIC;
+) ENGINE = InnoDB AUTO_INCREMENT = 46 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '日程导入记录表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Table structure for user_dialog_stats
@@ -219,7 +238,7 @@ CREATE TABLE `user_dialog_stats`  (
   INDEX `idx_user_dialog_stats_intent`(`intent_type` ASC) USING BTREE,
   INDEX `idx_user_created`(`user_id` ASC, `created_at` ASC) USING BTREE,
   CONSTRAINT `fk_user_dialog_stats_user_id` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE RESTRICT
-) ENGINE = InnoDB AUTO_INCREMENT = 997 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '对话统计表' ROW_FORMAT = DYNAMIC;
+) ENGINE = InnoDB AUTO_INCREMENT = 888 CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '对话统计表' ROW_FORMAT = DYNAMIC;
 
 -- ----------------------------
 -- Table structure for users

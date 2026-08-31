@@ -3498,10 +3498,15 @@ window.saveMessageToBackend = saveMessageToBackend;
                     }
                     // 后端返回倒序（新→旧），前端需正序渲染（旧→新）
                     var list = resp.data.slice().reverse();
-                    list.forEach(function(item) {
-                        var role = item.role === 'user' ? 'user' : 'bot';
-                        addMessage(role, item.content || '', true);
-                    });
+                    // 拉取历史状态流并按时间序穿插渲染（失败静默降级为纯消息渲染，不影响历史展示）
+                    fetch('/api/agent/status-flows?userId=' + currentUserId + '&limit=50')
+                        .then(function(r) { return r.json(); })
+                        .then(function(fresp) {
+                            renderHistoryWithFlows(list, fresp);
+                        })
+                        .catch(function() {
+                            renderPlainHistory(list);
+                        });
                 })
                 .catch(function(err) {
                     // 加载失败：移除加载提示即可，不打扰用户
@@ -3510,6 +3515,62 @@ window.saveMessageToBackend = saveMessageToBackend;
                         if (loadingEl) loadingEl.remove();
                     }
                 });
+        }
+
+        // 纯消息渲染（状态流接口失败时的降级路径）
+        function renderPlainHistory(list) {
+            list.forEach(function(item) {
+                var role = item.role === 'user' ? 'user' : 'bot';
+                addMessage(role, item.content || '', true);
+            });
+        }
+
+        // 历史消息 + 状态流按时间序合并渲染
+        // 状态流落库时间介于其用户消息和 bot 回复之间，因此遇到第一条时间不早于流的消息时，
+        // 把该流气泡插入到这条消息前面，刷新后顺序与实时对话完全一致
+        function renderHistoryWithFlows(list, fresp) {
+            var flows = (fresp && fresp.success && Array.isArray(fresp.data)) ? fresp.data.slice().reverse() : [];
+
+            // 解析后端 LocalDateTime 字符串为毫秒时间戳（无时区标记，按本地时区解析）
+            function parseTime(v) {
+                if (!v) return NaN;
+                var t = new Date(String(v).replace(' ', 'T')).getTime();
+                return t;
+            }
+
+            // 预跳过孤儿流：时间早于窗口首条消息的状态流，其对应消息已不在历史窗口内，不渲染
+            var firstT = parseTime(list[0] && list[0].createdAt);
+            var fi = 0;
+            while (fi < flows.length) {
+                var ft0 = parseTime(flows[fi].createdAt);
+                if (!isNaN(ft0) && !isNaN(firstT) && ft0 <= firstT) {
+                    fi++;
+                } else {
+                    break;
+                }
+            }
+
+            list.forEach(function(item, idx) {
+                var role = item.role === 'user' ? 'user' : 'bot';
+                var t = parseTime(item.createdAt);
+                // 在当前消息前插入所有时间不晚于它的状态流
+                while (fi < flows.length) {
+                    var ft = parseTime(flows[fi].createdAt);
+                    if (isNaN(ft) || (isNaN(t) || ft <= t)) {
+                        if (window.AgentStatusFlow) window.AgentStatusFlow.replayFlow(flows[fi]);
+                        fi++;
+                    } else {
+                        break;
+                    }
+                }
+                addMessage(role, item.content || '', true);
+            });
+
+            // 兜底：剩余状态流（如消息落库失败的异常场景）追加到末尾
+            while (fi < flows.length) {
+                if (window.AgentStatusFlow) window.AgentStatusFlow.replayFlow(flows[fi]);
+                fi++;
+            }
         }
 
         async function retryLastMessage(errorMsgId) {
@@ -5273,6 +5334,8 @@ window.saveMessageToBackend = saveMessageToBackend;
             var activeFlow = null;
             // flowId -> msgId（气泡 DOM 的 id，也用于折叠/展开查找）
             var flowMsgMap = {};
+            // 已回放的历史状态流 flowId 集合（防止实时事件与回放重复创建气泡）
+            var replayedFlowIds = {};
 
             // 返回 STATUS 的显示配置；找不到则走通用兜底
             function getDisplay(status) {
@@ -5506,10 +5569,97 @@ window.saveMessageToBackend = saveMessageToBackend;
                 if (history) history.scrollTop = history.scrollHeight;
             }
 
+            // 回放一条已落库的历史状态流（刷新后渲染，默认折叠，可点击展开回看）
+            // flowData: { flowId, finalStatus(DONE/ERROR), totalSteps, durationMs, steps:[...] }
+            function replayFlow(flowData) {
+                if (!flowData || !flowData.flowId) return;
+                var flowId = String(flowData.flowId);
+                // 同一 flowId 只回放一次
+                if (replayedFlowIds[flowId]) return;
+                replayedFlowIds[flowId] = true;
+
+                var history = document.getElementById('chatHistory');
+                if (!history) return;
+                var msgId = 'flow-replay-' + flowId.replace(/[^a-zA-Z0-9-]/g, '');
+                if (document.getElementById(msgId)) return;
+
+                var isErr = flowData.finalStatus === 'ERROR';
+                var steps = Array.isArray(flowData.steps) ? flowData.steps : [];
+                var totalSteps = Number(flowData.totalSteps) || steps.length || 0;
+                var durMs = (flowData.durationMs != null && !isNaN(Number(flowData.durationMs))) ? Number(flowData.durationMs) : null;
+
+                var wrapper = document.createElement('div');
+                wrapper.className = 'error-msg-wrapper as-flow-wrapper';
+
+                var msg = document.createElement('div');
+                msg.className = 'chat-message bot as-flow-bubble';
+                msg.id = msgId;
+                msg.setAttribute('data-flow-id', flowId);
+
+                // 头部：终态标题 + 摘要（折叠态），文案与实时气泡 handleTerminal 保持一致
+                var summaryText = '';
+                if (isErr) {
+                    summaryText = '用时 ' + formatDuration(durMs || 0) + ' · 点击查看详情';
+                } else {
+                    summaryText = (durMs != null ? totalSteps + ' 步 · 用时 ' + formatDuration(durMs) : totalSteps + ' 步');
+                }
+                var html = '';
+                html += '<div class="as-flow-header" data-flow-toggle="' + flowId + '">';
+                html += '  <span class="as-flow-title">' + (isErr ? '⚠️ 处理失败' : '✨ 处理完成') + '</span>';
+                html += '  <span class="as-flow-summary"><span class="as-summary-text' + (isErr ? ' as-summary-error' : '') + '">' + escapeHtml(summaryText) + '</span></span>';
+                html += '  <span class="as-flow-toggle">▲</span>';
+                html += '</div>';
+                // 折叠态：步骤区默认隐藏，点击头部展开
+                html += '<div class="as-flow-steps" id="as-steps-' + msgId + '" style="display:none;"></div>';
+
+                msg.innerHTML = html;
+                msg.classList.add(isErr ? 'as-flow-error' : 'as-flow-finished');
+                msg.classList.add('as-flow-collapsed');
+                wrapper.appendChild(msg);
+                history.appendChild(wrapper);
+
+                // 填充步骤行：全部按已完成状态渲染，复用实时气泡的 buildStepRow
+                var stepsEl = msg.querySelector('.as-flow-steps');
+                if (stepsEl) {
+                    var rowsHtml = '';
+                    steps.forEach(function(st) {
+                        if (!st) return;
+                        var extra = (st.extra && typeof st.extra === 'object') ? st.extra : {};
+                        if (st.durationMs != null && extra.durationMs == null) extra.durationMs = st.durationMs;
+                        rowsHtml += buildStepRow(st.stepIndex, st.status, extra, !!st.terminal);
+                    });
+                    stepsEl.innerHTML = rowsHtml;
+                }
+
+                // 点击头部：折叠/展开（与实时气泡行为一致）
+                var headerEl = msg.querySelector('.as-flow-header');
+                if (headerEl) {
+                    headerEl.addEventListener('click', function() {
+                        var stepsEl2 = document.getElementById('as-steps-' + msgId);
+                        var summaryEl = msg.querySelector('.as-flow-summary');
+                        var toggleEl = msg.querySelector('.as-flow-toggle');
+                        if (!stepsEl2) return;
+                        if (stepsEl2.style.display === 'none') {
+                            stepsEl2.style.display = '';
+                            if (summaryEl) summaryEl.style.display = 'none';
+                            if (toggleEl) toggleEl.textContent = '▼';
+                            msg.classList.remove('as-flow-collapsed');
+                        } else {
+                            stepsEl2.style.display = 'none';
+                            if (summaryEl) summaryEl.style.display = '';
+                            if (toggleEl) toggleEl.textContent = '▲';
+                            msg.classList.add('as-flow-collapsed');
+                        }
+                    });
+                }
+            }
+
             // 对外：收到一条 AGENT_STATUS 事件
             function onStatusEvent(msg) {
                 if (!msg || !msg.status) return;
                 var flowId = msg.flowId;
+                // 已作为历史回放过的 flow 不再响应实时事件（防重复气泡）
+                if (flowId && replayedFlowIds[String(flowId)]) return;
                 var stepIdx = msg.stepIndex || 0;
                 var status = msg.status;
                 var extra = msg.extra || {};
@@ -5567,6 +5717,7 @@ window.saveMessageToBackend = saveMessageToBackend;
             window.AgentStatusFlow = {
                 onStatusEvent: onStatusEvent,
                 onFinalBotMessageArrived: onFinalBotMessageArrived,
+                replayFlow: replayFlow,
                 _destroyFlow: destroyFlow
             };
         })();
