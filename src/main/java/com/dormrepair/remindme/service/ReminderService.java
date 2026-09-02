@@ -336,6 +336,13 @@ public class ReminderService {
             result.put("sessionId", card.getData().getSessionId());
             result.put("confirmationRequired", true);
             result.put("hasConflict", conflictResponse.isHasConflict());
+            // 冲突详情：拼接冲突提醒标题，供 Agent 引导语使用
+            if (conflictResponse.isHasConflict() && conflictResponse.getConflicts() != null) {
+                String conflictMessage = conflictResponse.getConflicts().stream()
+                        .map(ConflictResponse.ConflictItem::getTitle)
+                        .collect(Collectors.joining("、"));
+                result.put("conflictMessage", "与「" + conflictMessage + "」时间冲突");
+            }
             // 透传确认卡片的 actions、timeout、expiresAt
             result.put("actions", card.getActions());
             result.put("timeout", card.getTimeout());

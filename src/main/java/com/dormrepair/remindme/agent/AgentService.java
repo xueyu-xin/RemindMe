@@ -28,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 // Agent 核心调度器。实现 ReAct（思考-行动-观察）循环：解析用户输入→调用 LLM→决定是否执行工具→收集结果→再次迭代，
 // 直至生成最终回复；集成空响应降级、演戏格式拦截、重复调用去重+卡死兜底、确认卡片生成、事件监听等能力；
@@ -811,6 +812,7 @@ public class AgentService {
             String remindTime = (String) resultMap.get("remindTime");
             String location = (String) resultMap.get("location");
             boolean isRecurring = Boolean.TRUE.equals(resultMap.get("isRecurring"));
+            String conflictMessage = (String) resultMap.get("conflictMessage");
             log.info("buildConfirmationResponse: 检测到确认会话 sessionId={}, title={}, isRecurring={}", sessionId, title, isRecurring);
 
             // 并行执行：卡片数据构建 + 引导语生成
@@ -838,15 +840,41 @@ public class AgentService {
 
             CompletableFuture<String> leadFuture =
                     CompletableFuture.supplyAsync(() ->
-                            buildConfirmationLead(userId, title, remindTime, location, isRecurring)
+                            buildConfirmationLead(userId, title, remindTime, location, isRecurring, conflictMessage)
                     );
 
-            // 等待两者都完成
-            CompletableFuture.allOf(dataFuture, leadFuture).join();
+            // 等待两者都完成（15秒超时保护，防止 LLM 卡死导致永久阻塞）
+            try {
+                CompletableFuture.allOf(dataFuture, leadFuture)
+                        .orTimeout(15, TimeUnit.SECONDS)
+                        .join();
+            } catch (Exception timeoutEx) {
+                log.warn("引导语生成超时（15秒），使用降级文案: {}", timeoutEx.getMessage());
+            }
 
-            // 获取结果
-            Map<String, Object> confirmationData = dataFuture.get();
-            String llmLead = leadFuture.get();
+            // 获取结果（支持超时后数据未完成的情况）
+            Map<String, Object> confirmationData;
+            String llmLead;
+            try {
+                confirmationData = dataFuture.getNow(new HashMap<>());
+            } catch (Exception e) {
+                confirmationData = new HashMap<>();
+                confirmationData.put("title", title);
+                confirmationData.put("remindTime", remindTime);
+                confirmationData.put("location", location);
+                if (isRecurring) {
+                    confirmationData.put("isRecurring", true);
+                    confirmationData.put("noTimeout", true);
+                }
+            }
+            try {
+                llmLead = leadFuture.getNow(null);
+            } catch (Exception e) {
+                llmLead = null;
+            }
+            if (llmLead == null || llmLead.isBlank()) {
+                llmLead = buildDefaultLead(title, remindTime, location, isRecurring);
+            }
 
             return AgentResponse.confirmation(sessionId, llmLead, confirmationData);
         } catch (Exception e) {
@@ -858,7 +886,8 @@ public class AgentService {
     // 生成确认卡片前的自然语言引导语（纯文本、不允许再出工具调用）；
     // 引入天气/记忆决策因素，仅当存在影响决策的因素时才调用 LLM 融合；否则返回默认文案
     private String buildConfirmationLead(Long userId, String title, String remindTime,
-                                         String location, boolean isRecurring) {
+                                         String location, boolean isRecurring,
+                                         String conflictMessage) {
         // 1. 默认文案
         String defaultText = "给你设了" + title + (remindTime != null ? "，" + remindTime : "") + "的提醒，记得确认一下哦～";
 
@@ -903,6 +932,11 @@ public class AgentService {
             }
         } catch (Exception e) {
             log.warn("引导语查记忆失败: {}", e.getMessage());
+        }
+
+        // 2.3 冲突信息
+        if (conflictMessage != null && !conflictMessage.isEmpty()) {
+            decisionFactors.add("⚠️ " + conflictMessage);
         }
 
         // 3. 如果有决策因素，生成融合引导语
@@ -1098,11 +1132,23 @@ public class AgentService {
      * 将默认文案和决策因素融合成一句话
      */
     private String generateLeadWithDecision(String defaultText, String decisionText) {
-        String prompt = "请将以下两句话融合成一句自然友好的提醒话术：\n" +
-                        "A：" + defaultText + "\n" +
-                        "B：" + decisionText + "\n" +
-                        "要求：一句话，不超过25字，自然友好，语气像朋友提醒。\n" +
-                        "只返回融合后的话术，不要其他内容。";
+        String prompt = String.format(
+                        "请用朋友聊天的语气，把下面两句话融合成一句自然的话术：\n" +
+                        "- 提醒信息：%s\n" +
+                        "- 额外信息：%s\n\n" +
+                        "要求：\n" +
+                        "1. 语气像朋友在微信上聊天，可以用emoji\n" +
+                        "2. 引导用户做决定，用「要不要」「还是说」等询问句式\n" +
+                        "3. 开头用「给你设了」自然引出\n" +
+                        "4. 不用问号结尾，但要表达出引导用户确认的意思\n" +
+                        "5. 不超过35字\n" +
+                        "6. 只返回话术本身，不要其他内容\n\n" +
+                        "示例：\n" +
+                        "- 提醒信息：21:00打篮球，额外信息：预报小雨\n" +
+                        "  → 🌧️ 给你设了晚上9点打球的提醒，预报说小雨，要不要改室内\n" +
+                        "- 提醒信息：15:00开会，额外信息：无\n" +
+                        "  → 给你设了下午3点开会的提醒，确认一下哦",
+                        defaultText, decisionText);
         try {
             String result = llmService.chatWithoutTools(prompt, null);
             if (result != null && !result.isBlank()) {
