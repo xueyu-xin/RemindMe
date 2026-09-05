@@ -3,9 +3,9 @@ server:
 
 spring:
   datasource:
-    url: jdbc:mysql://localhost:3306/reminder?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
+    url: jdbc:mysql://localhost:3307/reminder?useSSL=false&serverTimezone=Asia/Shanghai&characterEncoding=UTF-8&allowPublicKeyRetrieval=true
     username: root
-    password: 123456
+    password: password
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 10
@@ -47,6 +47,13 @@ spring:
           model: deepseek-v4-flash
           temperature: 0.3
           max-tokens: 4096
+          timeout: 30s
+          connect-timeout: 10s
+          read-timeout: 30s
+          # 关闭 DeepSeek V4 思考模式，避免生成推理链导致响应超时（引导语等纯文本场景）
+          extra-body:
+            thinking:
+              type: disabled
 
     # Chroma向量数据库配置
     vectorstore:

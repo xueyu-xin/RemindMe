@@ -185,9 +185,9 @@ public class ReminderService {
     // 触发阶段一确认流程；标题命中周期关键词时路由到周期提醒
     // userId 用户ID；title 标题；remindTime 提醒时间（yyyy-MM-dd HH:mm:ss）
     // endTime 结束时间（可选）；location 地点（可选）；note 备注（可选）；priority 优先级（LOW/NORMAL/HIGH，默认 NORMAL）
-    // advanceMinutes 提前提醒分钟数（可选）。当用户说'X分钟后'时传入X，说'等会/马上'时传入0，明确时间（如'明天下午3点'）时不传。
+    // advanceMinutes 提前提醒分钟数（可选）。相对时间（如'30分钟后'）传0准时触发，'等会/马上'与明确时间（如'明天下午3点'）不传。
     @AgentTool(name = "create_reminder", description = "创建提醒，用户要求设置提醒时调用。"
-            + "advanceMinutes: 提前提醒分钟数（可选）。当用户说'X分钟后'时传入X，说'等会/马上'时传入0，明确时间（如'明天下午3点'）时不传。")
+            + "advanceMinutes: 提前提醒分钟数（可选）。相对时间（如'30分钟后'）传0准时触发；'等会/马上'与明确时间（如'明天下午3点'）不传。")
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> createReminderForAgent(Long userId, String title, String remindTime,
             String endTime, String location, String note, String priority, Integer advanceMinutes,
@@ -232,9 +232,7 @@ public class ReminderService {
             if (relativeTime != null) {
                 parsedTime = relativeTime;
                 remindTime = parsedTime.format(TimeUtils.FORMATTER);
-                // 相对时间（"X分钟后"）应准时触发，advanceMinutes 强制为 0
-                // 原逻辑把倒计时分钟数当作提前量，导致 triggerTime = remindTime - advanceMinutes = now 立即触发
-                // 修复后 advanceMinutes=0，triggerTime = remindTime，到点才触发
+                // 相对时间准时触发，提前量置 0
                 long relDiff = java.time.Duration.between(LocalDateTime.now(), parsedTime).toMinutes();
                 finalAdvance = 0;
                 log.info("相对时间解析成功(准时触发): remindTime={}, parsedTime={}, 距触发{}分钟, advanceMinutes=0", remindTime, parsedTime, relDiff);
@@ -254,11 +252,17 @@ public class ReminderService {
                     finalAdvance = advanceMinutes;
                     log.info("使用LLM传入的advanceMinutes={}, parsedTime保持不变={}", advanceMinutes, parsedTime);
                 } else if (advanceMinutes != null && advanceMinutes == 0) {
-                    // LLM 传入 0 → "等会/马上"，走原有逻辑
-                    parsedTime = now.plusMinutes(defaultAdvance);
-                    remindTime = parsedTime.format(TimeUtils.FORMATTER);
-                    finalAdvance = defaultAdvance;
-                    log.info("LLM传入advanceMinutes=0(等会/马上), 使用默认提前量={}", defaultAdvance);
+                    if (diffMinutes > 0) {
+                        // 相对时间已折算为未来时间 → 倒计时准时触发，保留原时间
+                        finalAdvance = 0;
+                        log.info("相对时间准时触发: 距现在{}分钟, parsedTime={}", diffMinutes, parsedTime);
+                    } else {
+                        // "现在/马上"等模糊时间 → 按默认提前量安排临近时间
+                        parsedTime = now.plusMinutes(defaultAdvance);
+                        remindTime = parsedTime.format(TimeUtils.FORMATTER);
+                        finalAdvance = defaultAdvance;
+                        log.info("advanceMinutes=0(现在/马上), 使用默认提前量={}", defaultAdvance);
+                    }
                 } else if (diffMinutes == 0 || (diffMinutes > -1 && diffMinutes < 0)) {
                     // 未传 advanceMinutes，用户说"等会"/"等一下" → 使用默认提前量
                     parsedTime = now.plusMinutes(defaultAdvance);
@@ -783,13 +787,13 @@ public class ReminderService {
             days.add(7);
         }
         // 按出现顺序扫描"周X/星期X/礼拜X"，X 为 一二三四五六日/天 或 1-7
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?:周|星期|礼拜)([一二三四五六日天1-7])").matcher(title);
+        Matcher m = Pattern.compile("(?:周|星期|礼拜)([一二三四五六日天1-7])").matcher(title);
         while (m.find()) {
             Integer d = chineseDayOfWeek(m.group(1));
             if (d != null) days.add(d);
         }
         if (days.isEmpty()) return null;
-        return days.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
+        return days.stream().map(String::valueOf).collect(Collectors.joining(","));
     }
 
     // 单个中文/数字星期标记 → ISO DayOfWeek

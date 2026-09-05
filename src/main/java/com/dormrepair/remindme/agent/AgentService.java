@@ -1329,7 +1329,10 @@ public class AgentService {
                 sb.append(" 请根据这个结果回复一句自然友好的确认话术，50字内，适当使用emoji。");
                 resultText = sb.toString();
             } else {
-                resultText = "用户已取消提醒创建，请回复一句自然友好的取消话术，30字内，语气轻松。";
+                resultText = "用户已取消提醒创建。"
+                        + "你可以提及用户之前提到的活动（如逛花园），"
+                        + "但不要预设用户一定会去，不要说'安心去逛吧'这类鼓励或假设性的话。"
+                        + "保持中立、自然的取消确认语气，30字内。";
             }
 
             // ⭐ 在 resultText 构建完成之后，chatWithoutTools 调用之前

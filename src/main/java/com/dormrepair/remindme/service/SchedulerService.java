@@ -258,7 +258,7 @@ public class SchedulerService {
     }
 
     // 获取location的城市搜索候选（带坐标，传给LLM选）
-    private java.util.List<java.util.Map<String, Object>> getCandidatesForLocation(String location) {
+    private List<Map<String, Object>> getCandidatesForLocation(String location) {
         if (location == null || location.isBlank()) return java.util.Collections.emptyList();
         try {
             Map<String, Object> cityResult = locationService.searchCity(location);
@@ -267,15 +267,15 @@ public class SchedulerService {
             }
             // 唯一结果：包装成单元素列表
             if (!cityResult.containsKey("candidates")) {
-                java.util.Map<String, Object> single = new java.util.HashMap<>();
+                Map<String, Object> single = new HashMap<>();
                 single.put("displayName", cityResult.get("displayName"));
                 single.put("latitude", cityResult.get("latitude"));
                 single.put("longitude", cityResult.get("longitude"));
-                return java.util.List.of(single);
+                return List.of(single);
             }
             // 多候选：直接返回
             @SuppressWarnings("unchecked")
-            java.util.List<java.util.Map<String, Object>> candidates = (java.util.List<java.util.Map<String, Object>>) cityResult.get("candidates");
+            List<Map<String, Object>> candidates = (List<Map<String, Object>>) cityResult.get("candidates");
             return candidates;
         } catch (Exception e) {
             log.warn("获取候选失败: location={}, error={}", location, e.getMessage());

@@ -361,10 +361,10 @@ public class LLMService {
                     Object count = map.get("count");
                     Object memories = map.get("memories");
                     if (count != null) sb.append("共").append(count).append("条记忆；");
-                    if (memories instanceof java.util.List) {
-                        java.util.List<Map<String, Object>> list = (java.util.List<Map<String, Object>>) memories;
+                    if (memories instanceof List) {
+                        List<Map<String, Object>> list = (List<Map<String, Object>>) memories;
                         // 按分类聚合内容；分类由 AI 从枚举中选定（编码字段），缺失时归入"未分类"
-                        java.util.Map<String, java.util.List<String>> byCategory = new java.util.LinkedHashMap<>();
+                        Map<String, List<String>> byCategory = new java.util.LinkedHashMap<>();
                         for (Map<String, Object> m : list) {
                             String content = m.get("content") != null ? m.get("content").toString() : "";
                             // 备注是用户手写的补充说明，AI 回答时要一并参考
@@ -372,9 +372,9 @@ public class LLMService {
                             String line = remark.isEmpty() ? content : content + "（备注：" + remark + "）";
                             String category = m.get("category") != null ? m.get("category").toString() : "";
                             String categoryName = categoryDisplayName(category);
-                            byCategory.computeIfAbsent(categoryName, k -> new java.util.ArrayList<>()).add(line);
+                            byCategory.computeIfAbsent(categoryName, k -> new ArrayList<>()).add(line);
                         }
-                        for (java.util.Map.Entry<String, java.util.List<String>> e : byCategory.entrySet()) {
+                        for (Map.Entry<String, List<String>> e : byCategory.entrySet()) {
                             sb.append("\n  · ").append(e.getKey()).append("(").append(e.getValue().size()).append("条): ");
                             int max = Math.min(3, e.getValue().size());
                             for (int i = 0; i < max; i++) {
@@ -390,8 +390,8 @@ public class LLMService {
                     Object count = map.get("count");
                     Object knowledge = map.get("knowledge");
                     if (count != null) sb.append("共").append(count).append("条手册内容；");
-                    if (knowledge instanceof java.util.List) {
-                        java.util.List<Map<String, Object>> list = (java.util.List<Map<String, Object>>) knowledge;
+                    if (knowledge instanceof List) {
+                        List<Map<String, Object>> list = (List<Map<String, Object>>) knowledge;
                         for (int i = 0; i < Math.min(3, list.size()); i++) {
                             Map<String, Object> m = list.get(i);
                             Object content = m.get("content");
@@ -419,8 +419,8 @@ public class LLMService {
                         Object daily = forecast.get("daily");
                         Object days = forecast.get("days");
                         if (days != null) sb.append("未来").append(days).append("天预报：");
-                        if (daily instanceof java.util.List) {
-                            java.util.List<Map<String, Object>> list = (java.util.List<Map<String, Object>>) daily;
+                        if (daily instanceof List) {
+                            List<Map<String, Object>> list = (List<Map<String, Object>>) daily;
                             for (Map<String, Object> d : list) {
                                 sb.append("\n  · ").append(d.get("date")).append(": ")
                                         .append(d.get("weatherDay") != null ? d.get("weatherDay") : "")
@@ -447,8 +447,8 @@ public class LLMService {
                     Object hasAlerts = map.get("hasAlerts");
                     Object alerts = map.get("alerts");
                     sb.append(Boolean.TRUE.equals(hasAlerts) ? "有天气预警：" : "当前无天气预警。");
-                    if (alerts instanceof java.util.List) {
-                        java.util.List<Map<String, Object>> list = (java.util.List<Map<String, Object>>) alerts;
+                    if (alerts instanceof List) {
+                        List<Map<String, Object>> list = (List<Map<String, Object>>) alerts;
                         for (Map<String, Object> a : list) {
                             sb.append("\n  · ").append(a.get("severity") != null ? a.get("severity") : "")
                                     .append(" ").append(a.get("headline") != null ? a.get("headline") : "");
@@ -461,8 +461,8 @@ public class LLMService {
                     Object msg = map.get("message");
                     Object data = map.get("data");
                     if (msg != null) sb.append(msg);
-                    if (data instanceof java.util.List) {
-                        java.util.List<Map<String, Object>> list = (java.util.List<Map<String, Object>>) data;
+                    if (data instanceof List) {
+                        List<Map<String, Object>> list = (List<Map<String, Object>>) data;
                         sb.append(" 共").append(list.size()).append("条提醒：");
                         for (Map<String, Object> r : list) {
                             sb.append("\n  · 时间: ").append(r.get("reminderTime")).append("，内容: ").append(r.get("title"));
@@ -2332,10 +2332,10 @@ public class LLMService {
     // 返回 {type: CITY/GARBAGE, resolvedCity: 标准名, coord: "经度,纬度"}
     //   CITY = 选了候选，coord从候选里取
     //   GARBAGE = 选不了，不查
-    public java.util.Map<String, Object> resolveReminderLocation(
+    public Map<String, Object> resolveReminderLocation(
             String location,
-            java.util.List<java.util.Map<String, Object>> candidatesWithCoord) {
-        java.util.Map<String, Object> result = new java.util.HashMap<>();
+            List<Map<String, Object>> candidatesWithCoord) {
+        Map<String, Object> result = new HashMap<>();
         log.info("LLM处理提醒地点: location={}, candidates={}", location, candidatesWithCoord);
 
         try {
@@ -2376,7 +2376,7 @@ public class LLMService {
 
             // 解析JSON
             try {
-                java.util.Map<String, Object> parsed = objectMapper.readValue(content, java.util.Map.class);
+                Map<String, Object> parsed = objectMapper.readValue(content, Map.class);
                 String type = (String) parsed.get("type");
                 String candidateIndexStr = String.valueOf(parsed.get("candidateIndex"));
                 int candidateIndex = 0;
@@ -2390,7 +2390,7 @@ public class LLMService {
                 // CITY类型：从候选列表里取真实displayName+coord
                 if ("CITY".equals(type) && candidateIndex >= 1
                         && candidatesWithCoord != null && candidateIndex <= candidatesWithCoord.size()) {
-                    java.util.Map<String, Object> selected = candidatesWithCoord.get(candidateIndex - 1);
+                    Map<String, Object> selected = candidatesWithCoord.get(candidateIndex - 1);
                     String displayName = (String) selected.get("displayName");
                     Object lat = selected.get("latitude");
                     Object lon = selected.get("longitude");

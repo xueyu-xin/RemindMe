@@ -386,7 +386,7 @@ public class RecurringReminderService {
         reminder.setTimezone(template.getTimezone());
         reminder.setAdvanceMinutes(template.getAdvanceMinutes());
         reminder.setLocation(template.getLocation());
-        reminder.setPriority(com.dormrepair.remindme.enums.Priority.valueOf(template.getPriority()));
+        reminder.setPriority(Priority.valueOf(template.getPriority()));
         reminder.setStatus(ReminderStatus.PENDING);
         // 系统自动创建，跳过信息确认阶段，直接进入执行阶段，否则调度器扫描不到
         reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
@@ -607,7 +607,7 @@ public class RecurringReminderService {
             reminder.setTimezone(template.getTimezone());
             reminder.setAdvanceMinutes(template.getAdvanceMinutes());
             reminder.setLocation(template.getLocation());
-            reminder.setPriority(com.dormrepair.remindme.enums.Priority.valueOf(template.getPriority()));
+            reminder.setPriority(Priority.valueOf(template.getPriority()));
             reminder.setStatus(ReminderStatus.PENDING);
             // 系统自动创建，跳过信息确认阶段，直接进入执行阶段，否则调度器扫描不到
             reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
@@ -725,7 +725,7 @@ public class RecurringReminderService {
 
         if (title != null) reminder.setTitle(title);
         if (remindTime != null) {
-            reminder.setRemindTime(java.time.LocalTime.parse(remindTime, TimeUtils.TIME_SECONDS_FORMATTER));
+            reminder.setRemindTime(LocalTime.parse(remindTime, TimeUtils.TIME_SECONDS_FORMATTER));
         }
         if (startDate != null) reminder.setStartDate(startDate);
         if (endDate != null) reminder.setEndDate(endDate);

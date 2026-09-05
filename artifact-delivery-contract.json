@@ -1,0 +1,66 @@
+{
+  "outputs": [
+    {
+      "path": "d:\\RemindMe\\RemindMe\\演示视频逐字稿.md",
+      "type": "markdown",
+      "editable": true
+    }
+  ],
+  "source_files": [
+    "d:\\RemindMe\\RemindMe\\README.md",
+    "d:\\RemindMe\\RemindMe\\项目相关文档\\rag设计.md",
+    "d:\\RemindMe\\RemindMe\\docs\\用户使用手册.md"
+  ],
+  "acceptance_items": [
+    {
+      "quote": "演示视频（时长不超过10分钟，MP4格式，分辨率不低于720P）",
+      "expected": "HARD | 逐字稿总时长控制在10分钟以内，约9-10分钟",
+      "final_check": "PASS | 总时长9分45秒（585秒），不超过10分钟，含时间轴总览表"
+    },
+    {
+      "quote": "完整演示作品核心功能、操作流程、应用场景",
+      "expected": "HARD | 逐字稿覆盖核心功能、操作流程和应用场景",
+      "final_check": "PASS | 覆盖AI对话提醒（创建/批量/查询/修改/取消）、RAG记忆系统（存储/检索/管理）、课表智能导入（图片/Excel/PDF）、天气查询与联动、经期管理、日历视图与冲突检测共6大核心功能模块"
+    },
+    {
+      "quote": "重点展示RAG检索效果、工具调用过程及系统稳定性",
+      "expected": "HARD | RAG检索效果、工具调用过程、系统稳定性三部分内容占主要篇幅",
+      "final_check": "PASS | 工具调用过程（功能一）150秒 + RAG检索效果（功能二）150秒 + 系统稳定性（第7部分约15秒）= 315秒，占总时长585秒的53.8%，超过50%"
+    },
+    {
+      "quote": "项目介绍要少，尽可能把时间留给核心功能展示",
+      "expected": "HARD | 项目介绍部分不超过1分钟",
+      "final_check": "PASS | 开场&项目简介部分45秒，不超过1分钟"
+    },
+    {
+      "quote": "可搭配字幕说明",
+      "expected": "HARD | 逐字稿包含字幕/旁白内容，便于视频配音",
+      "final_check": "PASS | 每个演示段落都包含【旁白 / 字幕】区块，提供完整的配音文本"
+    },
+    {
+      "quote": "画面清晰、声音清楚",
+      "expected": "OPTIONAL | 逐字稿提供画面描述和拍摄建议",
+      "final_check": "PASS | 每个段落包含【画面】和【操作】描述，附录提供了录制前准备、录制要点和后期处理建议"
+    }
+  ],
+  "claims": [
+    {
+      "id": "c1",
+      "text": "逐字稿中所有英文术语均已添加中文拟声/音译标注，共17个术语、91处标注",
+      "evidence": "通过脚本统计：瑞迈德米9处、艾真特20处、瑞艾克特3处、诶-爱16处、瑞格7处、韦伯索克特4处、克罗马数据库4处、奥拉玛2处、麦-艾斯-奎尔2处、索克杰斯2处、易克赛尔6处、皮-迪-艾夫5处、诶-皮-爱2处、杰森2处、塔布3处、阿帕奇皮-欧-爱2处、皮-迪-艾夫盒子2处，合计91处"
+    },
+    {
+      "id": "c2",
+      "text": "逐字稿开头添加了英文术语中文读音对照表，含17个术语的拟声读法和含义说明",
+      "evidence": "文件第9-35行为读音对照表章节，列出RemindMe、Agent、ReAct、AI、RAG、WebSocket等17个英文术语的中文拟声读法和含义"
+    },
+    {
+      "id": "c3",
+      "text": "旁白中工具名（如create_reminder等代码名）已替换为中文描述，无需朗读英文代码",
+      "evidence": "旁白中原先的create_reminder、create_multi_reminders、query_reminders、update_reminder等工具名已替换为创建提醒工具、批量创建提醒工具、查询提醒工具、修改提醒工具等中文描述"
+    }
+  ],
+  "target_scope": {
+    "required": false
+  }
+}

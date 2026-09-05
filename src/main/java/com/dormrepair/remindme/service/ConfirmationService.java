@@ -678,7 +678,7 @@ public class ConfirmationService {
             } else {
                 return List.of();
             }
-            List<ConflictResponse.ConflictItem> result = new java.util.ArrayList<>();
+            List<ConflictResponse.ConflictItem> result = new ArrayList<>();
             for (Object c : conflicts) {
                 if (c instanceof ConflictResponse.ConflictItem) {
                     result.add((ConflictResponse.ConflictItem) c);
@@ -706,7 +706,7 @@ public class ConfirmationService {
 
     // 从 parsedData 中汇总所有冲突提醒 ID：含单个 conflictId 与 conflictList 列表，去重返回
     private List<Long> getAllConflictIds(Map<String, Object> parsedData) {
-        List<Long> ids = new java.util.ArrayList<>();
+        List<Long> ids = new ArrayList<>();
 
         if (parsedData.get("conflictId") != null) {
             ids.add(Long.valueOf(String.valueOf(parsedData.get("conflictId"))));
@@ -741,7 +741,7 @@ public class ConfirmationService {
 
     // 按 ID 批量取消冲突提醒（校验归属），返回被取消提醒的标题列表
     private List<String> deleteConflicts(Long userId, List<Long> conflictIds) {
-        List<String> deletedTitles = new java.util.ArrayList<>();
+        List<String> deletedTitles = new ArrayList<>();
         if (conflictIds == null || conflictIds.isEmpty()) {
             return deletedTitles;
         }
@@ -1853,7 +1853,7 @@ public class ConfirmationService {
     // 构建 Reminder 实体并填充通用字段（状态、执行状态、来源、时区），不执行 save
     private Reminder buildReminderEntity(Long userId, String title, LocalDateTime remindTime,
             LocalDateTime endTime, String priorityStr, String location, String note,
-            Integer advanceMinutes, com.dormrepair.remindme.enums.ConfirmStatus confirmStatus) {
+            Integer advanceMinutes, ConfirmStatus confirmStatus) {
         Reminder reminder = new Reminder();
         reminder.setUserId(userId);
         reminder.setTitle(title);
@@ -1885,7 +1885,7 @@ public class ConfirmationService {
     }
 
     // 根据解析数据创建并保存提醒，默认提前量取用户配置
-    private Reminder createReminder(Long userId, Map<String, Object> parsedData, com.dormrepair.remindme.enums.ConfirmStatus confirmStatus) {
+    private Reminder createReminder(Long userId, Map<String, Object> parsedData, ConfirmStatus confirmStatus) {
         int defaultAdvance = userService.getUserById(userId)
                 .map(u -> u.getDefaultAdvanceMinutes())
                 .orElse(10);
@@ -2342,7 +2342,7 @@ public class ConfirmationService {
                     // 补充超时时间和截止时间
                     if (session.getExpiresAt() != null) {
                         data.put("expiresAt", session.getExpiresAt().format(ISO_FORMATTER));
-                        data.put("timeout", (int) java.time.Duration.between(java.time.LocalDateTime.now(), session.getExpiresAt()).getSeconds());
+                        data.put("timeout", (int) java.time.Duration.between(LocalDateTime.now(), session.getExpiresAt()).getSeconds());
                     } else {
                         data.put("expiresAt", null);
                         data.put("timeout", TIMEOUT_SECONDS);
