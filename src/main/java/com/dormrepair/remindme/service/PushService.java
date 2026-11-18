@@ -4,6 +4,7 @@ import com.dormrepair.remindme.entity.PushLog;
 import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.enums.PushChannel;
 import com.dormrepair.remindme.repository.PushLogRepository;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -28,7 +29,7 @@ public class PushService {
     }
 
     // 推送一条提醒：组装通知体 -> 投递 -> 落库记录推送日志
-    @Transactional
+    @Transactional(rollbackFor = Exception.class)
     public void pushReminder(Reminder reminder) {
         // 组装通知负载，type 字段标识这是一条提醒
         Map<String, Object> notification = new HashMap<>();
@@ -45,7 +46,7 @@ public class PushService {
         PushLog pushLog = new PushLog();
         pushLog.setReminderId(reminder.getId());
         pushLog.setUserId(reminder.getUserId());
-        pushLog.setPushedAt(LocalDateTime.now());
+        pushLog.setPushedAt(TimeUtils.now());
         pushLog.setUserRead(false);
         pushLog.setPushChannel(PushChannel.WEBSOCKET);
 

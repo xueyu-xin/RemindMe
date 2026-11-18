@@ -35,6 +35,11 @@ public class ConfirmationCardResponse {
     private Integer timeout;
     // 卡片过期的绝对时间戳
     private String expiresAt;
+    // 是否已直接执行（提醒已创建，无需用户确认）
+    @Builder.Default
+    private Boolean executed = false;
+    // 已创建的提醒 ID（executed=true 时返回）
+    private Long reminderId;
 
     // 卡片核心数据，通过 Include.NON_NULL 过滤空值字段，避免冗余
     @Data
@@ -102,8 +107,6 @@ public class ConfirmationCardResponse {
         private Integer totalCount;
         // 导入任务 id：课表场景下确认/取消操作都通过此 id 调用导入接口
         private String importId;
-        // 批量导入完成后成功创建的数量
-        private Integer successCount;
         // 批量导入完成后失败/跳过的数量
         private Integer failedCount;
 
@@ -128,6 +131,9 @@ public class ConfirmationCardResponse {
 
         // 节次时间表：课表识别完成后给用户自定义每节课的起止时间
         private List<Map<String, Object>> timeSections;
+        // 课表完整课程列表：含 dayOfWeek/sectionIndices/weeks/oddWeek/evenWeek/teacher，
+        // 供前端渲染星期×节次网格视图（items 只有 title/星期/地点，不足以支撑网格）
+        private List<Map<String, Object>> courses;
         // 学期开始日期（yyyy-MM-dd），用于推算第几周
         private String semesterStartDate;
         // 学期总周数，用户可调整

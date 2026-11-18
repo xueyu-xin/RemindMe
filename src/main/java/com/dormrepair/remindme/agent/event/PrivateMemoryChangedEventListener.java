@@ -1,6 +1,7 @@
 package com.dormrepair.remindme.agent.event;
 
 import com.dormrepair.remindme.service.WebSocketPushService;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.event.EventListener;
@@ -31,7 +32,7 @@ public class PrivateMemoryChangedEventListener {
             payload.put("type", "PRIVATE_MEMORY_CHANGED");
             payload.put("action", event.getAction());
             payload.put("memoryId", event.getMemoryId());
-            payload.put("timestamp", System.currentTimeMillis());
+            payload.put("timestamp", TimeUtils.toTimestamp(TimeUtils.now()));
 
             boolean ok = webSocketPushService.pushToUser(
                     event.getUserId(),
@@ -53,3 +54,4 @@ public class PrivateMemoryChangedEventListener {
         }
     }
 }
+

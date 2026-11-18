@@ -8,13 +8,14 @@ import com.dormrepair.remindme.agent.event.ReminderCancelledEvent;
 import com.dormrepair.remindme.agent.event.ReminderConfirmedEvent;
 import com.dormrepair.remindme.agent.event.ReminderCreatedEvent;
 import com.dormrepair.remindme.dto.response.KnowledgeResult;
-import com.dormrepair.remindme.dto.response.WeatherHourlyResponse;
-import com.dormrepair.remindme.dto.response.WeatherNowResponse;
+import com.dormrepair.remindme.entity.ConfirmationSession;
+import com.dormrepair.remindme.repository.ConfirmationRepository;
 import com.dormrepair.remindme.service.LLMService;
 import com.dormrepair.remindme.service.LocationService;
 import com.dormrepair.remindme.service.RagService;
 import com.dormrepair.remindme.service.UserService;
 import com.dormrepair.remindme.service.WeatherService;
+import com.dormrepair.remindme.utils.TimeUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +30,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 // Agent 核心调度器。实现 ReAct（思考-行动-观察）循环：解析用户输入→调用 LLM→决定是否执行工具→收集结果→再次迭代，
 // 直至生成最终回复；集成空响应降级、演戏格式拦截、重复调用去重+卡死兜底、确认卡片生成、事件监听等能力；
@@ -47,6 +49,7 @@ public class AgentService {
     private final WeatherService weatherService;
     private final RagService ragService;
     private final LocationService locationService;
+    private final ConfirmationRepository confirmationRepository;
 
     // 启动开关：可通过配置 agent.enabled=false 临时关闭 Agent
     @Value("${agent.enabled:false}")
@@ -62,7 +65,7 @@ public class AgentService {
     // 事件发布失败静默吞异常，不影响正常业务返回（保障回复速度优先）
     private AgentResponse finishWith(String flowId, long startTime, int stepCount, Long userId, AgentResponse resp) {
         try {
-            long dur = System.currentTimeMillis() - startTime;
+            long dur = TimeUtils.toTimestamp(TimeUtils.now()) - startTime;
             eventPublisher.publishAgentStatusTerminal(userId, AgentStatus.DONE, flowId, stepCount, dur, stepCount);
         } catch (Exception ignore) {
             log.warn("finishWith发布DONE事件失败(忽略): flowId={}, error={}", flowId, ignore.getMessage());
@@ -73,7 +76,7 @@ public class AgentService {
     // 发布 ERROR 终态事件并返回错误响应（异常出口调用）
     private AgentResponse finishWithError(String flowId, long startTime, int stepCount, Long userId, String errorMsg) {
         try {
-            long dur = System.currentTimeMillis() - startTime;
+            long dur = TimeUtils.toTimestamp(TimeUtils.now()) - startTime;
             eventPublisher.publishAgentStatusTerminal(userId, AgentStatus.ERROR, flowId, stepCount, dur, errorMsg);
         } catch (Exception ignore) {
             log.warn("finishWithError发布ERROR事件失败(忽略): flowId={}, error={}", flowId, ignore.getMessage());
@@ -96,7 +99,7 @@ public class AgentService {
         // ---------- 状态流上下文初始化 ----------
         // flowId：同一次对话共享，前端用来把所有步骤聚合到一个状态流气泡
         final String flowId = UUID.randomUUID().toString();
-        final long startTime = System.currentTimeMillis();
+        final long startTime = TimeUtils.toTimestamp(TimeUtils.now());
         // step 计数器（数组包装以便 lambda/内部类访问）
         final int[] stepHolder = { 0 };
         // 每次调用 +1 返回新序号
@@ -329,7 +332,7 @@ public class AgentService {
                     }
 
                     // 含 sessionId → 返回确认卡片响应（create_reminder / create_recurring_reminder 场景）
-                    AgentResponse confirmationResponse = buildConfirmationResponse(toolResult, userId);
+                    AgentResponse confirmationResponse = buildExecutionResponse(toolResult, userId);
                     if (confirmationResponse != null) {
                         log.info("工具结果包含sessionId，构建CONFIRMATION响应: toolName={}", llmToolCall.getToolName());
                         // 把 LLM 引导语落盘，避免"卡片下了没文字"造成会话断层
@@ -346,7 +349,7 @@ public class AgentService {
                         log.info("工具结果标记任务完成（shouldStop=true），结束循环: toolName={}", llmToolCall.getToolName());
                         // ---------- 状态流：生成最终回复 ----------
                         eventPublisher.publishAgentStatus(userId, AgentStatus.GENERATING_REPLY, flowId, nextStep.get());
-                        AgentResponse confirmResp = buildConfirmationResponse(toolResult, userId);
+                        AgentResponse confirmResp = buildExecutionResponse(toolResult, userId);
                         if (confirmResp != null) {
                             log.info("shouldStop分支二次检测到sessionId，返回CONFIRMATION响应: toolName={}", llmToolCall.getToolName());
                             if (confirmResp.getContent() != null && !confirmResp.getContent().isBlank()) {
@@ -362,6 +365,31 @@ public class AgentService {
                                     Map.class);
                             String sessionId = (String) resultMap.get("sessionId");
                             if (sessionId != null) {
+                                // 同样做 session 状态防御性检查（DB 异常时也要拦截）
+                                boolean stopIntercepted = false;
+                                String stopStatus = "UNKNOWN";
+                                try {
+                                    ConfirmationSession session = confirmationRepository
+                                            .findBySessionIdAndUserId(sessionId, userId).orElse(null);
+                                    if (session == null) {
+                                        stopStatus = "NOT_FOUND";
+                                        stopIntercepted = true;
+                                    } else if (session.getStatus() != ConfirmationSession.SessionStatus.PENDING) {
+                                        stopStatus = session.getStatus().name();
+                                        stopIntercepted = true;
+                                    } else {
+                                        stopStatus = "PENDING";
+                                    }
+                                } catch (Exception se) {
+                                    stopStatus = "DB_ERROR:" + se.getMessage();
+                                    stopIntercepted = true;
+                                    log.warn("shouldStop分支: session 状态检查异常，强制拦截 CONFIRMATION: {}", se.getMessage());
+                                }
+                                if (stopIntercepted) {
+                                    log.info("shouldStop分支: session 已结束/异常（status={}），拦截手工 CONFIRMATION", stopStatus);
+                                    return finishWith(flowId, startTime, stepHolder[0], userId,
+                                            AgentResponse.text(""));
+                                }
                                 log.warn("shouldStop分支手工构建CONFIRMATION响应: sessionId={}", sessionId);
                                 String title = resultMap.get("title") != null ? String.valueOf(resultMap.get("title")) : "提醒";
                                 String remindTime = resultMap.get("remindTime") != null ? String.valueOf(resultMap.get("remindTime")) : null;
@@ -638,7 +666,7 @@ public class AgentService {
         }
 
         if (toolResult != null && userId != null) {
-            AgentResponse confirmationResponse = buildConfirmationResponse(toolResult, userId);
+            AgentResponse confirmationResponse = buildExecutionResponse(toolResult, userId);
             if (confirmationResponse != null) {
                 log.info("工具结果包含sessionId，返回CONFIRMATION类型响应");
                 if (confirmationResponse.getContent() != null && !confirmationResponse.getContent().isBlank()) {
@@ -778,7 +806,7 @@ public class AgentService {
     // 从工具执行结果构造 CONFIRMATION 响应：
     // - 解析 sessionId/title/remindTime/location/isRecurring；
     // - 额外调用 LLM 生成一句"提醒已为你解析，请确认"引导语，保证卡片+文字一起下不突兀
-    private AgentResponse buildConfirmationResponse(Object toolResult, Long userId) {
+    private AgentResponse buildExecutionResponse(Object toolResult, Long userId) {
         if (toolResult == null) {
             return null;
         }
@@ -792,18 +820,81 @@ public class AgentService {
                 Map<String, Object> castedMap = (Map<String, Object>) toolResult;
                 resultMap = castedMap;
             } else {
-                log.debug("buildConfirmationResponse: toolResult 类型 {} 不是 String/Map，跳过",
+                log.debug("buildExecutionResponse: toolResult 类型 {} 不是 String/Map，跳过",
                         toolResult != null ? toolResult.getClass().getSimpleName() : "null");
                 return null;
             }
 
             boolean success = Boolean.TRUE.equals(resultMap.get("success"));
             boolean hasSessionId = resultMap.containsKey("sessionId") && resultMap.get("sessionId") != null;
-            log.debug("buildConfirmationResponse: success={}, hasSessionId={}, keys={}",
-                    success, hasSessionId, resultMap.keySet());
+            boolean executed = Boolean.TRUE.equals(resultMap.get("executed"));
+            log.debug("buildExecutionResponse: success={}, hasSessionId={}, executed={}, keys={}",
+                    success, hasSessionId, executed, resultMap.keySet());
+
+            // 新流程：工具直接执行完成（如提醒已创建），返回执行结果卡片，无需用户确认
+            if (success && executed) {
+                Long reminderId = resultMap.get("reminderId") != null
+                        ? Long.valueOf(resultMap.get("reminderId").toString()) : null;
+                // 周期提醒没有 reminderId，用 recurringId 作为结果 ID
+                Long recurringId = resultMap.get("recurringId") != null
+                        ? Long.valueOf(resultMap.get("recurringId").toString()) : null;
+                Long resultId = reminderId != null ? reminderId : recurringId;
+
+                // 批量创建场景：工具返回 reminderIds，透传给前端支持批量撤销
+                List<Long> reminderIds = null;
+                Object reminderIdsObj = resultMap.get("reminderIds");
+                if (reminderIdsObj instanceof List) {
+                    reminderIds = ((List<?>) reminderIdsObj).stream()
+                            .filter(o -> o instanceof Number)
+                            .map(o -> ((Number) o).longValue())
+                            .collect(Collectors.toList());
+                }
+
+                String execTitle = (String) resultMap.get("title");
+                String execTime = (String) resultMap.get("remindTime");
+                String execLocation = (String) resultMap.get("location");
+
+                Map<String, Object> execData = new HashMap<>();
+                execData.put("title", execTitle);
+                execData.put("remindTime", execTime);
+                execData.put("location", execLocation);
+                execData.put("executed", true);
+                if (resultMap.containsKey("endTime")) {
+                    execData.put("endTime", resultMap.get("endTime"));
+                }
+                if (resultMap.containsKey("priority")) {
+                    execData.put("priority", resultMap.get("priority"));
+                }
+                if (recurringId != null) {
+                    execData.put("recurringId", recurringId);
+                    execData.put("isRecurring", true);
+                }
+                if (reminderIds != null && !reminderIds.isEmpty()) {
+                    execData.put("reminderIds", reminderIds);
+                }
+                if (resultMap.containsKey("createdCount")) {
+                    execData.put("createdCount", resultMap.get("createdCount"));
+                }
+                if (resultMap.containsKey("skippedCount")) {
+                    execData.put("skippedCount", resultMap.get("skippedCount"));
+                }
+                if (resultMap.containsKey("overwrittenCount")) {
+                    execData.put("overwrittenCount", resultMap.get("overwrittenCount"));
+                }
+
+                // 文案与实际情况一致：直接使用工具返回的 message，不再调 LLM 生成
+                // 各 generate* 方法已在服务层生成含上下文/结果/下一步引导的完整文案
+                String execLead = (String) resultMap.get("message");
+                if (execLead == null || execLead.isBlank()) {
+                    execLead = "提醒已创建 ✅";
+                }
+
+                log.info("buildExecutionResponse: 检测到执行结果 resultId={}, title={}", resultId, execTitle);
+                return AgentResponse.executionResult(resultId, execLead, execData);
+            }
 
             if (!success || !hasSessionId) {
-                log.debug("buildConfirmationResponse: 条件不满足（success={}，hasSessionId={}），返回null", success, hasSessionId);
+                log.debug("buildExecutionResponse: 条件不满足（success={}，hasSessionId={}），返回null", success, hasSessionId);
                 return null;
             }
 
@@ -813,7 +904,13 @@ public class AgentService {
             String location = (String) resultMap.get("location");
             boolean isRecurring = Boolean.TRUE.equals(resultMap.get("isRecurring"));
             String conflictMessage = (String) resultMap.get("conflictMessage");
-            log.info("buildConfirmationResponse: 检测到确认会话 sessionId={}, title={}, isRecurring={}", sessionId, title, isRecurring);
+            String startDate = (String) resultMap.get("startDate");
+            String endDate = (String) resultMap.get("endDate");
+            String repeatType = (String) resultMap.get("repeatType");
+            Object totalDaysObj = resultMap.get("totalDays");
+            final Integer totalDays = (totalDaysObj instanceof Number)
+                    ? ((Number) totalDaysObj).intValue() : null;
+            log.info("buildExecutionResponse: 检测到确认会话 sessionId={}, title={}, isRecurring={}", sessionId, title, isRecurring);
 
             // 并行执行：卡片数据构建 + 引导语生成
             // 将原本串行的 confirmationData 构建和 buildConfirmationLead 调用并行化，
@@ -839,17 +936,39 @@ public class AgentService {
                     });
 
             CompletableFuture<String> leadFuture =
-                    CompletableFuture.supplyAsync(() ->
-                            buildConfirmationLead(userId, title, remindTime, location, isRecurring, conflictMessage)
-                    );
+                    CompletableFuture.supplyAsync(() -> {
+                        // 异步任务内部也做一次 session 取消感知：如果主线程等待期间用户已取消，
+                        // 异步任务可以立即跳过 LLM 调用，节省 token + 防止孤儿结果晚到
+                        try {
+                            ConfirmationSession sess = confirmationRepository
+                                    .findBySessionIdAndUserId(sessionId, userId).orElse(null);
+                            if (sess == null || sess.getStatus() != ConfirmationSession.SessionStatus.PENDING) {
+                                log.info("leadFuture: session 已结束（status={}），跳过引导语 LLM 调用",
+                                        sess != null ? sess.getStatus().name() : "NOT_FOUND");
+                                return "";
+                            }
+                        } catch (Exception ignored) {
+                            // DB 异常不拦截，主线程会做最终检查
+                        }
+                        return buildConfirmationLead(userId, title, remindTime, location, isRecurring, conflictMessage,
+                                startDate, endDate, repeatType, totalDays);
+                    });
 
             // 等待两者都完成（15秒超时保护，防止 LLM 卡死导致永久阻塞）
+            boolean timedOut = false;
             try {
                 CompletableFuture.allOf(dataFuture, leadFuture)
                         .orTimeout(15, TimeUnit.SECONDS)
                         .join();
             } catch (Exception timeoutEx) {
+                timedOut = true;
                 log.warn("引导语生成超时（15秒），使用降级文案: {}", timeoutEx.getMessage());
+            }
+
+            // 超时后主动中断孤儿任务，防止 ForkJoinPool 线程继续跑 LLM 浪费 token
+            if (timedOut) {
+                leadFuture.cancel(true);
+                dataFuture.cancel(true);
             }
 
             // 获取结果（支持超时后数据未完成的情况）
@@ -873,7 +992,42 @@ public class AgentService {
                 llmLead = null;
             }
             if (llmLead == null || llmLead.isBlank()) {
-                llmLead = buildDefaultLead(title, remindTime, location, isRecurring);
+                llmLead = buildDefaultLead(title, remindTime, location, isRecurring,
+                        startDate, endDate, repeatType, totalDays);
+            }
+
+            // 防御性检查：引导语生成的 15 秒等待期间，session 可能已被用户取消/确认/过期
+            // （典型场景：用户在卡片推出来后、引导语还没生成完时就点了取消）
+            // 如果 session 不再是 PENDING，直接返回普通文本而不是 CONFIRMATION，避免前端重复展示
+            // ⚠️ 关键：DB 查询异常时也要拦截（超时窗口内 DB 可能短暂不可用），宁可漏推也不重复推卡片
+            boolean sessionIntercepted = false;
+            String sessionStatus = "UNKNOWN";
+            try {
+                ConfirmationSession session = confirmationRepository
+                        .findBySessionIdAndUserId(sessionId, userId).orElse(null);
+                if (session == null) {
+                    sessionStatus = "NOT_FOUND";
+                    sessionIntercepted = true;
+                    log.info("buildExecutionResponse: session 不存在（可能已清理），拦截 CONFIRMATION");
+                } else if (session.getStatus() != ConfirmationSession.SessionStatus.PENDING) {
+                    sessionStatus = session.getStatus().name();
+                    sessionIntercepted = true;
+                    log.info("buildExecutionResponse: session 已结束（status={}, timedOut={}），拦截 CONFIRMATION",
+                            sessionStatus, timedOut);
+                } else {
+                    sessionStatus = "PENDING";
+                    log.debug("buildExecutionResponse: session 状态检查通过（status=PENDING, timedOut={}）", timedOut);
+                }
+            } catch (Exception e) {
+                // DB 查询异常也拦截——超时窗口内任何不确定性都意味着不能再推卡片
+                sessionStatus = "DB_ERROR:" + e.getMessage();
+                sessionIntercepted = true;
+                log.warn("buildExecutionResponse: session 状态检查异常，强制拦截 CONFIRMATION: {}", e.getMessage());
+            }
+
+            if (sessionIntercepted) {
+                log.info("buildExecutionResponse: 拦截命中（status={}），返回空文本，不推卡片", sessionStatus);
+                return AgentResponse.text("");
             }
 
             return AgentResponse.confirmation(sessionId, llmLead, confirmationData);
@@ -887,38 +1041,19 @@ public class AgentService {
     // 引入天气/记忆决策因素，仅当存在影响决策的因素时才调用 LLM 融合；否则返回默认文案
     private String buildConfirmationLead(Long userId, String title, String remindTime,
                                          String location, boolean isRecurring,
-                                         String conflictMessage) {
-        // 1. 默认文案
-        String defaultText = "给你设了" + title + (remindTime != null ? "，" + remindTime : "") + "的提醒，记得确认一下哦～";
+                                         String conflictMessage,
+                                         String startDate, String endDate,
+                                         String repeatType, Integer totalDays) {
+        // 1. 默认文案（⚠️ 这里是"待确认"场景，不能用"已创建/已设了"的完成语气）
+        String defaultText;
+        if (isRecurring) {
+            defaultText = buildRecurringDefaultText(title, remindTime, startDate, endDate, repeatType, totalDays);
+        } else {
+            defaultText = "有一个「" + title + "」的提醒" + (remindTime != null ? "（" + remindTime + "）" : "") + "需要确认一下";
+        }
 
         // 2. 收集决策因素
         List<String> decisionFactors = new ArrayList<>();
-
-        // 2.1 天气（使用逐小时预报，匹配提醒时间的小时条目）
-        try {
-            String city = getUserCity(userId);
-            if (city != null) {
-                String coord = getCityCoordinate(city);
-                if (coord != null) {
-                    WeatherHourlyResponse hourly = weatherService.getWeatherHourly(coord);
-                    if (hourly != null && hourly.getHourly() != null && !hourly.getHourly().isEmpty()) {
-                        WeatherHourlyResponse.HourlyForecast matched =
-                                findHourlyByRemindTime(hourly.getHourly(), remindTime);
-                        if (matched != null) {
-                            String weatherText = matched.getText();
-                            String temp = matched.getTemp();
-                            String weatherDecision = checkWeatherDecision(weatherText, temp, title);
-                            if (weatherDecision != null) {
-                                decisionFactors.add(weatherDecision);
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.warn("引导语查天气失败: {}", e.getMessage());
-        }
-
         // 2.2 记忆
         try {
             List<KnowledgeResult> memories = ragService.retrievePrivateKnowledge(userId, title, 5);
@@ -948,99 +1083,6 @@ public class AgentService {
         // 4. 无决策因素，返回默认文案
         return defaultText;
     }
-
-    /**
-     * 从逐小时预报列表中找到与提醒时间最接近的条目
-     * 优先找"同一天 同一小时"精确匹配；
-     * 找不到则同一天内找"小时差最小"的条目；
-     * 仍找不到则取列表第一条作为兜底。
-     *
-     * @param hourly      和风逐小时预报列表，fxTime 格式如 "2026-08-31T12:00+08:00"
-     * @param remindTime  提醒时间，格式 "yyyy-MM-dd HH:mm:ss"（如 "2026-08-31 12:30:00"）
-     * @return 匹配到的条目；列表为空时返回 null
-     */
-    private WeatherHourlyResponse.HourlyForecast findHourlyByRemindTime(
-            List<WeatherHourlyResponse.HourlyForecast> hourly, String remindTime) {
-        if (hourly == null || hourly.isEmpty()) {
-            return null;
-        }
-        // remindTime 无法解析时，直接返回第一条（降级）
-        if (remindTime == null || remindTime.length() < 16) {
-            return hourly.get(0);
-        }
-
-        // 从 remindTime 提取日期和小时
-        //   "2026-08-31 12:30:00" -> date="2026-08-31", hour="12"
-        String rtDate = remindTime.substring(0, 10);
-        int rtHour;
-        try {
-            rtHour = Integer.parseInt(remindTime.substring(11, 13));
-        } catch (NumberFormatException e) {
-            return hourly.get(0);
-        }
-
-        WeatherHourlyResponse.HourlyForecast best = null;
-        int bestDiff = Integer.MAX_VALUE;
-
-        for (WeatherHourlyResponse.HourlyForecast item : hourly) {
-            String fxTime = item.getFxTime();
-            if (fxTime == null || fxTime.length() < 14) {
-                continue;
-            }
-            // 从 fxTime 提取日期和小时
-            //   "2026-08-31T12:00+08:00" -> date="2026-08-31", hour="12"
-            String fxDate = fxTime.substring(0, 10);
-            int fxHour;
-            try {
-                fxHour = Integer.parseInt(fxTime.substring(11, 13));
-            } catch (NumberFormatException e) {
-                continue;
-            }
-
-            // 精确匹配：同一天 + 同一小时
-            if (fxDate.equals(rtDate) && fxHour == rtHour) {
-                return item;
-            }
-
-            // 同一天内：记录小时差最小的
-            if (fxDate.equals(rtDate)) {
-                int diff = Math.abs(fxHour - rtHour);
-                if (diff < bestDiff) {
-                    bestDiff = diff;
-                    best = item;
-                }
-            }
-        }
-
-        // 返回小时差最接近的（同一天），否则用第一条降级
-        return best != null ? best : hourly.get(0);
-    }
-
-    /**
-     * 检查天气是否影响决策
-     * 下雨/下雪 → 影响决策；高温≥35°C → 影响决策；低温≤5°C → 影响决策
-     */
-    private String checkWeatherDecision(String weatherText, String temp, String title) {
-        if (weatherText == null) {
-            return null;
-        }
-        if (weatherText.contains("雨") || weatherText.contains("雪")) {
-            return "🌧️ " + weatherText + "，" + title + "建议改室内哦～";
-        }
-        try {
-            int tempInt = Integer.parseInt(temp);
-            if (tempInt >= 35) {
-                return "☀️ 高温 " + tempInt + "°C，" + title + "建议改到傍晚哦～";
-            }
-            if (tempInt <= 5) {
-                return "❄️ 低温 " + tempInt + "°C，注意保暖哦～";
-            }
-        } catch (NumberFormatException e) {
-            // 忽略
-        }
-        return null;
-    }
-
     /**
      * 检查记忆是否影响决策
      * 包含"不想/讨厌/不要/不喜欢/害怕/担心/怕"关键词 → 影响决策
@@ -1133,21 +1175,24 @@ public class AgentService {
      */
     private String generateLeadWithDecision(String defaultText, String decisionText) {
         String prompt = String.format(
-                        "请用朋友聊天的语气，把下面两句话融合成一句自然的话术：\n" +
-                        "- 提醒信息：%s\n" +
-                        "- 额外信息：%s\n\n" +
-                        "要求：\n" +
-                        "1. 语气像朋友在微信上聊天，可以用emoji\n" +
-                        "2. 引导用户做决定，用「要不要」「还是说」等询问句式\n" +
-                        "3. 开头用「给你设了」自然引出\n" +
-                        "4. 不用问号结尾，但要表达出引导用户确认的意思\n" +
-                        "5. 不超过35字\n" +
-                        "6. 只返回话术本身，不要其他内容\n\n" +
-                        "示例：\n" +
-                        "- 提醒信息：21:00打篮球，额外信息：预报小雨\n" +
-                        "  → 🌧️ 给你设了晚上9点打球的提醒，预报说小雨，要不要改室内\n" +
-                        "- 提醒信息：15:00开会，额外信息：无\n" +
-                        "  → 给你设了下午3点开会的提醒，确认一下哦",
+                        "你是提醒助手，下面有一条「待用户确认」的提醒信息，以及需要用户做决策的额外因素。" +
+                        "请用朋友聊天的语气，把它们融合成一句自然的引导语。\n\n" +
+                        "- 待确认的提醒信息：%s\n" +
+                        "- 决策因素：%s\n\n" +
+                        "铁律（必须严格遵守）：\n" +
+                        "1. 这条提醒还没创建，正在等待用户确认。绝对禁止使用「已创建/已设了/已成功/已经有了」这类完成语气的措辞\n" +
+                        "2. 开头用中性词引出，如「有个提醒」「需要确认一下」「有件事想跟你确认」等\n" +
+                        "3. 如果决策因素里有冲突，必须先说冲突事实（如「你晚上7点已有'吃饭'提醒，时间冲突」），再给选择方向（如「要覆盖/改时间/取消」），不要先提提醒信息\n" +
+                        "4. 如果决策因素里有用户记忆（如讨厌/不想/不要），可以提到但不要喧宾夺主，保持简洁\n" +
+                        "5. 语气像微信聊天，可以用emoji，用「要不要」「还是说」引导选择\n" +
+                        "6. 不超过40字，只返回引导语本身，不要其他内容\n\n" +
+                        "正确示例：\n" +
+                        "- 提醒：有个「打篮球」的提醒（21:00）需要确认，决策：预报小雨\n" +
+                        "  -> 🏀 21:00 打篮球预报说有小雨，要不要改室内场地？\n" +
+                        "- 提醒：有个「买水果」的提醒（19:00）需要确认，决策：19:00 已有「吃饭」提醒\n" +
+                        "  -> ⚠️ 你19:00已有「吃饭」提醒，买水果要覆盖还是改时间？\n" +
+                        "- 提醒：有个「开会」的提醒（15:00）需要确认，决策：无\n" +
+                        "  -> 📋 下午3点开会，确认一下哦~",
                         defaultText, decisionText);
         try {
             String result = llmService.chatWithoutTools(prompt, null);
@@ -1162,16 +1207,54 @@ public class AgentService {
     }
 
     // 构建兜底引导语模板，确保 LLM 完全失败时仍有有意义的文案
-    private String buildDefaultLead(String title, String remindTime, String location, boolean isRecurring) {
+    // ⚠️ 这里是 CONFIRMATION 响应的降级，提醒尚未创建，绝对不能用"已创建/已设了"的完成语气
+    private String buildDefaultLead(String title, String remindTime, String location, boolean isRecurring,
+                                    String startDate, String endDate, String repeatType, Integer totalDays) {
         String titlePart = title != null ? "「" + title + "」" : "提醒";
         String timePart = remindTime != null ? remindTime : "";
         String locPart = (location != null && !location.isBlank()) ? "，地点" + location : "";
 
         if (isRecurring) {
-            return "📅 已为你设置周期提醒" + titlePart + timePart + locPart + "，请在下方卡片确认～";
+            return "📅 " + buildRecurringDefaultText(title, remindTime, startDate, endDate, repeatType, totalDays)
+                    + locPart + "，请确认";
         } else {
-            return "✨ 好的，已为你创建提醒" + titlePart + "，" + timePart + locPart + "会提醒你哦～";
+            return "📋 " + titlePart + timePart + locPart + "——请确认一下是否创建";
         }
+    }
+
+    // 构建周期提醒的默认引导语文案，体现重复频率、日期范围与总天数
+    private String buildRecurringDefaultText(String title, String remindTime, String startDate,
+                                             String endDate, String repeatType, Integer totalDays) {
+        String repeatLabel = switch (repeatType != null ? repeatType.toUpperCase() : "DAILY") {
+            case "WEEKLY" -> "每周";
+            case "MONTHLY" -> "每月";
+            default -> "每天";
+        };
+        // 提取时间部分（remindTime 可能是 "2026-10-05 19:00:00" 或 "19:00:00"）
+        String timeOnly = "";
+        if (remindTime != null) {
+            try {
+                String t = remindTime.contains(" ") ? remindTime.substring(remindTime.indexOf(" ") + 1) : remindTime;
+                timeOnly = t.length() >= 5 ? t.substring(0, 5) : t;
+            } catch (Exception e) {
+                timeOnly = remindTime;
+            }
+        }
+        String dateRange = "";
+        try {
+            if (startDate != null && endDate != null) {
+                java.time.LocalDate sd = java.time.LocalDate.parse(startDate);
+                java.time.LocalDate ed = java.time.LocalDate.parse(endDate);
+                dateRange = String.format("，从%d月%d日到%d月%d日",
+                        sd.getMonthValue(), sd.getDayOfMonth(),
+                        ed.getMonthValue(), ed.getDayOfMonth());
+            }
+        } catch (Exception e) {
+            // 解析失败则省略日期范围
+        }
+        String daysPart = totalDays != null ? "，共" + totalDays + "天" : "";
+        return "给你设了" + repeatLabel + timeOnly + (title != null ? title : "")
+                + "的提醒" + dateRange + daysPart + "，记得确认一下哦～";
     }
 
     // 判断工具返回是否标记任务完成（用于 create_recurring_reminder 等长链路场景）
@@ -1330,9 +1413,9 @@ public class AgentService {
                 resultText = sb.toString();
             } else {
                 resultText = "用户已取消提醒创建。"
-                        + "你可以提及用户之前提到的活动（如逛花园），"
-                        + "但不要预设用户一定会去，不要说'安心去逛吧'这类鼓励或假设性的话。"
-                        + "保持中立、自然的取消确认语气，30字内。";
+                        + "请用简洁自然的语气回复，不要提及用户未明确说过的具体活动，"
+                        + "不要凭空编造用户的历史对话内容。"
+                        + "30字内，语气友好。";
             }
 
             // ⭐ 在 resultText 构建完成之后，chatWithoutTools 调用之前
@@ -1400,3 +1483,4 @@ public class AgentService {
         return agentEnabled;
     }
 }
+

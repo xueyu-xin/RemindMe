@@ -83,4 +83,37 @@ public interface ReminderRepository extends JpaRepository<Reminder, Long> {
                                                         String title,
                                                         LocalDateTime remindTime,
                                                         List<ReminderStatus> statuses);
+
+    // 根据父周期模板ID查询所有周期实例提醒
+    // 用于周期模板级联操作（如取消/暂停模板时批量处理其生成的实例）
+    List<Reminder> findByParentRecurringId(Long parentRecurringId);
+
+    // 查询某时间段内与周期实例冲突的普通提醒（排除自身）
+    // 仅查询 isRecurringInstance=false 的普通提醒，周期实例之间的冲突由模板层面统一管理
+    // excludeId 为 null 时不做排除；状态排除 CANCELLED
+    @Query("SELECT r FROM Reminder r WHERE r.userId = :userId " +
+           "AND r.isRecurringInstance = false " +
+           "AND r.status <> 'CANCELLED' " +
+           "AND r.remindTime BETWEEN :startTime AND :endTime " +
+           "AND (:excludeId IS NULL OR r.id <> :excludeId)")
+    List<Reminder> findConflictingNonRecurringReminders(
+            @Param("userId") Long userId,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime,
+            @Param("excludeId") Long excludeId
+    );
+
+    // 导出查询：按用户 + 状态集合 + created_at 日期范围查提醒，创建时间升序
+    // startTime/endTime 为 null 时不限制对应边界（左闭右开：createdAt >= startTime 且 createdAt < endTime）
+    @Query("SELECT r FROM Reminder r WHERE r.userId = :userId " +
+           "AND r.status IN :statuses " +
+           "AND (:startTime IS NULL OR r.createdAt >= :startTime) " +
+           "AND (:endTime IS NULL OR r.createdAt < :endTime) " +
+           "ORDER BY r.createdAt ASC")
+    List<Reminder> findForExport(
+            @Param("userId") Long userId,
+            @Param("statuses") List<ReminderStatus> statuses,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
+    );
 }

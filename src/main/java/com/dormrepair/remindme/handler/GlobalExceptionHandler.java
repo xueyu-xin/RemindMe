@@ -5,6 +5,7 @@ import com.dormrepair.remindme.exception.ExternalServiceException;
 import com.dormrepair.remindme.exception.FileParseException;
 import com.dormrepair.remindme.exception.InvalidInputException;
 import com.dormrepair.remindme.exception.ResourceNotFoundException;
+import com.dormrepair.remindme.utils.TimeUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
@@ -56,7 +57,7 @@ public class GlobalExceptionHandler {
         response.put("success", false);
         response.put("message", "参数校验失败");
         response.put("errors", errors);
-        response.put("timestamp", LocalDateTime.now());
+        response.put("timestamp", TimeUtils.now());
 
         return ResponseEntity.badRequest().body(response);
     }
@@ -176,7 +177,7 @@ public class GlobalExceptionHandler {
         Map<String, Object> response = new HashMap<>();
         response.put("success", false);
         response.put("message", message);
-        response.put("timestamp", LocalDateTime.now());
+        response.put("timestamp", TimeUtils.now());
 
         return ResponseEntity.status(status).body(response);
     }

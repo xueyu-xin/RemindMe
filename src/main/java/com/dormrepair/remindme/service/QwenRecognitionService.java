@@ -118,7 +118,7 @@ public class QwenRecognitionService {
 
             GenerationParam param = GenerationParam.builder()
                     .apiKey(apiKey)
-                    .model("qwen-turbo")
+                    .model("qwen-plus")
                     .prompt(String.format(RECOGNIZE_PROMPT, content))
                     .resultFormat(GenerationParam.ResultFormat.MESSAGE)
                     .build();
@@ -157,7 +157,7 @@ public class QwenRecognitionService {
 
             MultiModalConversationParam param = MultiModalConversationParam.builder()
                     .apiKey(apiKey)
-                    .model("qwen-vl-plus")
+                    .model("qwen3-vl-plus")
                     .message(MultiModalConversationMessage.builder()
                             .role("user")
                             .content(java.util.Arrays.asList(
@@ -323,14 +323,19 @@ public class QwenRecognitionService {
 
             你是一个专业的课程表识别助手。请从以下课表内容中精确提取所有课程信息，返回严格的 JSON 格式。
 
-            识别规则：
-            1. 识别星期几（星期一~星期日，周一~周日均需支持）
-            2. 识别节次（第一二节 → 第1、2节，第三四节 → 第3、4节，依此类推）
-            3. 提取课程名称、教师、上课地点
-            4. 提取周次范围（如 1-17 周、1,3,5,7 周）
-            5. 识别单双周标记（单周/双周/全部）
-            6. 推断时间表（每节课的开始时间和结束时间），如果原文未提供，按常规大学作息时间（第1节 08:00-08:45，第2节 08:55-09:40，以此类推）
-            7. 推断学期开始日期
+            识别步骤（必须严格按顺序执行）：
+
+            第一步：识别表头行，找出"周一"、"周二"..."周日"（或"星期一"..."星期日"）的位置。
+            记录每一列对应的星期几。
+
+            第二步：读取每门课程时，必须依据它所在的**列位置**确定星期几。
+            例如：如果课程在表头"周三"正下方的列中，则 dayOfWeek = "周三"。
+            严禁凭猜测或课表常见安排推断星期几。
+
+            第三步：提取课程名称、教师、上课地点、周次范围、单双周标记。
+            推断时间表（每节课的开始时间和结束时间），如果原文未提供，按常规大学作息时间（第1节 08:00-08:45，第2节 08:55-09:40，以此类推）。
+
+            第四步：推断学期开始日期。
 
             合并规则（重要）：
             - 同一门课程如果出现在连续的多个节次（如第1节和第2节都是"高等数学"），合并为一条课程，sectionIndices 为 [1, 2]
@@ -338,20 +343,53 @@ public class QwenRecognitionService {
             - 空单元格表示该时段无课，跳过
             - 每条课程应该唯一，不要为同一门课生成多条重复记录
 
+            输出要求（每门课程必须包含）：
+            - title: 课程名
+            - dayOfWeek: 星期几（"星期一"或"周一"格式）
+            - columnIndex: 课程所在"星期列"的序号（从 0 开始，周一=0, 周二=1, ..., 周日=6）
+              重要：columnIndex 只统计"星期列"，不统计"时间/节次"列。
+              例如表头是 "时间/节次|周一|周二|周三|周四|周五"：
+              周一列 columnIndex=0，周二=1，周三=2，周四=3，周五=4
+              （"时间/节次"列不计入 columnIndex）
+            - sectionIndices: 节次索引列表（如 [1, 2]）
+            - weeks: 周次列表（如 [1, 2, ..., 17]）
+            - oddWeek / evenWeek: 单双周标记
+            - location: 教室名
+            - teacher: 教师名
+            - confidence: 单课程识别置信度（0.0-1.0）
+              - 课程名、列位置都清晰 → 0.9-1.0
+              - 部分模糊（如课程名模糊但列位置明确）→ 0.6-0.8
+              - 列位置不确定或课程名模糊 → 0.3-0.5
+              - 完全无法确定 → 0.0-0.2
+
             返回格式要求（严格按此 JSON 结构返回，不要添加任何额外文字）：
             {
               "success": true/false,
               "confidence": 0.0-1.0,
               "courses": [
                 {
-                  "title": "课程名",
-                  "teacher": "教师名",
-                  "dayOfWeek": "星期一",
+                  "title": "高等数学",
+                  "teacher": "张老师",
+                  "dayOfWeek": "周一",
+                  "columnIndex": 0,
                   "sectionIndices": [1, 2],
                   "weeks": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
                   "oddWeek": false,
                   "evenWeek": false,
-                  "location": "教室名"
+                  "location": "教1-302",
+                  "confidence": 0.95
+                },
+                {
+                  "title": "体育",
+                  "teacher": "李老师",
+                  "dayOfWeek": "周五",
+                  "columnIndex": 4,
+                  "sectionIndices": [7, 8],
+                  "weeks": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                  "oddWeek": false,
+                  "evenWeek": false,
+                  "location": "操场",
+                  "confidence": 0.9
                 }
               ],
               "sectionMapping": {
@@ -365,6 +403,9 @@ public class QwenRecognitionService {
               "semesterStartDate": "2026-09-01",
               "suggestedWeeks": 16
             }
+
+            示例说明：示例中"体育"在周五列，周五是表头的第 5 个星期列（第 1 列"时间/节次"不计入），
+            所以 columnIndex=4（周一=0, 周二=1, 周三=2, 周四=3, 周五=4）。
 
             如果无法识别课表，返回 {"success": false, "confidence": 0.0, "courses": [], "sectionMapping": {}, "timeSections": [], "semesterStartDate": null, "suggestedWeeks": 16}
 
@@ -401,7 +442,7 @@ public class QwenRecognitionService {
 
             GenerationParam param = GenerationParam.builder()
                     .apiKey(apiKey)
-                    .model("qwen-turbo")
+                    .model("qwen-plus")
                     .prompt(String.format(SCHEDULE_TABLE_PROMPT, content))
                     .resultFormat(GenerationParam.ResultFormat.MESSAGE)
                     .build();
@@ -506,12 +547,19 @@ public class QwenRecognitionService {
             String schedulePrompt = """
                     你是一个专业的课程表识别助手。请仔细识别图片中的课程表，返回严格的 JSON 格式。
 
-                    识别规则：
-                    1. 识别星期几（星期一~星期日，周一~周日均需支持）
-                    2. 识别节次（第1节、第2节...第10节）
-                    3. 提取课程名称、教师、上课地点
-                    4. 推断时间表（每节课的开始时间和结束时间），如果图片中有时间则使用，没有则按常规大学作息时间（第1节 08:00-08:45，第2节 08:55-09:40，以此类推）
-                    5. 推断学期开始日期
+                    识别步骤（必须严格按顺序执行）：
+
+                    第一步：识别表头行，找出"周一"、"周二"..."周日"（或"星期一"..."星期日"）的位置。
+                    记录每一列对应的星期几。
+
+                    第二步：读取每门课程时，必须依据它所在的**列位置**确定星期几。
+                    例如：如果课程在表头"周三"正下方的列中，则 dayOfWeek = "周三"。
+                    严禁凭猜测或课表常见安排推断星期几。
+
+                    第三步：提取课程名称、教师、上课地点、节次（第1节、第2节...第10节）。
+                    推断时间表（每节课的开始时间和结束时间），如果图片中有时间则使用，没有则按常规大学作息时间（第1节 08:00-08:45，第2节 08:55-09:40，以此类推）。
+
+                    第四步：推断学期开始日期。
 
                     合并规则（重要）：
                     - 同一门课程如果出现在连续的多个节次，合并为一条课程，sectionIndices 为 [1, 2]
@@ -519,20 +567,53 @@ public class QwenRecognitionService {
                     - 空单元格表示该时段无课，跳过
                     - 每条课程应该唯一，不要为同一门课生成多条重复记录
 
+                    输出要求（每门课程必须包含）：
+                    - title: 课程名
+                    - dayOfWeek: 星期几（"星期一"或"周一"格式）
+                    - columnIndex: 课程所在"星期列"的序号（从 0 开始，周一=0, 周二=1, ..., 周日=6）
+                      重要：columnIndex 只统计"星期列"，不统计"时间/节次"列。
+                      例如表头第一列是"时间/节次"，其后依次是周一~周五：
+                      周一列 columnIndex=0，周二=1，周三=2，周四=3，周五=4
+                      （"时间/节次"列不计入 columnIndex）
+                    - sectionIndices: 节次索引列表（如 [1, 2]）
+                    - weeks: 周次列表（如 [1, 2, ..., 17]）
+                    - oddWeek / evenWeek: 单双周标记
+                    - location: 教室名
+                    - teacher: 教师名
+                    - confidence: 单课程识别置信度（0.0-1.0）
+                      - 课程名、列位置都清晰 → 0.9-1.0
+                      - 部分模糊（如课程名模糊但列位置明确）→ 0.6-0.8
+                      - 列位置不确定或课程名模糊 → 0.3-0.5
+                      - 完全无法确定 → 0.0-0.2
+
                     返回格式要求（严格按此 JSON 结构返回，不要添加任何额外文字）：
                     {
                       "success": true/false,
                       "confidence": 0.0-1.0,
                       "courses": [
                         {
-                          "title": "课程名",
-                          "teacher": "教师名",
-                          "dayOfWeek": "星期一",
+                          "title": "高等数学",
+                          "teacher": "张老师",
+                          "dayOfWeek": "周一",
+                          "columnIndex": 0,
                           "sectionIndices": [1, 2],
                           "weeks": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
                           "oddWeek": false,
                           "evenWeek": false,
-                          "location": "教室名"
+                          "location": "教1-302",
+                          "confidence": 0.95
+                        },
+                        {
+                          "title": "体育",
+                          "teacher": "李老师",
+                          "dayOfWeek": "周五",
+                          "columnIndex": 4,
+                          "sectionIndices": [7, 8],
+                          "weeks": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+                          "oddWeek": false,
+                          "evenWeek": false,
+                          "location": "操场",
+                          "confidence": 0.9
                         }
                       ],
                       "timeSections": [
@@ -543,6 +624,9 @@ public class QwenRecognitionService {
                       "suggestedWeeks": 16
                     }
 
+                    示例说明：示例中"体育"在周五列，周五是表头中周一之后第 5 个星期列（"时间/节次"列不计入），
+                    所以 columnIndex=4（周一=0, 周二=1, 周三=2, 周四=3, 周五=4）。
+
                     如果无法识别课表，返回 {"success": false, "confidence": 0.0, "courses": [], "timeSections": [], "semesterStartDate": null, "suggestedWeeks": 16}
                     """;
 
@@ -551,7 +635,7 @@ public class QwenRecognitionService {
 
             MultiModalConversationParam param = MultiModalConversationParam.builder()
                     .apiKey(apiKey)
-                    .model("qwen-vl-plus")
+                    .model("qwen3-vl-plus")
                     .message(MultiModalConversationMessage.builder()
                             .role("user")
                             .content(java.util.Arrays.asList(
@@ -586,8 +670,8 @@ public class QwenRecognitionService {
         T get() throws Exception;
     }
 
-    // 通义千问 API 调用重试包装器：仅对网络异常重试，4xx/JSON 解析错误不重试，
-    // 指数退避 100ms→200ms→400ms，重试耗尽抛 RuntimeException（由调用方外层 catch 兜底，保持现有行为）。
+    // 通义千问 API 调用重试包装器：对网络异常、5xx、429(限流)重试；4xx(非429)/JSON 解析错误不重试。
+    // 指数退避：429 限流场景 2000ms→4000ms→8000ms（配额恢复通常需数秒），其余网络异常 100ms→200ms→400ms。
     private <T> T callWithRetry(ThrowingSupplier<T> action, String operation) throws Exception {
         int maxRetries = 3;
         int attempt = 0;
@@ -606,7 +690,9 @@ public class QwenRecognitionService {
                 if (attempt >= maxRetries) {
                     break;
                 }
-                long waitMs = (long) (Math.pow(2, attempt - 1) * 100);
+                // 429 限流用更长的退避基数（配额恢复通常需要数秒），其他网络异常用短退避
+                long baseMs = isRateLimitException(e) ? 2000L : 100L;
+                long waitMs = (long) (Math.pow(2, attempt - 1) * baseMs);
                 try {
                     Thread.sleep(waitMs);
                 } catch (InterruptedException ie) {
@@ -618,14 +704,26 @@ public class QwenRecognitionService {
         throw new RuntimeException(operation + " 调用失败，已重试 " + maxRetries + " 次", lastException);
     }
 
-    // 判断异常是否可重试：DashScope ApiException（无 Status 为网络错误/有 Status 5xx 重试、4xx 不重试）、
+    // 判断是否为 429 限流异常（DashScope 配额用尽/频率超限），用于选择更长的退避时间
+    private static boolean isRateLimitException(Exception e) {
+        if (e instanceof ApiException) {
+            ApiException apiEx = (ApiException) e;
+            return apiEx.getStatus() != null && apiEx.getStatus().getStatusCode() == 429;
+        }
+        return false;
+    }
+
+    // 判断异常是否可重试：DashScope ApiException（无 Status/5xx/429 可重试，其他 4xx 不重试）、
     // SocketTimeoutException、非 JsonProcessingException 的 IOException 视为可重试网络异常
     private static boolean isRetryableNetworkException(Exception e) {
         if (e instanceof ApiException) {
             ApiException apiEx = (ApiException) e;
             if (apiEx.getStatus() != null) {
                 int statusCode = apiEx.getStatus().getStatusCode();
-                // 4xx 客户端错误不重试
+                // 4xx 客户端错误中仅 429 限流可重试（配额恢复后自动可用），其余 4xx 立即失败
+                if (statusCode == 429) {
+                    return true;
+                }
                 return statusCode < 400 || statusCode >= 500;
             }
             return true;  // 无 Status，纯网络错误，重试

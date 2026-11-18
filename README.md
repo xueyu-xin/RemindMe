@@ -132,7 +132,66 @@ pip install chromadb
 # 启动 ChromaDB 服务（绑定所有网卡）
 chroma run --host 0.0.0.0 --port 8000
 ```
+```plantuml
+@startuml 系统总体架构图
+' ============ 样式 ============
+skinparam backgroundColor white
+skinparam defaultFontName SimSun
+skinparam defaultFontSize 50
+skinparam rectangle {
+    borderColor black
+    backgroundColor white
+    borderThickness 1.1
+}
+skinparam arrow {
+    color black
+    thickness 1
+}
 
+' ============ 第①行：用户交互层 ============
+label "① 用户交互层" as l1
+rectangle "Web 前端\nVue 3 + Element Plus" as frontend
+
+' ============ 第②行：智能体调度层 ============
+label "② 智能体调度层" as l2
+rectangle "AgentService\nReAct 循环（最多 5 轮 / 5 次工具）\n状态流事件实时推送" as agent
+rectangle "大语言模型\ndeepseek-v4-flash\nqwen-plus / qwen3-vl-plus" as llm
+
+' ============ 第③行：工具调用层 ============
+label "③ 工具调用层" as l3
+rectangle "ToolRegistry — @AgentTool 自动注册\n近 30 个 Function Calling 工具\n（提醒 / 周期 / 天气 / 记忆 / 经期 / 位置 / 偏好）" as tools
+
+' ============ 第④行：业务服务层 ============
+label "④ 业务服务层" as l4
+rectangle "核心业务服务\n提醒管理 · 周期提醒 · 时间推断\n冲突检测 · 两阶段确认 · 定时调度\nRAG 记忆 · 多模态识别 · 天气 · 经期" as services
+rectangle "天气 / 地图服务\n和风天气 / 高德地图" as ext
+
+' ============ 第⑤行：数据存储层 ============
+label "⑤ 数据存储层" as l5
+rectangle "MySQL\n结构化数据\n用户 / 提醒 / 周期 / 确认 / 记忆元数据" as mysql
+rectangle "Chroma 向量数据库\n多租户隔离 user_{id}_knowledge\n公共知识 public_knowledge" as chroma
+rectangle "向量化模型\nOllama qwen3-embedding:4b" as embed
+
+' ============ 左列：层标签纵向对齐 ============
+l1 -[hidden]down- l2
+l2 -[hidden]down- l3
+l3 -[hidden]down- l4
+l4 -[hidden]down- l5
+
+' ============ 主数据流（自上而下一条线） ============
+frontend -down-> agent
+agent -down-> tools
+tools -down-> services
+services -down-> mysql
+services -down-> chroma
+
+' ============ 外部依赖：横向虚线，各连各的 ============
+agent -[dashed]right-> llm : 对话推理
+chroma -[dashed]right-> embed : 向量化
+services -[dashed]right-> ext : 实时查询
+
+@enduml
+```
 ### 3.5 字体文件
 
 项目使用以下自定义字体（需放在 `src/main/resources/fonts/` 目录下）：

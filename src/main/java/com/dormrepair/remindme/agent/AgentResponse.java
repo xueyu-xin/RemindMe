@@ -38,6 +38,9 @@ public class AgentResponse {
     // type=TEXT 时：附带的工具执行结果（供展示或调试用）
     private Object toolResult;
 
+    // type=EXECUTION_RESULT 时：已创建的提醒 ID
+    private Long reminderId;
+
     // 执行成功标记，失败时与 errorMessage 配套
     @Builder.Default
     private boolean success = true;
@@ -75,6 +78,8 @@ public class AgentResponse {
         TOOL_CALL,
         // 返回确认卡片，等待用户确认/取消
         CONFIRMATION,
+        // 工具直接执行完成（如提醒已创建），展示执行结果卡片
+        EXECUTION_RESULT,
         // 处理异常，走错误分支
         ERROR
     }
@@ -120,6 +125,20 @@ public class AgentResponse {
                 .sessionId(sessionId)
                 .confirmationData(confirmationData)
                 .status(ResponseStatus.CARD_SHOWN)
+                .success(true)
+                .build();
+    }
+
+    // 快速构造执行结果响应（提醒已直接创建，无需用户确认）
+    public static AgentResponse executionResult(Long reminderId, String content, Map<String, Object> confirmationData) {
+        return AgentResponse.builder()
+                .type(ResponseType.EXECUTION_RESULT)
+                .content(content)
+                .leadMessage(content)
+                .reminderId(reminderId)
+                .confirmationData(confirmationData)
+                .needConfirmation(false)
+                .status(ResponseStatus.DONE)
                 .success(true)
                 .build();
     }

@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.entity;
 
+import com.dormrepair.remindme.utils.TimeUtils;
 import jakarta.persistence.*;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -63,7 +64,7 @@ public class ScheduleImport {
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) {
-            createdAt = LocalDateTime.now();
+            createdAt = TimeUtils.now();
         }
     }
 }

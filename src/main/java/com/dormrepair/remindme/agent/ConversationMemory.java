@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.agent;
 
+import com.dormrepair.remindme.utils.TimeUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
@@ -144,11 +145,11 @@ public class ConversationMemory {
                 messages.add(message);
                 return MemoryEntry.builder()
                         .messages(messages)
-                        .lastAccessTime(LocalDateTime.now())
+                        .lastAccessTime(TimeUtils.now())
                         .build();
             } else {
                 existing.getMessages().add(message);
-                existing.setLastAccessTime(LocalDateTime.now());
+                existing.setLastAccessTime(TimeUtils.now());
                 return existing;
             }
         });
@@ -172,7 +173,7 @@ public class ConversationMemory {
             return new ArrayList<>();
         }
 
-        entry.setLastAccessTime(LocalDateTime.now());
+        entry.setLastAccessTime(TimeUtils.now());
         return new ArrayList<>(entry.getMessages());
     }
 
@@ -213,7 +214,7 @@ public class ConversationMemory {
 
     // 遍历 memoryStore 移除超过 EXPIRATION_MINUTES 没访问的会话；在 getHistory/统计方法中被动触发
     private void cleanExpiredSessions() {
-        LocalDateTime threshold = LocalDateTime.now().minusMinutes(EXPIRATION_MINUTES);
+        LocalDateTime threshold = TimeUtils.now().minusMinutes(EXPIRATION_MINUTES);
 
         memoryStore.entrySet().removeIf(entry -> {
             MemoryEntry memoryEntry = entry.getValue();

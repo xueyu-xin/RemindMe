@@ -56,4 +56,6 @@ public class ReminderResponse {
     // 记录最后更新时间
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Shanghai")
     private LocalDateTime updatedAt;
+    // 父周期模板ID：周期实例指向所属 recurring_reminders.id，普通提醒为 null，供前端"删除整个周期"使用
+    private Long parentRecurringId;
 }

@@ -48,7 +48,7 @@ public class RecurringReminderService {
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> createRecurringReminder(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
-            String location, String priority) {
+            String location, String priority, String note) {
 
         log.info("创建周期提醒: userId={}, title={}, remindTime={}, startDate={}, endDate={}, repeatType={}, repeatDays={}",
                 userId, title, remindTime, startDate, endDate, repeatType, repeatDays);
@@ -90,6 +90,7 @@ public class RecurringReminderService {
             parsedData.put("recurringRepeatType", parsedRepeatType.name());
             parsedData.put("repeatDays", repeatDays);
             parsedData.put("location", location);
+            parsedData.put("note", note);
             parsedData.put("priority", priority != null ? priority : Priority.NORMAL.name());
             parsedData.put("source", "AGENT");
 
@@ -170,8 +171,8 @@ public class RecurringReminderService {
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> generateInstancesFromConfirm(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
-            String location, String priority) {
-        return confirmAndCreateRecurring(userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority);
+            String location, String priority, String note) {
+        return confirmAndCreateRecurring(userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority, note);
     }
 
     // 直接创建全部周期实例
@@ -179,7 +180,7 @@ public class RecurringReminderService {
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> generateAll(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
-            String location, String priority) {
+            String location, String priority, String note) {
         Map<String, Object> result = new HashMap<>();
         try {
             LocalTime parsedTime = LocalTime.parse(remindTime, TimeUtils.TIME_SECONDS_FORMATTER);
@@ -191,7 +192,7 @@ public class RecurringReminderService {
                     userId, title, remindTime, startDate, endDate, repeatType, repeatDays);
 
             RecurringReminder template = createRecurringTemplate(userId, title, parsedTime,
-                    parsedStartDate, parsedEndDate, parsedRepeatType, repeatDays, location, priority);
+                    parsedStartDate, parsedEndDate, parsedRepeatType, repeatDays, location, priority, note);
             log.info("周期模板已保存: recurringId={}, title={}", template.getId(), template.getTitle());
 
             int total = 0, success = 0;
@@ -212,7 +213,8 @@ public class RecurringReminderService {
             log.info("直接创建完成: recurringId={}, total={}, success={}", template.getId(), total, success);
 
             result.put("success", true);
-            result.put("message", String.format("已直接创建 %d 天提醒（冲突日多条并存）", success));
+            result.put("message", "✅ 已创建 " + success + " 天提醒（" + startDate + " 至 " + endDate
+                    + "，如有冲突将与已有日程并存）。");
             result.put("recurringId", template.getId());
             result.put("totalDays", total);
             result.put("successCount", success);
@@ -227,7 +229,7 @@ public class RecurringReminderService {
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> generateWithSkip(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
-            String location, String priority) {
+            String location, String priority, String note) {
         Map<String, Object> result = new HashMap<>();
         try {
             LocalTime parsedTime = LocalTime.parse(remindTime, TimeUtils.TIME_SECONDS_FORMATTER);
@@ -238,7 +240,7 @@ public class RecurringReminderService {
             log.info("跳过冲突创建周期提醒: userId={}, title={}, time={}, {}~{}", userId, title, remindTime, startDate, endDate);
 
             RecurringReminder template = createRecurringTemplate(userId, title, parsedTime,
-                    parsedStartDate, parsedEndDate, parsedRepeatType, repeatDays, location, priority);
+                    parsedStartDate, parsedEndDate, parsedRepeatType, repeatDays, location, priority, note);
             log.info("周期模板已保存: recurringId={}", template.getId());
 
             int total = 0, success = 0, skipped = 0;
@@ -269,8 +271,30 @@ public class RecurringReminderService {
 
             log.info("跳过冲突创建完成: recurringId={}, total={}, success={}, skipped={}", template.getId(), total, success, skipped);
 
+            // 跳过日期展示（最多3个，超出加...）
+            String skippedDatesText = "";
+            if (!skippedDates.isEmpty()) {
+                List<String> shown = skippedDates.size() > 3 ? skippedDates.subList(0, 3) : skippedDates;
+                skippedDatesText = String.join("、", shown);
+                if (skippedDates.size() > 3) {
+                    skippedDatesText += "...";
+                }
+            }
+
+            String message;
+            if (success == 0 && skipped > 0) {
+                message = "⚠️ 未创建任何提醒：" + title + "的 " + total + " 天全部与已有日程冲突，已全部跳过。\n"
+                        + "如果需要覆盖冲突或调整时间，请告诉我。";
+            } else if (success > 0 && skipped > 0) {
+                message = "✅ 已创建 " + success + " 天提醒，跳过 " + skipped + " 天冲突。\n"
+                        + "跳过的日期是：" + skippedDatesText + "。\n"
+                        + "如果需要覆盖这些冲突，请告诉我。";
+            } else {
+                message = "✅ 已创建 " + success + " 天提醒（" + startDate + " 至 " + endDate + "）。";
+            }
+
             result.put("success", true);
-            result.put("message", String.format("已创建 %d 天提醒，跳过 %d 天冲突", success, skipped));
+            result.put("message", message);
             result.put("recurringId", template.getId());
             result.put("totalDays", total);
             result.put("successCount", success);
@@ -289,7 +313,7 @@ public class RecurringReminderService {
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> generateWithOverwrite(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
-            String location, String priority) {
+            String location, String priority, String note) {
         Map<String, Object> result = new HashMap<>();
         try {
             LocalTime parsedTime = LocalTime.parse(remindTime, TimeUtils.TIME_SECONDS_FORMATTER);
@@ -300,7 +324,7 @@ public class RecurringReminderService {
             log.info("覆盖创建周期提醒: userId={}, title={}, time={}, {}~{}", userId, title, remindTime, startDate, endDate);
 
             RecurringReminder template = createRecurringTemplate(userId, title, parsedTime,
-                    parsedStartDate, parsedEndDate, parsedRepeatType, repeatDays, location, priority);
+                    parsedStartDate, parsedEndDate, parsedRepeatType, repeatDays, location, priority, note);
             log.info("周期模板已保存: recurringId={}", template.getId());
 
             int total = 0, success = 0, overwritten = 0;
@@ -339,8 +363,17 @@ public class RecurringReminderService {
             log.info("覆盖创建完成: recurringId={}, total={}, success={}, overwritten={}", template.getId(), total, success, overwritten);
 
             String overwrittenTitle = overwrittenTitles.isEmpty() ? null : String.join("、", overwrittenTitles);
+
+            String message;
+            if (overwritten > 0) {
+                message = "✅ 已创建 " + success + " 天提醒，已覆盖 " + overwritten + " 处冲突"
+                        + (overwrittenTitle != null ? "（" + overwrittenTitle + "）" : "") + "。";
+            } else {
+                message = "✅ 已创建 " + success + " 天提醒（" + startDate + " 至 " + endDate + "），无冲突。";
+            }
+
             result.put("success", true);
-            result.put("message", String.format("已创建 %d 天提醒，覆盖 %d 条冲突提醒", success, overwritten));
+            result.put("message", message);
             result.put("recurringId", template.getId());
             result.put("totalDays", total);
             result.put("successCount", success);
@@ -360,7 +393,7 @@ public class RecurringReminderService {
     // 创建并保存周期模板，状态置为 ACTIVE，来源标记为 AGENT
     private RecurringReminder createRecurringTemplate(Long userId, String title, LocalTime parsedTime,
             LocalDate parsedStartDate, LocalDate parsedEndDate, RepeatType parsedRepeatType,
-            String repeatDays, String location, String priority) {
+            String repeatDays, String location, String priority, String note) {
         RecurringReminder template = new RecurringReminder();
         template.setUserId(userId);
         template.setTitle(title);
@@ -370,6 +403,7 @@ public class RecurringReminderService {
         template.setRepeatType(parsedRepeatType);
         template.setRepeatDays(repeatDays);
         template.setLocation(location);
+        template.setNote(note);
         template.setPriority(priority != null ? priority : Priority.NORMAL.name());
         template.setStatus("ACTIVE");
         template.setSource("AGENT");
@@ -386,11 +420,15 @@ public class RecurringReminderService {
         reminder.setTimezone(template.getTimezone());
         reminder.setAdvanceMinutes(template.getAdvanceMinutes());
         reminder.setLocation(template.getLocation());
+        reminder.setNote(template.getNote());
         reminder.setPriority(Priority.valueOf(template.getPriority()));
         reminder.setStatus(ReminderStatus.PENDING);
         // 系统自动创建，跳过信息确认阶段，直接进入执行阶段，否则调度器扫描不到
         reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
         reminder.setSource(ReminderSource.USER_INPUT);
+        // 标记为周期实例并关联父模板ID，便于冲突检测与级联操作区分普通提醒
+        reminder.setParentRecurringId(template.getId());
+        reminder.setIsRecurringInstance(true);
         return reminderRepository.save(reminder);
     }
 
@@ -408,7 +446,7 @@ public class RecurringReminderService {
     @Transactional(rollbackFor = Exception.class)
     public Map<String, Object> confirmAndCreateRecurring(Long userId, String title, String remindTime,
             String startDate, String endDate, String repeatType, String repeatDays,
-            String location, String priority) {
+            String location, String priority, String note) {
 
         Map<String, Object> result = new HashMap<>();
 
@@ -427,6 +465,7 @@ public class RecurringReminderService {
             template.setRepeatType(parsedRepeatType);
             template.setRepeatDays(repeatDays);
             template.setLocation(location);
+            template.setNote(note);
             template.setPriority(priority != null ? priority : Priority.NORMAL.name());
             template.setStatus("ACTIVE");
             template.setSource("AGENT");
@@ -437,17 +476,29 @@ public class RecurringReminderService {
 
             Map<String, Integer> generationResult = generateInstancesForDateRange(savedTemplate, parsedStartDate, parsedEndDate);
 
+            int totalDays = generationResult.get("total");
+            int createdCount = generationResult.get("success");
+            int conflictCount = generationResult.get("conflict");
+            int failedCount = generationResult.get("failed");
+
+            String message;
+            if (failedCount > 0) {
+                message = "已创建 " + createdCount + " 天，失败 " + failedCount + " 天";
+            } else if (conflictCount > 0) {
+                message = "已创建 " + createdCount + " 天，跳过 " + conflictCount + " 天冲突";
+            } else {
+                message = "已创建周期提醒，共 " + totalDays + " 天 ✅";
+            }
+
             result.put("success", true);
-            result.put("message", String.format("周期提醒创建成功，共 %d 天，成功 %d 条，冲突 %d 条，失败 %d 条",
-                    generationResult.get("total"),
-                    generationResult.get("success"),
-                    generationResult.get("conflict"),
-                    generationResult.get("failed")));
+            result.put("message", message);
             result.put("recurringId", savedTemplate.getId());
-            result.put("totalDays", generationResult.get("total"));
-            result.put("successCount", generationResult.get("success"));
-            result.put("conflictCount", generationResult.get("conflict"));
-            result.put("failedCount", generationResult.get("failed"));
+            result.put("totalDays", totalDays);
+            result.put("createdCount", createdCount);
+            // 保留 successCount 以向后兼容（ConfirmationService.confirmRecurring 仍读取此字段）
+            result.put("successCount", createdCount);
+            result.put("conflictCount", conflictCount);
+            result.put("failedCount", failedCount);
 
         } catch (Exception e) {
             log.error("创建周期提醒失败: userId={}, error={}", userId, e.getMessage(), e);
@@ -581,6 +632,7 @@ public class RecurringReminderService {
             parsedData.put("title", template.getTitle());
             parsedData.put("remindTime", remindDateTime.format(TimeUtils.FORMATTER));
             parsedData.put("location", template.getLocation());
+            parsedData.put("note", template.getNote());
             parsedData.put("priority", template.getPriority());
             parsedData.put("advanceMinutes", template.getAdvanceMinutes());
             parsedData.put("source", "AGENT");
@@ -607,11 +659,15 @@ public class RecurringReminderService {
             reminder.setTimezone(template.getTimezone());
             reminder.setAdvanceMinutes(template.getAdvanceMinutes());
             reminder.setLocation(template.getLocation());
+            reminder.setNote(template.getNote());
             reminder.setPriority(Priority.valueOf(template.getPriority()));
             reminder.setStatus(ReminderStatus.PENDING);
             // 系统自动创建，跳过信息确认阶段，直接进入执行阶段，否则调度器扫描不到
             reminder.setConfirmStatus(ConfirmStatus.CONFIRMED);
             reminder.setSource(ReminderSource.USER_INPUT);
+            // 标记为周期实例并关联父模板ID，便于冲突检测与级联操作区分普通提醒
+            reminder.setParentRecurringId(template.getId());
+            reminder.setIsRecurringInstance(true);
 
             Reminder savedReminder = reminderRepository.save(reminder);
             log.info("🟢 提醒保存成功: id={}, title={}", savedReminder.getId(), savedReminder.getTitle());
@@ -668,6 +724,15 @@ public class RecurringReminderService {
             inst.setStatus("CANCELLED");
             recurringInstanceRepository.save(inst);
         }
+
+        // 级联取消 reminders 表中关联的实例（只取消 PENDING，避免覆盖已 SENT/COMPLETED）
+        List<Reminder> reminderInstances = reminderRepository.findByParentRecurringId(id);
+        for (Reminder r : reminderInstances) {
+            if (r.getStatus() == ReminderStatus.PENDING) {
+                r.setStatus(ReminderStatus.CANCELLED);
+                reminderRepository.save(r);
+            }
+        }
     }
 
     // 暂停周期提醒：仅改状态为 PAUSED，不触动已有实例
@@ -718,7 +783,7 @@ public class RecurringReminderService {
     @Transactional(rollbackFor = Exception.class)
     public RecurringReminder updateRecurringReminder(Long id, Long userId, String title,
             String remindTime, LocalDate startDate, LocalDate endDate, RepeatType repeatType,
-            String repeatDays, String location, String priority) {
+            String repeatDays, String location, String note, String priority) {
         RecurringReminder reminder = recurringReminderRepository.findById(id)
                 .filter(r -> r.getUserId().equals(userId))
                 .orElseThrow(() -> new IllegalArgumentException("周期提醒不存在或无权操作"));
@@ -732,8 +797,37 @@ public class RecurringReminderService {
         if (repeatType != null) reminder.setRepeatType(repeatType);
         if (repeatDays != null) reminder.setRepeatDays(repeatDays);
         if (location != null) reminder.setLocation(location);
+        if (note != null) reminder.setNote(note);
         if (priority != null) reminder.setPriority(priority);
 
-        return recurringReminderRepository.save(reminder);
+        RecurringReminder saved = recurringReminderRepository.save(reminder);
+
+        // ===== 重建未来实例 =====
+        // 模板的标题/时间/地点/优先级/范围/重复规则任一变更都可能影响实例，统一对未来 PENDING 实例重建：
+        // 过去实例与已发送/已完成实例完全不动
+        LocalDate today = TimeUtils.now().toLocalDate();
+        List<Reminder> instances = reminderRepository.findByParentRecurringId(saved.getId());
+        for (Reminder inst : instances) {
+            if (inst.getRemindTime() == null) continue;
+            LocalDate instDate = inst.getRemindTime().toLocalDate();
+
+            // 过去实例不动（保留历史），非 PENDING 不动（保护已发送/已完成）
+            if (instDate.isBefore(today)) continue;
+            if (inst.getStatus() != ReminderStatus.PENDING) continue;
+
+            // reminder 软删
+            inst.setStatus(ReminderStatus.CANCELLED);
+            reminderRepository.save(inst);
+
+            // instance 行物理删除，解除 (recurring_id, remind_date) 唯一索引占坑，允许同日按新模板重新生成
+            recurringInstanceRepository.findByRecurringIdAndRemindDate(saved.getId(), instDate)
+                    .ifPresent(recurringInstanceRepository::delete);
+        }
+
+        // 对新范围幂等补齐：已移除的未来日期按新模板重新生成（含冲突检测，冲突日跳过）；
+        // 过去日期的 instance 行仍保留，内部判重会自动跳过；新范围外的日期不会生成
+        generateInstancesForDateRange(saved, saved.getStartDate(), saved.getEndDate());
+
+        return saved;
     }
 }

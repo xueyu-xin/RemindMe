@@ -4,6 +4,17 @@
  * 本文件必须在 sound.js、notification.js、card.js 之后加载
  */
 
+
+// ===== Markdown 渲染（最小子集：加粗 / 斜体 / 换行）=====
+// 支持 **加粗**、*斜体*、\n 换行；先转义 HTML 防止 XSS
+function renderMarkdown(text) {
+    if (!text) return '';
+    text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    text = text.replace(/(^|[^*])\*([^*]+)\*(?![*])/g, '$1<em>$2</em>');
+    text = text.replace(/\n/g, '<br>');
+    return text;
+}
 // ===== 应用初始化 =====
 
 // 聊天输入框高度自适应：随内容增高，超过上限后内部滚动，清空时回落
@@ -163,6 +174,35 @@ function handleWebSocketMessageV2(msg) {
                     { id: 'overwrite_selected', label: '📝 覆盖选中', style: 'warning' }
                 ],
                 expiresAt: null  // 多项事务卡片无超时
+            });
+            return true;
+        }
+        return false;
+    }
+
+    // 执行结果卡片：提醒已直接创建，无需用户确认，提供"确认无误"和"撤销"按钮
+    if (msg.type === 'execution_result') {
+        if (typeof removeTempMessages === 'function') removeTempMessages();
+        var execLeadMsg = msg.leadMessage || msg.message || '提醒已创建';
+        var execReminderId = msg.reminderId;
+        if (execLeadMsg && typeof addMessage === 'function') {
+            addMessage('bot', execLeadMsg, { skipSave: true });
+        }
+        if (window.CardSystem) {
+            CardSystem.show({
+                message: '已创建提醒',
+                data: {
+                    title: msg.title || '未命名',
+                    remindTime: msg.remindTime || '',
+                    location: msg.location || '',
+                    reminderId: execReminderId,
+                    executed: true
+                },
+                actions: [
+                    { id: 'mark_read', label: '确认无误', style: 'primary' },
+                    { id: 'undo', label: '撤销', style: 'danger' }
+                ],
+                expiresAt: null
             });
             return true;
         }
@@ -391,6 +431,11 @@ window.saveMessageToBackend = saveMessageToBackend;
         var viewMode = 'month';
         var currentWeekOffset = 0;
         var allScheduleData = [];
+        var currentDetailReminderId = null;
+        var currentDetailData = null;
+        var currentDetailMode = 'view';
+        var currentEditSource = null;  // 'reminder' | 'recurring'
+        var currentEditTemplateData = null;  // 改整个周期时暂存模板详情（含 repeatDays 等）
 
         var stompClient = null;
         var isProcessing = false;
@@ -607,6 +652,11 @@ window.saveMessageToBackend = saveMessageToBackend;
             // 清理临时消息
             if (typeof removeTempMessages === 'function') removeTempMessages();
 
+            // 课表卡片保存引用，供编辑弹窗重渲染
+            if (card.type === 'schedule_table_confirm') {
+                lastScheduleTableCard = card;
+            }
+
             var container = document.getElementById('confirmationContainer');
 
             // 使用 CardSystem 处理确认卡片（如可用）
@@ -809,9 +859,23 @@ window.saveMessageToBackend = saveMessageToBackend;
                 var totalCount = (card.data && card.data.totalCount) ? card.data.totalCount : 0;
                 var html = '<div class="confirmation-card schedule-table-card" id="confirmationCard" data-import-id="' + importId + '">';
                 html += '<div class="card-title">' + (card.message || '📚 课表识别完成') + '</div>';
-                
-                // 课程列表
-                if (card.data && card.data.items && card.data.items.length > 0) {
+
+                // 有原文件预览时提示用户对照核对
+                var hasPreview = card.data && card.data.importId && getPreviewUrl(card.data.importId);
+                if (hasPreview) {
+                    html += '<div class="tt-check-hint">📌 请对照左侧原图核对课程信息，如有误可点击课程格修改</div>';
+                }
+
+                // 课程网格：优先星期×节次网格视图（需 courses 含 dayOfWeek/sectionIndices）；
+                // courses 缺失或全部无法定位时，降级为原有垂直列表
+                var courses = (card.data && card.data.courses) || [];
+                var gridHtml = courses.length > 0
+                    ? buildTimetableGrid(courses, (card.data && card.data.timeSections) || [])
+                    : '';
+                if (gridHtml) {
+                    html += '<div class="course-list-header"><span>📖 识别到 ' + totalCount + ' 门课程</span></div>';
+                    html += gridHtml;
+                } else if (card.data && card.data.items && card.data.items.length > 0) {
                     html += '<div class="course-list">';
                     html += '<div class="course-list-header"><span>📖 识别到 ' + totalCount + ' 门课程</span></div>';
                     card.data.items.forEach(function(item, idx) {
@@ -832,24 +896,6 @@ window.saveMessageToBackend = saveMessageToBackend;
                     html += '</div>';
                 }
 
-                // 推断的时间表
-                if (card.data && card.data.timeSections && card.data.timeSections.length > 0) {
-                    html += '<div style="margin-bottom:14px;">';
-                    html += '<div style="font-size:14px;color:var(--brown-mid);margin-bottom:8px;">⏰ 推断的课程时间表</div>';
-                    html += '<div style="background:var(--cream-bg);border-radius:12px;padding:12px;">';
-                    card.data.timeSections.forEach(function(ts) {
-                        if (ts.startTime && ts.endTime) {
-                            html += '<div style="display:flex;align-items:center;gap:12px;padding:3px 0;font-size:13px;border-bottom:1px solid var(--peach-pale);">';
-                            html += '<span style="width:50px;color:var(--brown-mid);font-weight:bold;">第' + ts.index + '节</span>';
-                            html += '<span style="color:var(--brown-deep);">' + ts.startTime + ' - ' + ts.endTime + '</span>';
-                            html += '</div>';
-                        }
-                    });
-                    html += '</div></div>';
-                } else {
-                    html += '<div style="font-size:13px;color:var(--brown-light);padding:8px 0;">⏰ 暂无时间表，请点击"手动调整"配置</div>';
-                }
-
                 // 学期开始日期
                 if (card.data && card.data.semesterStartDate) {
                     html += '<div class="info-item"><span class="info-label">学期开始</span><span class="info-value">' + card.data.semesterStartDate + '</span></div>';
@@ -863,10 +909,15 @@ window.saveMessageToBackend = saveMessageToBackend;
                 html += '<div class="card-actions">';
                 html += '<button class="action-btn primary" onclick="handleScheduleConfirm(\'' + importId + '\', \'confirm\')">✅ 确认生成</button>';
                 html += '<button class="action-btn secondary" onclick="handleScheduleConfirm(\'' + importId + '\', \'adjust\')">✏️ 手动调整</button>';
-                html += '<button class="action-btn danger" onclick="handleScheduleConfirm(\'' + importId + '\', \'cancel\')">❌ 取消</button>';
+                html += '<button class="action-btn danger" onclick="closeScheduleCard()">❌ 取消</button>';
                 html += '</div>';
                 html += '</div>';
                 container.innerHTML = html;
+
+                // 有原文件时自动打开左侧悬浮预览
+                if (card.data && card.data.importId) {
+                    tryOpenPreview(card.data.importId);
+                }
             }
             
             if (card.type === 'time_config_card') {
@@ -875,29 +926,53 @@ window.saveMessageToBackend = saveMessageToBackend;
                 var html = '<div class="confirmation-card time-config-card" id="confirmationCard" data-import-id="' + importId + '">';
                 html += '<div class="card-title">⏰ 课程时间配置</div>';
                 
-                html += '<div class="info-item"><span class="info-label">学期开始日期</span>';
+                html += '<div class="info-item config-head-row">';
+                html += '<span class="info-label" style="width:auto;white-space:nowrap;">学期开始日期</span>';
                 html += '<input type="date" class="date-input" id="semesterStartDate" value="' + (card.data && card.data.semesterStartDate ? card.data.semesterStartDate : '') + '">';
-                html += '</div>';
-
-                html += '<div class="info-item"><span class="info-label">学期总周数</span>';
-                html += '<div style="display:flex;align-items:center;gap:10px;">';
-                html += '<input type="number" id="configTotalWeeks" value="' + (card.data && card.data.totalWeeks ? card.data.totalWeeks : 16) + '" min="1" max="30" style="width:80px;padding:6px 10px;border:2px solid var(--brown-pale);border-radius:8px;font-size:14px;">';
+                html += '<span class="info-label" style="width:auto;white-space:nowrap;margin-left:10px;">学期总周数</span>';
+                html += '<input type="number" id="configTotalWeeks" value="' + (card.data && card.data.totalWeeks ? card.data.totalWeeks : 16) + '" min="1" max="30" style="width:56px;padding:6px 8px;border:2px solid var(--brown-pale);border-radius:8px;font-size:14px;">';
                 html += '<span style="font-size:13px;color:var(--brown-light);">周</span>';
                 if (card.data && card.data.suggestedWeeks) {
-                    html += '<span style="font-size:12px;color:var(--brown-light);margin-left:4px;">（建议 ' + card.data.suggestedWeeks + ' 周）</span>';
+                    html += '<span style="font-size:12px;color:var(--brown-light);">（建议 ' + card.data.suggestedWeeks + ' 周）</span>';
                 }
-                html += '</div></div>';
+                html += '</div>';
                 
+                // 课程时长锁定框起始值：取 AI 识别节次的课时众数，取不到默认 40
+                var initialLockDuration = 40;
+                if (card.data && card.data.timeSections && card.data.timeSections.length > 0) {
+                    var durFreq = {};
+                    var durBest = null;
+                    var durBestCount = 0;
+                    card.data.timeSections.forEach(function(ts) {
+                        if (ts.startTime && ts.endTime) {
+                            var d = calculateDuration(ts.startTime, ts.endTime);
+                            if (d > 0) {
+                                durFreq[d] = (durFreq[d] || 0) + 1;
+                                if (durFreq[d] > durBestCount) {
+                                    durBestCount = durFreq[d];
+                                    durBest = d;
+                                }
+                            }
+                        }
+                    });
+                    if (durBest) initialLockDuration = durBest;
+                }
+
                 html += '<div class="link-mode-group">';
-                html += '<div class="link-mode-label">联动模式：</div>';
+                html += '<span class="link-mode-label">联动模式：</span>';
                 html += '<div class="link-mode-buttons">';
-                html += '<button class="link-mode-btn active" onclick="selectLinkMode(this, \'TOP_DOWN\')">⬇️ 向下联动</button>';
-                html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'BOTTOM_UP\')">⬆️ 向上联动</button>';
-                html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'BOTH\')">⬅️➡️ 双向联动</button>';
-                html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'NONE\')">❌ 互不影响</button>';
+                html += '<button class="link-mode-btn active" onclick="selectLinkMode(this, \'TOP_DOWN\')">↓ 向下联动</button>';
+                html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'BOTTOM_UP\')">↑ 向上联动</button>';
+                html += '<button class="link-mode-btn" onclick="selectLinkMode(this, \'NONE\')">∅ 互不影响</button>';
+                html += '</div>';
+                html += '<div class="lock-duration">';
+                html += '<input type="checkbox" id="lockDurationCheck" onchange="toggleLockDuration(this.checked)">';
+                html += '<span>课程时长:</span>';
+                html += '<input type="number" id="lockDurationInput" min="1" value="' + initialLockDuration + '" disabled onchange="onLockDurationChange(this.value)">';
+                html += '<span>分钟</span>';
                 html += '</div>';
                 html += '</div>';
-                
+
                 html += '<div class="time-slots-container">';
                 html += '<div class="time-slots-header"><span>节次</span><span>开始时间</span><span>结束时间</span></div>';
                 if (card.data && card.data.timeSections) {
@@ -909,10 +984,9 @@ window.saveMessageToBackend = saveMessageToBackend;
                         html += '</div>';
                     });
                 }
+                html += '<div class="add-slot-row"><button type="button" class="add-slot-btn" onclick="addTimeSlot()">＋ 增加节次</button></div>';
                 html += '</div>';
-                
-                html += '<div class="inference-result" id="inferenceResult"></div>';
-                
+
                 html += '<div class="card-actions">';
                 html += '<button class="action-btn primary" onclick="submitTimeConfig(\'' + importId + '\')">✅ 确认配置</button>';
                 html += '<button class="action-btn danger" onclick="handleScheduleConfirm(\'' + importId + '\', \'cancel\')">❌ 取消</button>';
@@ -921,8 +995,11 @@ window.saveMessageToBackend = saveMessageToBackend;
                 container.innerHTML = html;
                 // 默认向下联动，重置状态避免上次选择残留
                 currentLinkMode = 'TOP_DOWN';
-                // 初始推理
-                inferTimeSlots();
+                // 课程时长锁定默认关闭，框值用本卡识别出的课时众数
+                lockDurationEnabled = false;
+                lockDurationValue = initialLockDuration;
+                // 记录初始时间快照，作为模板课间取值的编辑前基准
+                timeSlotsSnapshot = getTimeSlotsFromUI();
             }
             
             if (card.type === 'manual_create_card') {
@@ -957,9 +1034,481 @@ window.saveMessageToBackend = saveMessageToBackend;
         }
 
         // ===== 课表相关函数 =====
-        
+
+        // 星期几 → 列索引（星期一=1 ... 星期日=7），兼容"周一/星期一/Monday"等写法，无法识别返回 0
+        function ttDayIndex(dayOfWeek) {
+            var s = String(dayOfWeek || '');
+            if (s.indexOf('日') >= 0 || s.indexOf('天') >= 0) return 7;
+            var cn = ['一', '二', '三', '四', '五', '六'];
+            for (var i = 0; i < cn.length; i++) {
+                if (s.indexOf(cn[i]) >= 0) return i + 1;
+            }
+            var lower = s.toLowerCase();
+            var en = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+            for (var j = 0; j < en.length; j++) {
+                if (lower.indexOf(en[j]) >= 0) return j + 1;
+            }
+            return 0;
+        }
+
+        // 构建星期×节次课表网格（CSS Grid 显式定位，连堂用 grid-row span 纵向合并）。
+        // 全部无法定位（星期/节次缺失）时返回空串，由调用方降级为列表展示。
+        function buildTimetableGrid(courses, timeSections) {
+            var tsMap = {};
+            (timeSections || []).forEach(function(ts) { tsMap[Number(ts.index)] = ts; });
+
+            // 解析每门课的网格位置，并统计最大节次决定行数
+            var parsed = [];
+            var maxSection = (timeSections || []).length;
+            courses.forEach(function(c, idx) {
+                var dayIdx = ttDayIndex(c.dayOfWeek);
+                var raw = c.sectionIndices;
+                var arr = (Array.isArray(raw) ? raw : (raw != null ? [raw] : []))
+                    .map(Number)
+                    .filter(function(n) { return !isNaN(n) && n > 0; })
+                    .sort(function(a, b) { return a - b; });
+                if (dayIdx === 0 || arr.length === 0) return;
+                parsed.push({ course: c, idx: idx, dayIndex: dayIdx, rowStart: arr[0], rowSpan: arr.length, sections: arr });
+                arr.forEach(function(s) { if (s > maxSection) maxSection = s; });
+            });
+            if (parsed.length === 0 || maxSection === 0) return '';
+
+            // 被课程占用的 (星期, 节次) 格子集合，空格渲染时跳过（span 区域由 CSS Grid 自动让位）
+            var occupied = {};
+            parsed.forEach(function(p) {
+                p.sections.forEach(function(s) { occupied[p.dayIndex + '_' + s] = true; });
+            });
+
+            var html = '<div class="timetable-grid">';
+
+            // 表头行：左上角空白 + 周一~周日
+            html += '<div class="tt-cell tt-corner" style="grid-column:1;grid-row:1;"></div>';
+            var dayNames = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+            for (var d = 0; d < 7; d++) {
+                html += '<div class="tt-cell tt-day" style="grid-column:' + (d + 2) + ';grid-row:1;">' + dayNames[d] + '</div>';
+            }
+
+            // 节次标签列（第 1 列），显示完整时间范围；无 endTime 时只显示 startTime
+            for (var s = 1; s <= maxSection; s++) {
+                var ts = tsMap[s];
+                var timeText = '';
+                if (ts && ts.startTime) {
+                    timeText = ts.endTime ? ts.startTime + '-' + ts.endTime : ts.startTime;
+                }
+                html += '<div class="tt-cell tt-section" style="grid-column:1;grid-row:' + (s + 1) + ';">'
+                    + '<div class="tt-section-name">第' + s + '节</div>'
+                    + (timeText ? '<div class="tt-section-time">' + timeText + '</div>' : '')
+                    + '</div>';
+            }
+
+            // 空格子（未占用位置补白底）
+            for (var r = 1; r <= maxSection; r++) {
+                for (var dd = 1; dd <= 7; dd++) {
+                    if (!occupied[dd + '_' + r]) {
+                        html += '<div class="tt-cell tt-empty" style="grid-column:' + (dd + 1) + ';grid-row:' + (r + 1) + ';"></div>';
+                    }
+                }
+            }
+
+            // 课程格子（连堂纵向 span 合并）
+            parsed.forEach(function(p) {
+                var c = p.course;
+                html += '<div class="tt-cell tt-course" data-course-idx="' + p.idx + '"'
+                    + ' onclick="openCourseEditModal(' + p.idx + ')"'
+                    + ' style="grid-column:' + (p.dayIndex + 1) + ';grid-row:' + (p.rowStart + 1) + ' / span ' + p.rowSpan + ';"'
+                    + ' title="' + (c.title || '') + (c.location ? ' @ ' + c.location : '') + '">'
+                    + '<div class="tt-course-title">' + (c.title || '未知课程') + '</div>'
+                    + (c.location ? '<div class="tt-course-loc">' + c.location + '</div>' : '')
+                    + '</div>';
+            });
+
+            html += '</div>';
+            return html;
+        }
+
+        // ===== 课表单条课程编辑弹窗 =====
+
+        function openCourseEditModal(courseIdx) {
+            if (!lastScheduleTableCard || !lastScheduleTableCard.data || !lastScheduleTableCard.data.courses) return;
+            var courses = lastScheduleTableCard.data.courses;
+            if (courseIdx < 0 || courseIdx >= courses.length) return;
+            var c = courses[courseIdx];
+            currentEditCourseIndex = courseIdx;
+            currentEditImportId = lastScheduleTableCard.data.importId;
+
+            document.getElementById('ceTitle').value = c.title || '';
+            document.getElementById('ceLocation').value = c.location || '';
+            document.getElementById('ceTeacher').value = c.teacher || '';
+
+            // 星期
+            var dow = document.getElementById('ceDayOfWeek');
+            var dowVal = c.dayOfWeek || '星期一';
+            // 标准化：周四 → 星期四（兼容模型返回的简写）
+            var dowNorm = dowVal;
+            if (dowVal.length === 2 && dowVal.charAt(0) === '周') {
+                dowNorm = '星期' + dowVal.charAt(1);
+            }
+            for (var i = 0; i < dow.options.length; i++) {
+                if (dow.options[i].value === dowNorm || dow.options[i].value === dowVal) {
+                    dow.selectedIndex = i;
+                    break;
+                }
+            }
+
+            // 节次起止
+            var sections = (Array.isArray(c.sectionIndices) ? c.sectionIndices : []).map(Number).filter(function(n) { return n > 0; });
+            var start = sections.length > 0 ? Math.min.apply(null, sections) : 1;
+            var end   = sections.length > 0 ? Math.max.apply(null, sections) : 1;
+            document.getElementById('ceSectionStart').value = String(start);
+            document.getElementById('ceSectionEnd').value   = String(end);
+
+            // 周次：数组转范围字符串
+            var weeks = (Array.isArray(c.weeks) ? c.weeks : []);
+            var weeksStr = '';
+            if (weeks.length > 0) {
+                weeksStr = Math.min.apply(null, weeks) + '-' + Math.max.apply(null, weeks);
+            }
+            document.getElementById('ceWeeks').value = weeksStr;
+
+            // 单双周
+            var oe = '';
+            if (c.oddWeek === true) oe = 'odd';
+            else if (c.evenWeek === true) oe = 'even';
+            document.getElementById('ceOddEven').value = oe;
+
+            document.getElementById('courseEditModal').style.display = 'flex';
+        }
+
+        function closeCourseEditModal() {
+            document.getElementById('courseEditModal').style.display = 'none';
+            currentEditCourseIndex = -1;
+            currentEditImportId = null;
+        }
+
+        function saveCourseFromModal() {
+            if (currentEditCourseIndex < 0 || !currentEditImportId) return;
+            var start = parseInt(document.getElementById('ceSectionStart').value, 10);
+            var end   = parseInt(document.getElementById('ceSectionEnd').value, 10);
+            var secStr = (isNaN(start) || isNaN(end))
+                ? ''
+                : (start === end ? String(start) : start + '-' + end);
+
+            var oddEven = document.getElementById('ceOddEven').value;
+
+            var body = {
+                importId: String(currentEditImportId),
+                courseIndex: currentEditCourseIndex,
+                course: {
+                    title: document.getElementById('ceTitle').value || '',
+                    dayOfWeek: document.getElementById('ceDayOfWeek').value,
+                    sectionIndices: secStr,
+                    weeks: document.getElementById('ceWeeks').value || '',
+                    oddWeek: oddEven === 'odd',
+                    evenWeek: oddEven === 'even',
+                    location: document.getElementById('ceLocation').value || '',
+                    teacher: document.getElementById('ceTeacher').value || ''
+                }
+            };
+
+            fetch('/api/schedule/update-course?userId=' + currentUserId, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }).then(function(r) { return r.json(); }).then(function(res) {
+                if (res.success) {
+                    // 更新本地缓存数据并重新渲染卡片
+                    var c = lastScheduleTableCard.data.courses[currentEditCourseIndex];
+                    var upd = body.course;
+                    c.title = upd.title;
+                    c.dayOfWeek = upd.dayOfWeek;
+                    c.sectionIndices = (start === end ? [start] : (function() { var a=[]; for(var i=start;i<=end;i++) a.push(i); return a; })());
+                    c.weeks = parseWeekRangeStr(upd.weeks);
+                    c.oddWeek = upd.oddWeek;
+                    c.evenWeek = upd.evenWeek;
+                    c.location = upd.location;
+                    c.teacher = upd.teacher;
+                    showConfirmationCard(lastScheduleTableCard);
+                    closeCourseEditModal();
+                } else {
+                    alert('保存失败：' + (res.message || '未知错误'));
+                }
+            }).catch(function(e) { console.error(e); alert('网络错误，保存失败'); });
+        }
+
+        function deleteCourseFromModal() {
+            if (currentEditCourseIndex < 0 || !currentEditImportId) return;
+            if (!confirm('确认删除这门课程吗？')) return;
+            var body = {
+                importId: String(currentEditImportId),
+                courseIndex: currentEditCourseIndex
+            };
+            fetch('/api/schedule/delete-course?userId=' + currentUserId, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            }).then(function(r) { return r.json(); }).then(function(res) {
+                if (res.success) {
+                    lastScheduleTableCard.data.courses.splice(currentEditCourseIndex, 1);
+                    showConfirmationCard(lastScheduleTableCard);
+                    closeCourseEditModal();
+                } else {
+                    alert('删除失败：' + (res.message || '未知错误'));
+                }
+            }).catch(function(e) { console.error(e); alert('网络错误，删除失败'); });
+        }
+
+        // 周次/节次字符串转 List<Integer> 的客户端辅助函数
+        function parseWeekRangeStr(range) {
+            var weeks = [];
+            if (!range) return weeks;
+            range = String(range).trim();
+            if (range.indexOf(',') >= 0) {
+                range.split(',').forEach(function(p) { var n=parseInt(p.trim(),10); if(!isNaN(n)) weeks.push(n); });
+            } else if (range.indexOf('-') >= 0) {
+                var parts = range.split('-');
+                var s = parseInt(parts[0].trim(),10), e = parseInt(parts[1].trim(),10);
+                if (!isNaN(s) && !isNaN(e)) for (var i = s; i <= e; i++) weeks.push(i);
+            } else {
+                var n = parseInt(range,10); if (!isNaN(n)) weeks.push(n);
+            }
+            return weeks;
+        }
+
         var currentLinkMode = 'TOP_DOWN';
+        // 上一拍时间快照：模板课间在"改 start"时取编辑前值；卡片渲染时初始化
+        var timeSlotsSnapshot = null;
+        // 课程时长锁定：勾选后改 start/end 按框值反推另一端，传播课时统一用框值
+        var lockDurationEnabled = false;
+        var lockDurationValue = 40;
         var manualCourseRowCount = 0;
+        // 课表编辑弹窗状态
+        var lastScheduleTableCard = null;
+        var currentEditCourseIndex = -1;
+        var currentEditImportId = null;
+
+        // 课表上传原文件暂存：importId -> { file, previewUrl, fileType }，供"原文件预览"使用
+        var scheduleFileMap = {};
+        var currentUploadTempKey = null;  // 上传进行中暂存的临时 key，拿到 importId 后转正
+
+        // 获取某次导入的原文件预览 URL（无则返回 null）
+        function getPreviewUrl(importId) {
+            var entry = scheduleFileMap[String(importId)];
+            return entry ? entry.previewUrl : null;
+        }
+
+        // 获取某次导入的原文件类型（MIME，如 image/jpeg、application/pdf）
+        function getPreviewFileType(importId) {
+            var entry = scheduleFileMap[String(importId)];
+            return entry ? entry.fileType : null;
+        }
+
+        // 获取某次导入的原文件名（Excel 后缀兜底判断用）
+        function getPreviewFileName(importId) {
+            var entry = scheduleFileMap[String(importId)];
+            return (entry && entry.file) ? (entry.file.name || '') : '';
+        }
+
+        // 获取某次导入的 Excel 转 HTML 结果（无则返回 null）
+        function getPreviewHtml(importId) {
+            var entry = scheduleFileMap[String(importId)];
+            return entry ? (entry.htmlContent || null) : null;
+        }
+
+        // 释放某次导入的原文件资源（objectURL + Map 条目）
+        function cleanupScheduleFile(importId) {
+            var key = String(importId);
+            var entry = scheduleFileMap[key];
+            if (entry) {
+                if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
+                delete scheduleFileMap[key];
+            }
+        }
+
+        // Excel 文件转 HTML 并挂到 entry 上；完成后若预览框正在显示该文件则刷新内容
+        function parseExcelToHtml(file, entry) {
+            if (!entry) return;
+            file.arrayBuffer().then(function(buf) {
+                try {
+                    var wb = XLSX.read(buf, { type: 'array' });
+                    var html = '';
+                    wb.SheetNames.forEach(function(name) {
+                        html += '<div class="fpp-sheet-name">' + name + '</div>';
+                        // 用 sheet_to_json 手动拼表格，绕开 sheet_to_html 的兼容性问题
+                        var rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, raw: false, defval: '' });
+                        html += '<table>';
+                        rows.forEach(function(row) {
+                            html += '<tr>';
+                            row.forEach(function(cell) {
+                                var text = (cell != null ? String(cell) : '')
+                                    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                                html += '<td>' + text + '</td>';
+                            });
+                            html += '</tr>';
+                        });
+                        html += '</table>';
+                    });
+                    entry.htmlContent = html;
+                    console.log('Excel 解析完成，htmlContent 长度:', html.length);
+                    // 反查当前 key（可能已从 temp 转正为 importId），若预览框已打开则刷新
+                    var importId = null;
+                    for (var k in scheduleFileMap) {
+                        if (scheduleFileMap[k] === entry) { importId = k; break; }
+                    }
+                    var panel = document.getElementById('filePreviewPanel');
+                    var body = document.getElementById('filePreviewBody');
+                    if (importId && panel && panel.style.display !== 'none'
+                            && body && body.querySelector('.fpp-empty')) {
+                        body.innerHTML = '<div class="fpp-excel">' + html + '</div>';
+                    }
+                    // 卡片已渲染但预览框未开时补开（内部校验 importId 匹配）
+                    if (importId) tryOpenPreview(importId);
+                } catch (e) {
+                    console.warn('Excel 解析失败', e);
+                }
+            }).catch(function(e) {
+                console.warn('Excel 读取失败', e);
+            });
+        }
+
+        // 打开原文件悬浮预览框（固定左侧）
+        function openFilePreview(importId) {
+            var panel = document.getElementById('filePreviewPanel');
+            var body = document.getElementById('filePreviewBody');
+            if (!panel || !body) return;
+
+            // 未被拖拽过时用初始位置（左侧居中）；拖拽过则保持用户调整的位置
+            if (!panel.style.left) {
+                panel.style.left = '24px';
+                panel.style.top = '50%';
+                panel.style.transform = 'translateY(-50%)';
+            }
+
+            var url = getPreviewUrl(importId);
+            var fileType = getPreviewFileType(importId) || '';
+
+            if (!url) {
+                body.innerHTML = '<div class="fpp-empty">原文件预览不可用（可能已刷新页面）</div>';
+                panel.style.display = 'flex';
+                return;
+            }
+
+            if (fileType.indexOf('image/') === 0) {
+                body.innerHTML = '<img src="' + url + '" alt="原文件预览">';
+            } else if (fileType.indexOf('pdf') >= 0) {
+                body.innerHTML = '<iframe src="' + url + '"></iframe>';
+            } else if (fileType.indexOf('spreadsheet') >= 0
+                    || fileType.indexOf('ms-excel') >= 0
+                    || /\.xlsx?$/i.test(getPreviewFileName(importId))) {
+                var excelHtml = getPreviewHtml(importId);
+                if (excelHtml) {
+                    body.innerHTML = '<div class="fpp-excel">' + excelHtml + '</div>';
+                } else {
+                    // 解析未完成：显示提示并短轮询（300ms × 最多10次）
+                    body.innerHTML = '<div class="fpp-empty">Excel 解析中...</div>';
+                    pollExcelPreview(importId, 0);
+                }
+            } else {
+                body.innerHTML = '<div class="fpp-empty">该文件类型暂不支持预览</div>';
+            }
+            panel.style.display = 'flex';
+        }
+
+        // Excel 解析中短轮询：htmlContent 就绪后刷新预览框内容（仅当预览框仍打开且还在"解析中"状态）
+        function pollExcelPreview(importId, attempt) {
+            if (attempt > 10) {
+                var bodyTimeout = document.getElementById('filePreviewBody');
+                if (bodyTimeout && bodyTimeout.querySelector('.fpp-empty')) {
+                    bodyTimeout.innerHTML = '<div class="fpp-empty">Excel 解析失败或超时</div>';
+                }
+                return;
+            }
+            var html = getPreviewHtml(importId);
+            if (html) {
+                var panel = document.getElementById('filePreviewPanel');
+                var body = document.getElementById('filePreviewBody');
+                if (panel && panel.style.display !== 'none' && body && body.querySelector('.fpp-empty')) {
+                    body.innerHTML = '<div class="fpp-excel">' + html + '</div>';
+                }
+                return;
+            }
+            setTimeout(function() { pollExcelPreview(importId, attempt + 1); }, 300);
+        }
+
+        // 关闭原文件悬浮预览框
+        function closeFilePreview() {
+            var panel = document.getElementById('filePreviewPanel');
+            if (panel) panel.style.display = 'none';
+        }
+
+        // 预览框拖拽/缩放状态
+        var fppDragState = null;
+        var fppResizeState = null;
+
+        // 初始化预览框拖拽（标题栏拖动）与缩放（右下角手柄），只绑定一次
+        function initFilePreviewDrag() {
+            var panel = document.getElementById('filePreviewPanel');
+            var header = document.getElementById('fppHeader');
+            var resize = document.getElementById('fppResize');
+            if (!panel || !header || !resize) return;
+
+            header.addEventListener('mousedown', function(e) {
+                if (e.target.classList.contains('fpp-close')) return;
+                fppDragState = {
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    startLeft: panel.offsetLeft,
+                    startTop: panel.offsetTop
+                };
+                e.preventDefault();
+            });
+
+            resize.addEventListener('mousedown', function(e) {
+                fppResizeState = {
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    startWidth: panel.offsetWidth,
+                    startHeight: panel.offsetHeight
+                };
+                e.preventDefault();
+                e.stopPropagation();
+            });
+
+            document.addEventListener('mousemove', function(e) {
+                if (fppDragState) {
+                    var dx = e.clientX - fppDragState.startX;
+                    var dy = e.clientY - fppDragState.startY;
+                    var newLeft = fppDragState.startLeft + dx;
+                    var newTop = fppDragState.startTop + dy;
+                    newLeft = Math.max(0, Math.min(newLeft, window.innerWidth - panel.offsetWidth));
+                    newTop = Math.max(0, Math.min(newTop, window.innerHeight - panel.offsetHeight));
+                    panel.style.left = newLeft + 'px';
+                    panel.style.top = newTop + 'px';
+                    panel.style.transform = 'none';
+                } else if (fppResizeState) {
+                    var dw = e.clientX - fppResizeState.startX;
+                    var dh = e.clientY - fppResizeState.startY;
+                    var newWidth = Math.max(240, Math.min(fppResizeState.startWidth + dw, 800));
+                    var newHeight = Math.max(200, Math.min(fppResizeState.startHeight + dh, window.innerHeight - 100));
+                    panel.style.width = newWidth + 'px';
+                    panel.style.height = newHeight + 'px';
+                }
+            });
+
+            document.addEventListener('mouseup', function() {
+                fppDragState = null;
+                fppResizeState = null;
+            });
+        }
+
+        // 尝试打开预览：只在该 importId 的课表卡片正在显示时才打开，避免误开
+        function tryOpenPreview(importId) {
+            if (!importId) return;
+            if (!lastScheduleTableCard || !lastScheduleTableCard.data) return;
+            if (String(lastScheduleTableCard.data.importId) !== String(importId)) return;
+            if (getPreviewUrl(importId)) {
+                openFilePreview(importId);
+            }
+        }
 
         function getImportIdFromCard() {
             var card = document.getElementById('confirmationCard');
@@ -986,8 +1535,27 @@ window.saveMessageToBackend = saveMessageToBackend;
             return null;
         }
 
+        // 顶层课表卡片的"取消"：彻底关闭并清空引用，不返回
+        function closeScheduleCard() {
+            var importId = lastScheduleTableCard && lastScheduleTableCard.data
+                ? lastScheduleTableCard.data.importId : null;
+            var container = document.getElementById('confirmationContainer');
+            if (container) container.innerHTML = '';
+            lastScheduleTableCard = null;
+            closeFilePreview();
+            // 释放原文件预览资源
+            if (importId) cleanupScheduleFile(importId);
+        }
+
         function handleScheduleConfirm(importId, action) {
             if (action === 'cancel') {
+                // 子卡片取消：若课表卡片数据还在内存且 importId 匹配，则返回重渲染课表卡片
+                if (lastScheduleTableCard && lastScheduleTableCard.data
+                        && String(lastScheduleTableCard.data.importId) === String(importId)) {
+                    showConfirmationCard(lastScheduleTableCard);
+                    return;
+                }
+                // 否则彻底关闭
                 var container = document.getElementById('confirmationContainer');
                 if (container) container.innerHTML = '';
                 return;
@@ -1006,6 +1574,8 @@ window.saveMessageToBackend = saveMessageToBackend;
                 .then(function(res) { return res.json(); })
                 .then(function(result) {
                     if (result.success) {
+                        closeFilePreview();
+                        cleanupScheduleFile(importId);
                         showSchedulePreview(result);
                     } else {
                         addMessage('bot', '❌ ' + result.message);
@@ -1064,7 +1634,6 @@ window.saveMessageToBackend = saveMessageToBackend;
                     if (slot._userFilled) row.dataset.userFilled = 'true';
                 }
             });
-            inferTimeSlots();
         }
 
         function selectLinkMode(el, mode) {
@@ -1074,7 +1643,114 @@ window.saveMessageToBackend = saveMessageToBackend;
                 btn.classList.remove('active');
             });
             el.classList.add('active');
-            inferTimeSlots();
+        }
+
+        // 勾选/取消"课程时长锁定"：切换只影响之后的编辑行为，已填节次不动
+        function toggleLockDuration(checked) {
+            lockDurationEnabled = checked;
+            var input = document.getElementById('lockDurationInput');
+            if (checked && input) {
+                var v = parseInt(input.value);
+                if (v > 0) lockDurationValue = v;
+            }
+            if (input) input.disabled = !checked;
+        }
+
+        // 框值修改（锁定状态下）：整表重排
+        // 第1节 start 不动；每节 end = start + 新框值；第2节起 start = 上一节end + 原课间
+        function onLockDurationChange(value) {
+            var v = parseInt(value);
+            if (!v || v <= 0) return;
+            lockDurationValue = v;
+
+            var slots = getTimeSlotsFromUI();
+            if (slots.length === 0 || !slots[0].startTime) return;
+
+            // 先记录各行原课间（第 i 节end → 第 i+1 节start），取不到兜底10
+            var originalBreaks = [];
+            for (var i = 0; i < slots.length - 1; i++) {
+                var b = 10;
+                if (slots[i].endTime && slots[i + 1].startTime) {
+                    var g = calculateDuration(slots[i].endTime, slots[i + 1].startTime);
+                    if (g > 0) b = g;
+                }
+                originalBreaks.push(b);
+            }
+
+            // 第1节 start 不动，end = start + 新框值
+            slots[0].endTime = addMinutes(slots[0].startTime, v);
+            // 第2节起依次重排
+            for (var j = 1; j < slots.length; j++) {
+                slots[j].startTime = addMinutes(slots[j - 1].endTime, originalBreaks[j - 1]);
+                slots[j].endTime = addMinutes(slots[j].startTime, v);
+            }
+
+            updateTimeSlotsUI(slots);
+            timeSlotsSnapshot = slots.map(function(s) {
+                return { index: s.index, startTime: s.startTime, endTime: s.endTime };
+            });
+        }
+
+        // 增加节次：表尾追加一节，data-index 连续递增，并同步快照
+        function addTimeSlot() {
+            var slots = getTimeSlotsFromUI();
+            var maxIndex = 0;
+            slots.forEach(function(s) {
+                if (s.index > maxIndex) maxIndex = s.index;
+            });
+            var newIndex = maxIndex + 1;
+
+            var prev = slots.length > 0 ? slots[slots.length - 1] : null;
+            var prevPrev = slots.length >= 2 ? slots[slots.length - 2] : null;
+
+            // 默认课间：用上一节与它前一节的间隔，兜底10
+            var breakTime = 10;
+            if (prevPrev && prevPrev.endTime && prev.startTime) {
+                var g = calculateDuration(prevPrev.endTime, prev.startTime);
+                if (g > 0) breakTime = g;
+            }
+
+            // 课时：打勾用框值；不打勾用上一节时长，取不到用框值/40兜底
+            var duration;
+            if (lockDurationEnabled) {
+                duration = lockDurationValue > 0 ? lockDurationValue : 40;
+            } else if (prev && prev.startTime && prev.endTime) {
+                var pd = calculateDuration(prev.startTime, prev.endTime);
+                duration = pd > 0 ? pd : (lockDurationValue > 0 ? lockDurationValue : 40);
+            } else {
+                duration = lockDurationValue > 0 ? lockDurationValue : 40;
+            }
+
+            var startTime = '';
+            var endTime = '';
+            if (prev && prev.endTime) {
+                startTime = addMinutes(prev.endTime, breakTime);
+                endTime = addMinutes(startTime, duration);
+            }
+
+            // 插入到"增加节次"按钮行之前
+            var container = document.querySelector('.time-slots-container');
+            if (!container) return;
+            var wrap = document.createElement('div');
+            wrap.innerHTML =
+                '<div class="time-slot-row" data-index="' + newIndex + '">' +
+                '<span class="slot-index">第' + newIndex + '节</span>' +
+                '<input type="time" class="slot-start" value="' + startTime + '" onchange="onTimeSlotChange(this, \'start\')">' +
+                '<input type="time" class="slot-end" value="' + endTime + '" onchange="onTimeSlotChange(this, \'end\')">' +
+                '</div>';
+            var newRow = wrap.firstChild;
+            var addRow = container.querySelector('.add-slot-row');
+            if (addRow) {
+                container.insertBefore(newRow, addRow);
+            } else {
+                container.appendChild(newRow);
+            }
+
+            // 快照同步补上新行，避免新行第一次改 start 时模板课间取不到
+            var allSlots = getTimeSlotsFromUI();
+            timeSlotsSnapshot = allSlots.map(function(s) {
+                return { index: s.index, startTime: s.startTime, endTime: s.endTime };
+            });
         }
 
         function onTimeSlotChange(input, field) {
@@ -1088,6 +1764,15 @@ window.saveMessageToBackend = saveMessageToBackend;
 
             current._userFilled = true;
 
+            // 课程时长锁定：改 start → end=start+框值；改 end → start=end−框值
+            if (lockDurationEnabled && lockDurationValue > 0) {
+                if (field === 'start' && current.startTime) {
+                    current.endTime = addMinutes(current.startTime, lockDurationValue);
+                } else if (field === 'end' && current.endTime) {
+                    current.startTime = subtractMinutes(current.endTime, lockDurationValue);
+                }
+            }
+
             function getFirstClassDuration(slotList) {
                 // 跳过 current（正在被修改的节次），避免用 start 新值 / end 旧值的过渡态推时长
                 var first = slotList.find(function(s) {
@@ -1100,121 +1785,154 @@ window.saveMessageToBackend = saveMessageToBackend;
                 return 45;
             }
 
-            var classDuration = getFirstClassDuration(slots);
-
-            if (field === 'start') {
-                current.endTime = addMinutes(current.startTime, classDuration);
+            // 本节新课时长：改 end 为新时长（拉伸），改 start 后课时 = end − 新start
+            var classDuration;
+            if (current.startTime && current.endTime
+                && current.startTime.length > 0 && current.endTime.length > 0) {
+                var newDuration = calculateDuration(current.startTime, current.endTime);
+                classDuration = (newDuration > 0) ? newDuration : getFirstClassDuration(slots);
+            } else {
+                classDuration = getFirstClassDuration(slots);
+            }
+            // 锁定时课时以框值为准
+            if (lockDurationEnabled && lockDurationValue > 0) {
+                classDuration = lockDurationValue;
             }
 
-            if (field === 'end') {
-                var newDuration = calculateDuration(current.startTime, current.endTime);
-                if (newDuration > 0) {
-                    classDuration = newDuration;
+            // 模板 = 第 1~idx 节（idx 为本次编辑节次，0-based），第 idx+1 节起按模板循环重推
+            var templateDurations = [];
+            var templateBreaks = [];
+            for (var ti = 0; ti <= idx; ti++) {
+                if (slots[ti].startTime && slots[ti].endTime) {
+                    templateDurations.push(calculateDuration(slots[ti].startTime, slots[ti].endTime));
+                }
+                if (ti < idx) {
+                    // 课间取值按 field 分流：改 start 用编辑前快照，改 end 用编辑后当前值
+                    var breakVal = null;
+                    if (field === 'start') {
+                        var snapA = timeSlotsSnapshot ? timeSlotsSnapshot[ti] : null;
+                        var snapB = timeSlotsSnapshot ? timeSlotsSnapshot[ti + 1] : null;
+                        if (snapA && snapA.endTime && snapB && snapB.startTime) {
+                            breakVal = calculateDuration(snapA.endTime, snapB.startTime);
+                        }
+                    } else {
+                        if (slots[ti].endTime && slots[ti + 1].startTime) {
+                            breakVal = calculateDuration(slots[ti].endTime, slots[ti + 1].startTime);
+                        }
+                    }
+                    if (breakVal !== null) {
+                        templateBreaks.push(breakVal);
+                    }
                 }
             }
 
-            // 根据 currentLinkMode 控制联动方向
-            // TOP_DOWN：影响 fromIdx 之后；BOTTOM_UP：影响 fromIdx 之前；BOTH：双向
-            if (currentLinkMode === 'TOP_DOWN' || currentLinkMode === 'BOTH') {
-                propagateDownward(slots, idx, classDuration);
+            // N=0 特例：改第1节时模板没有课间，取快照里"第1节end→第2节start"，取不到兜底10分钟
+            if (idx === 0) {
+                var snap0 = timeSlotsSnapshot ? timeSlotsSnapshot[0] : null;
+                var snap1 = timeSlotsSnapshot ? timeSlotsSnapshot[1] : null;
+                if (snap0 && snap0.endTime && snap1 && snap1.startTime) {
+                    templateBreaks.push(calculateDuration(snap0.endTime, snap1.startTime));
+                } else {
+                    templateBreaks.push(10);
+                }
             }
-            if (currentLinkMode === 'BOTTOM_UP' || currentLinkMode === 'BOTH') {
-                propagateUpward(slots, idx, classDuration);
+
+            // 锁定时下游/上游传播课时统一用框值，不再走模板课时循环（课间仍走模板课间循环）
+            if (lockDurationEnabled && lockDurationValue > 0) {
+                templateDurations = [lockDurationValue];
+            }
+
+            // NONE 模式：只写用户改的 input，不传播、不 validate、不联动
+            if (currentLinkMode === 'NONE') {
+                updateTimeSlotsUI(slots);
+                timeSlotsSnapshot = slots.map(function(s) {
+                    return { index: s.index, startTime: s.startTime, endTime: s.endTime };
+                });
+                return;
+            }
+
+            // 根据 currentLinkMode 控制联动方向
+            // TOP_DOWN：影响 idx 之后；BOTTOM_UP：影响 idx 之前
+            if (currentLinkMode === 'TOP_DOWN') {
+                propagateDownward(slots, idx, templateDurations, templateBreaks);
+            }
+            if (currentLinkMode === 'BOTTOM_UP') {
+                propagateUpward(slots, idx, templateDurations, templateBreaks);
             }
 
             // === 再次检查，确保所有节次时间合法 ===
             slots = validateAllSlots(slots, classDuration);
 
             updateTimeSlotsUI(slots);
-            inferTimeSlots();
+
+            // 刷新快照，作为下一次编辑的"编辑前"基准
+            timeSlotsSnapshot = slots.map(function(s) {
+                return { index: s.index, startTime: s.startTime, endTime: s.endTime };
+            });
         }
 
-        // 向下联动：更新 fromIdx 之后的所有节次
-        function propagateDownward(slots, fromIdx, classDuration) {
-            for (var i = fromIdx + 1; i < slots.length; i++) {
-                var target = slots[i];
-                var prev = slots[i - 1];
-                if (target._userFilled) continue;
+        // 向下联动：以第 1~N 节（N 为本次编辑节次，0-based）为模板，循环重推 N 之后的所有节次
+        // 第 N+1 节对应模板第 1 节：时长取 durations[0]、课间取 breaks[0]，之后按 offset 循环取值；
+        // 手填行同样被重推，不保留已有 start，历史 _userFilled 不影响模板边界
+        function propagateDownward(slots, N, durations, breaks) {
+            if (durations.length === 0) return;
+            var templateCount = durations.length;
+            var breakCount = breaks.length;
 
-                // startTime 为空时，基于前一节 endTime + 课间自动推断
-                if (!target.startTime || target.startTime.length === 0) {
-                    if (prev && prev.endTime && prev.endTime.length > 0) {
-                        var autoBreak = getDefaultBreakTime(slots, i);
-                        target.startTime = addMinutes(prev.endTime, autoBreak);
-                        target.endTime = addMinutes(target.startTime, classDuration);
-                    }
-                    continue;
+            for (var i = N + 1; i < slots.length; i++) {
+                var offset = i - N - 1;
+                var duration = durations[offset % templateCount];
+
+                var breakTime;
+                if (breakCount > 0) {
+                    // offset=0（第 N+1 节）对齐模板第 1→2 节的课间，之后循环
+                    var breakIdx = (offset === 0) ? 0 : offset % breakCount;
+                    breakTime = breaks[breakIdx];
+                } else {
+                    breakTime = 0;
                 }
 
-                // startTime 有值：若时间倒退（早于前一节 endTime）则前移
-                if (prev && prev.endTime && prev.endTime.length > 0) {
-                    var gap = calculateDuration(prev.endTime, target.startTime);
-                    if (gap < 0) {
-                        var breakTime = getDefaultBreakTime(slots, i);
-                        target.startTime = addMinutes(prev.endTime, breakTime);
-                    }
-                }
-                target.endTime = addMinutes(target.startTime, classDuration);
-            }
-        }
+                var prevEnd = slots[i - 1].endTime;
+                if (!prevEnd) continue;  // 前一节没 endTime，推不了
 
-        // 向上联动：更新 fromIdx 之前的所有节次（基于后续节次反推）
-        function propagateUpward(slots, fromIdx, classDuration) {
-            var standardBreak = getStandardBreak(slots);
-            for (var i = fromIdx - 1; i >= 0; i--) {
-                var target = slots[i];
-                var next = slots[i + 1];
-                if (target._userFilled) continue;
-                if (!next || !next.startTime || next.startTime.length === 0) continue;
-
-                // endTime = 下一节 startTime - 标准课间；startTime = endTime - 课时长
-                target.endTime = subtractMinutes(next.startTime, standardBreak);
-                target.startTime = subtractMinutes(target.endTime, classDuration);
+                slots[i].startTime = addMinutes(prevEnd, breakTime);
+                slots[i].endTime = addMinutes(slots[i].startTime, duration);
             }
         }
 
-        // 获取标准课间时长：统计所有相邻节次间隔的众数，无数据时默认 10 分钟
-        function getStandardBreak(slots) {
-            var breaks = [];
-            for (var i = 0; i < slots.length - 1; i++) {
-                var a = slots[i];
-                var b = slots[i + 1];
-                if (a.endTime && a.endTime.length > 0 && b.startTime && b.startTime.length > 0) {
-                    var g = calculateDuration(a.endTime, b.startTime);
-                    if (g > 0 && g < 120) {
-                        breaks.push(g);
-                    }
-                }
-            }
-            var mostCommon = getMostCommon(breaks);
-            return (mostCommon && mostCommon > 0) ? mostCommon : 10;
-        }
+        // 向上联动：以第 1~N 节（N 为本次编辑节次，0-based）为模板，循环重推 N 之前的所有节次
+        // offset = N-1-i；end = 后一节start - 课间[offset % 课间数]；start = end - 课时[offset % 课时数]
+        // 手填行同样被重推，不跳过，历史 _userFilled 不影响模板边界
+        function propagateUpward(slots, N, durations, breaks) {
+            if (durations.length === 0) return;
+            var templateCount = durations.length;
+            var breakCount = breaks.length;
 
-        function getDefaultBreakTime(slots, index) {
-            var prev = slots[index - 1];
-            var next = slots[index];
-            if (prev && prev.endTime && next && next.startTime) {
-                var gap = calculateDuration(prev.endTime, next.startTime);
-                if (gap > 0 && gap < 120) {
-                    return gap;
+            for (var i = N - 1; i >= 0; i--) {
+                var offset = N - 1 - i;
+                var duration = durations[offset % templateCount];
+
+                var breakTime;
+                if (breakCount > 0) {
+                    breakTime = breaks[offset % breakCount];
+                } else {
+                    breakTime = 0;
                 }
+
+                var nextStart = slots[i + 1] ? slots[i + 1].startTime : null;
+                if (!nextStart) continue;  // 后一节没 startTime，推不了
+
+                slots[i].endTime = subtractMinutes(nextStart, breakTime);
+                slots[i].startTime = subtractMinutes(slots[i].endTime, duration);
             }
-            var breaks = [];
-            for (var i = 0; i < slots.length - 1; i++) {
-                var a = slots[i];
-                var b = slots[i + 1];
-                if (a.endTime && a.endTime.length > 0 && b.startTime && b.startTime.length > 0) {
-                    var g = calculateDuration(a.endTime, b.startTime);
-                    if (g > 0 && g < 120) {
-                        breaks.push(g);
-                    }
-                }
-            }
-            var mostCommon = getMostCommon(breaks);
-            return (mostCommon && mostCommon > 0) ? mostCommon : 10;
         }
 
         function validateAllSlots(slots, classDuration) {
+            // TOP_DOWN：只往后推，前面的节次一律不变（向下联动已由 propagateDownward 完成）
+            // NONE：不联动，不做任何自动修复
+            if (currentLinkMode === 'TOP_DOWN' || currentLinkMode === 'NONE') {
+                return slots;
+            }
             for (var i = 1; i < slots.length; i++) {
                 var prev = slots[i - 1];
                 var current = slots[i];
@@ -1268,25 +1986,6 @@ window.saveMessageToBackend = saveMessageToBackend;
             return parseTimeToMinutes(end) - parseTimeToMinutes(start);
         }
 
-        function getMostCommon(arr) {
-            if (!arr || arr.length === 0) return null;
-            var map = {};
-            arr.forEach(function(v) {
-                if (v > 0) {
-                    map[v] = (map[v] || 0) + 1;
-                }
-            });
-            var maxCount = 0;
-            var maxVal = null;
-            for (var key in map) {
-                if (map[key] > maxCount) {
-                    maxCount = map[key];
-                    maxVal = parseInt(key);
-                }
-            }
-            return maxVal;
-        }
-
         function addMinutes(time, minutes) {
             if (!time || !minutes) return time;
             var parts = time.split(':').map(Number);
@@ -1294,93 +1993,6 @@ window.saveMessageToBackend = saveMessageToBackend;
             var h = String(Math.floor(total / 60)).padStart(2, '0');
             var m = String(total % 60).padStart(2, '0');
             return h + ':' + m;
-        }
-
-        function inferTimeSlots() {
-            var slots = getTimeSlotsFromUI();
-            var resultEl = document.getElementById('inferenceResult');
-            if (!resultEl) return;
-
-            var completeSlots = slots.filter(function(s) {
-                return s.startTime && s.endTime && s.startTime.length > 0 && s.endTime.length > 0;
-            });
-
-            if (completeSlots.length === 0) {
-                resultEl.innerHTML = '⏳ 请填写至少一个节次的开始和结束时间，系统将自动推理';
-                return;
-            }
-
-            var classDurations = completeSlots.map(function(s) {
-                var dur = calculateDuration(s.startTime, s.endTime);
-                return { index: s.index, duration: dur };
-            });
-
-            var breakInfos = [];
-            for (var i = 0; i < slots.length - 1; i++) {
-                var current = slots[i];
-                var next = slots[i + 1];
-                if (current.endTime && current.endTime.length > 0 &&
-                    next.startTime && next.startTime.length > 0) {
-                    var gap = calculateDuration(current.endTime, next.startTime);
-                    if (gap > 0 && gap < 180) {
-                        breakInfos.push({
-                            from: current.index,
-                            to: next.index,
-                            gap: gap,
-                            fromEnd: current.endTime,
-                            toStart: next.startTime
-                        });
-                    }
-                }
-            }
-
-            var durations = classDurations.map(function(d) { return d.duration; });
-            var inferredClassDuration = getMostCommon(durations);
-            if (!inferredClassDuration || inferredClassDuration <= 0) {
-                inferredClassDuration = 45;
-            }
-
-            var gaps = breakInfos.map(function(b) { return b.gap; });
-            var inferredBreak = getMostCommon(gaps);
-            if (!inferredBreak || inferredBreak <= 0) {
-                inferredBreak = 10;
-            }
-
-            var longBreaks = breakInfos.filter(function(b) {
-                return b.gap > inferredBreak * 1.5;
-            });
-
-            var html = '';
-            html += '<div style="font-size:14px;color:var(--brown-deep);font-weight:bold;margin-bottom:8px;">📊 推理结果</div>';
-            html += '<div style="font-size:13px;color:var(--brown-mid);margin-bottom:4px;">⏱ 每节课时长：<strong style="color:var(--brown-deep);">' + inferredClassDuration + ' 分钟</strong></div>';
-
-            if (breakInfos.length > 0) {
-                html += '<div style="font-size:13px;color:var(--brown-mid);margin-top:4px;">☕ 课间休息：</div>';
-                html += '<div style="font-size:12px;color:var(--brown-light);padding-left:12px;">';
-                breakInfos.forEach(function(b) {
-                    var isLong = b.gap > inferredBreak * 1.5;
-                    var label = isLong ? ' 🔸 大课间' : ' ✅ 普通';
-                    html += '第' + b.from + '→' + b.to + '节：' + b.gap + ' 分钟' + label + '<br>';
-                });
-                html += '</div>';
-            }
-
-            var totalClasses = classDurations.length;
-            var totalMinutes = classDurations.reduce(function(sum, d) { return sum + d.duration; }, 0);
-            var totalBreak = breakInfos.reduce(function(sum, b) { return sum + b.gap; }, 0);
-
-            html += '<div style="font-size:12px;color:var(--brown-light);margin-top:6px;border-top:1px solid var(--peach-pale);padding-top:6px;">';
-            html += '已填写 ' + totalClasses + ' 节课，共 ' + totalMinutes + ' 分钟';
-            if (breakInfos.length > 0) {
-                html += '，课间共 ' + totalBreak + ' 分钟';
-            }
-            html += '</div>';
-
-            if (longBreaks.length > 0) {
-                html += '<div style="font-size:12px;color:#FFB347;margin-top:4px;">💡 检测到 ' + longBreaks.length + ' 个大课间（间隔 > ' + inferredBreak + ' 分钟）</div>';
-            }
-
-            resultEl.innerHTML = html;
         }
 
         function submitTimeConfig(importId) {
@@ -1440,10 +2052,40 @@ window.saveMessageToBackend = saveMessageToBackend;
             html += '<button class="action-btn secondary" onclick="handleConfirmationAction(\'schedule_skip\', \'' + importId + '\')">⏭️ 创建无冲突部分</button>';
             html += '<button class="action-btn warning" onclick="handleConfirmationAction(\'schedule_overwrite\', \'' + importId + '\')">📝 全部覆盖</button>';
             html += '<button class="action-btn secondary" onclick="handleScheduleConfirm(\'' + importId + '\', \'adjust\')">✏️ 修改</button>';
-            html += '<button class="action-btn danger" onclick="handleConfirmationAction(\'cancel\', \'' + importId + '\')">❌ 取消</button>';
+            html += '<button class="action-btn danger" onclick="cancelSchedulePreview(\'' + importId + '\')">❌ 取消</button>';
             html += '</div>';
             html += '</div>';
             container.innerHTML = html;
+        }
+
+        // 清空课表预览卡片 + 关闭原文件预览框
+        function clearSchedulePreviewCard() {
+            var container = document.getElementById('confirmationContainer');
+            if (container) container.innerHTML = '';
+            closeFilePreview();
+        }
+
+        // 预览卡片"取消"：通知后端删除临时导入记录，成功后清空卡片
+        function cancelSchedulePreview(importId) {
+            var token = localStorage.getItem('token');
+            var headers = {};
+            if (token) headers['Authorization'] = 'Bearer ' + token;
+            fetch('/api/schedule/cancel/' + importId + '?userId=' + currentUserId, {
+                method: 'POST',
+                headers: headers
+            })
+            .then(function(res) { return res.json(); })
+            .then(function(result) {
+                if (result.success) {
+                    addMessage('bot', result.message || '好的，已取消导入～', { skipSave: false });
+                    clearSchedulePreviewCard();
+                } else {
+                    addMessage('bot', '❌ ' + (result.message || '取消失败'));
+                }
+            })
+            .catch(function(err) {
+                addMessage('bot', '❌ 网络错误，请重试');
+            });
         }
 
         function addManualCourseRow() {
@@ -2250,9 +2892,13 @@ window.saveMessageToBackend = saveMessageToBackend;
                     } else {
                         const scheduleResult = await scheduleResponse.json();
                         if (scheduleResult.success) {
-                            handleConfirmFinalResponse(scheduleResult, true, sessionId);
+                            // handleConfirmFinalResponse 会被 markSessionDone 的去重检查拦截，
+                            // 且课表预览卡未注册进 CardSystem，这里直接清理并提示
+                            addMessage('bot', scheduleResult.message || '✅ 日程创建成功', { skipSave: false });
+                            clearSchedulePreviewCard();
                             conflictStates = {};
                             currentConflictList = [];
+                            if (typeof renderCalendar === 'function') renderCalendar();
                         } else {
                             addMessage('bot', '❌ ' + (scheduleResult.message || '操作失败'));
                             if (scheduleBtn) {
@@ -2719,6 +3365,9 @@ window.saveMessageToBackend = saveMessageToBackend;
                 });
             }
 
+            // 初始化原文件预览框的拖拽/缩放
+            initFilePreviewDrag();
+
             // 加载聊天历史
             setTimeout(function() {
                 loadChatHistory();
@@ -2874,6 +3523,8 @@ window.saveMessageToBackend = saveMessageToBackend;
                     addMessage('bot', result.message);
                     document.getElementById('confirmationContainer').innerHTML = '';
                     renderCalendar();
+                    // AI 触发导出：识别 toolResult 里的 export_reminders 信号，再调导出接口生成文件
+                    handleAgentExportResult(result.toolResult);
                     if (result.message && (result.message.indexOf('📍') !== -1 || result.message.indexOf('城市') !== -1 || result.message.indexOf('位置') !== -1)) {
                         loadProfile && loadProfile();
                     }
@@ -3043,6 +3694,31 @@ window.saveMessageToBackend = saveMessageToBackend;
             formData.append('file', file);
             formData.append('userId', currentUserId);
 
+            // 暂存 File 对象（临时 key），上传成功后关联到 importId，供原文件预览使用
+            var tempKey = 'temp_' + Date.now();
+            scheduleFileMap[tempKey] = { file: file, previewUrl: null, fileType: file.type || '' };
+            currentUploadTempKey = tempKey;
+
+            // Excel 异步转 HTML（SheetJS）。entry 对象引用在 temp key 转正时不变，直接挂在对象上即可避免时序问题
+            var isExcelFile = (file.type || '').indexOf('spreadsheet') >= 0
+                || (file.type || '').indexOf('ms-excel') >= 0
+                || /\.xlsx?$/i.test(file.name || '');
+            console.log('Excel check:', file.name, file.type, isExcelFile, 'XLSX:', typeof XLSX);
+            if (isExcelFile) {
+                if (typeof XLSX === 'undefined') {
+                    console.warn('SheetJS 未加载，延迟 2 秒后重试解析');
+                    setTimeout(function() {
+                        if (typeof XLSX === 'undefined') {
+                            console.warn('SheetJS 仍不可用，放弃解析');
+                            return;
+                        }
+                        parseExcelToHtml(file, scheduleFileMap[tempKey]);
+                    }, 2000);
+                } else {
+                    parseExcelToHtml(file, scheduleFileMap[tempKey]);
+                }
+            }
+
             lockChatInput(); // 解析处理期间锁定输入
             addMessage('user', '📎 上传文件：' + file.name);
 
@@ -3064,6 +3740,22 @@ window.saveMessageToBackend = saveMessageToBackend;
 
                 if (result.success) {
                     removeTempMessages(); // 清理⏳临时提示
+
+                    // 关联 importId：临时 key 转正，并生成预览 URL
+                    if (result.importId) {
+                        if (currentUploadTempKey && scheduleFileMap[currentUploadTempKey]) {
+                            scheduleFileMap[String(result.importId)] = scheduleFileMap[currentUploadTempKey];
+                            delete scheduleFileMap[currentUploadTempKey];
+                        }
+                        currentUploadTempKey = null;
+                        var entry = scheduleFileMap[String(result.importId)];
+                        if (entry && !entry.previewUrl) {
+                            entry.previewUrl = URL.createObjectURL(entry.file);
+                        }
+                        // WebSocket 卡片可能已先渲染，这里补开预览（内部会校验 importId 匹配）
+                        tryOpenPreview(result.importId);
+                    }
+
                     if (result.needTimeConfig) {
                         // 课表场景：卡片由 WebSocket 推送
                         addMessage('bot', '✅ ' + (result.message || '课表识别完成'));
@@ -3088,6 +3780,8 @@ window.saveMessageToBackend = saveMessageToBackend;
                                         importId: result.importId || '',
                                         totalCount: result.totalCount || 0,
                                         items: items,
+                                        // 完整课程数据（含 sectionIndices），供网格视图渲染
+                                        courses: result.courses || [],
                                         semesterStartDate: result.semesterStartDate
                                     }
                                 };
@@ -3117,10 +3811,20 @@ window.saveMessageToBackend = saveMessageToBackend;
                 } else {
                     removeTempMessages(); // 清理⏳临时提示
                     addMessage('bot', '❌ 识别失败：' + (result.message || '请重试'));
+                    // 识别失败：丢弃暂存的原文件
+                    if (currentUploadTempKey) {
+                        delete scheduleFileMap[currentUploadTempKey];
+                        currentUploadTempKey = null;
+                    }
                 }
             } catch (e) {
                 removeTempMessages(); // 清理⏳临时提示
                 addMessage('bot', '❌ 上传失败：网络错误，请重试');
+                // 上传失败：丢弃暂存的原文件
+                if (currentUploadTempKey) {
+                    delete scheduleFileMap[currentUploadTempKey];
+                    currentUploadTempKey = null;
+                }
             }
         }
 
@@ -3178,7 +3882,7 @@ window.saveMessageToBackend = saveMessageToBackend;
             if (opts.replaceId) {
                 var existing = document.getElementById(opts.replaceId);
                 if (existing) {
-                    existing.innerHTML = text.replace(/\n/g, '<br>');
+                    existing.innerHTML = renderMarkdown(text);
                     existing.classList.remove('fade-in');
                     // 触发重新动画
                     void existing.offsetWidth;
@@ -3199,7 +3903,7 @@ window.saveMessageToBackend = saveMessageToBackend;
                 var msg = document.createElement('div');
                 msg.className = 'chat-message ' + role + (opts.className ? ' ' + opts.className : '');
                 msg.id = msgId;
-                msg.innerHTML = text.replace(/\n/g, '<br>');
+                msg.innerHTML = renderMarkdown(text);
 
                 if (opts.isTemp) msg.setAttribute('data-temp', 'true');
                 if (opts.groupId) msg.setAttribute('data-group', opts.groupId);
@@ -3217,7 +3921,7 @@ window.saveMessageToBackend = saveMessageToBackend;
                 var msg = document.createElement('div');
                 msg.className = 'chat-message ' + role + (opts.className ? ' ' + opts.className : '');
                 msg.id = msgId;
-                msg.innerHTML = text.replace(/\n/g, '<br>');
+                msg.innerHTML = renderMarkdown(text);
                 if (opts.isTemp) msg.setAttribute('data-temp', 'true');
                 if (opts.groupId) msg.setAttribute('data-group', opts.groupId);
                 history.appendChild(msg);
@@ -3419,8 +4123,11 @@ window.saveMessageToBackend = saveMessageToBackend;
             var sessionId = result.sessionId;
             var groupId = 'card-' + sessionId;
 
-            // 显示引导语为临时消息（确认后自动消失），不保存到后端
-            if (leadMsg) {
+            // 去重：WebSocket 推送 confirmation_card 时已经 addMessage 过引导语（同 data-group 属性），
+            // HTTP 响应到达时不应重复显示，否则会出现"卡片 + 两条引导语（其中一条是 buildDefaultLead 错误文案）"
+            // 极端兜底：如果同 groupId 的 bot 消息尚不存在（WebSocket 未到或 leadMsg 为空），才正常 addMessage
+            var existingLead = document.querySelector('.chat-message[data-group="' + groupId + '"]');
+            if (!existingLead && leadMsg) {
                 addMessage('bot', leadMsg, { skipSave: true, isTemp: true, groupId: groupId });
             }
 
@@ -3455,6 +4162,11 @@ window.saveMessageToBackend = saveMessageToBackend;
                     CardSystem.removeCard(sid);
                 }
                 clearPendingSession(sid);
+                // 兜底：课表/导入卡片未注册进 CardSystem，若容器仍残留则清空
+                var container = document.getElementById('confirmationContainer');
+                if (container && container.children.length > 0) {
+                    container.innerHTML = '';
+                }
             } else {
                 // 兼容旧调用：清空所有卡片
                 removeTempMessages();
@@ -4198,6 +4910,18 @@ window.saveMessageToBackend = saveMessageToBackend;
                 return;
             }
 
+            // 已取消日程默认隐藏，勾选"显示已取消"后展示（置灰删除线样式仍保留）
+            var showCancelled = localStorage.getItem('showCancelled') === 'true';
+            if (!showCancelled) {
+                reminders = reminders.filter(function(r) {
+                    return r.status !== 'CANCELLED';
+                });
+            }
+            if (reminders.length === 0) {
+                items.innerHTML = '<div class="empty-schedule">该时段暂无日程安排</div>';
+                return;
+            }
+
             var sorted = reminders.slice().sort(function(a, b) {
                 return (a.remindTime || '').localeCompare(b.remindTime || '');
             });
@@ -4264,6 +4988,9 @@ window.saveMessageToBackend = saveMessageToBackend;
 
                 block.title = r.title + (r.location ? ' @ ' + r.location : '')
                     + (r.isRecurring && r.recurringRange ? ' · 周期提醒：' + r.recurringRange : '');
+                block.dataset.id = r.id;
+                block.style.cursor = 'pointer';
+                block.addEventListener('click', function() { showScheduleDetail(r.id); });
                 blocks.appendChild(block);
 
                 row.appendChild(blocks);
@@ -4283,7 +5010,17 @@ window.saveMessageToBackend = saveMessageToBackend;
                 return;
             }
 
-            var sorted = reminders.slice().sort(function(a, b) {
+            // 已取消日程默认隐藏，勾选"显示已取消"后展示（置灰删除线样式仍保留）
+            var showCancelled = localStorage.getItem('showCancelled') === 'true';
+            var visibleReminders = reminders.filter(function(r) {
+                return showCancelled || r.status !== 'CANCELLED';
+            });
+            if (visibleReminders.length === 0) {
+                items.innerHTML = '<div class="empty-schedule">该时段暂无日程安排</div>';
+                return;
+            }
+
+            var sorted = visibleReminders.slice().sort(function(a, b) {
                 return (a.remindTime || '').localeCompare(b.remindTime || '');
             });
 
@@ -4337,6 +5074,9 @@ window.saveMessageToBackend = saveMessageToBackend;
 
                 block.title = r.title + (r.location ? ' @ ' + r.location : '')
                     + (r.isRecurring && r.recurringRange ? ' · 周期提醒：' + r.recurringRange : '');
+                block.dataset.id = r.id;
+                block.style.cursor = 'pointer';
+                block.addEventListener('click', function() { showScheduleDetail(r.id); });
                 blocks.appendChild(block);
 
                 row.appendChild(blocks);
@@ -4351,6 +5091,16 @@ window.saveMessageToBackend = saveMessageToBackend;
             items.innerHTML = '';
 
             if (!reminders || reminders.length === 0) {
+                items.innerHTML = '<div class="empty-schedule">该时段暂无日程安排</div>';
+                return;
+            }
+
+            // 已取消日程默认隐藏，勾选"显示已取消"后展示（置灰删除线样式仍保留）
+            var showCancelled = localStorage.getItem('showCancelled') === 'true';
+            reminders = reminders.filter(function(r) {
+                return showCancelled || r.status !== 'CANCELLED';
+            });
+            if (reminders.length === 0) {
                 items.innerHTML = '<div class="empty-schedule">该时段暂无日程安排</div>';
                 return;
             }
@@ -4433,6 +5183,9 @@ window.saveMessageToBackend = saveMessageToBackend;
                             if (reminder.location) blockTitle += ' @ ' + reminder.location;
                             if (reminder.isRecurring && reminder.recurringRange) blockTitle += ' · 周期提醒：' + reminder.recurringRange;
                             block.title = blockTitle;
+                            block.dataset.id = reminder.id;
+                            block.style.cursor = 'pointer';
+                            block.addEventListener('click', function() { showScheduleDetail(reminder.id); });
                             cell.appendChild(block);
                         });
                         if (reminderList.length > 1) {
@@ -4510,6 +5263,867 @@ window.saveMessageToBackend = saveMessageToBackend;
             });
             document.getElementById('prevBtn').onclick = prevPeriod;
             document.getElementById('nextBtn').onclick = nextPeriod;
+
+            // 侧栏收缩/展开
+            var toggleBtn = document.getElementById('sidebarToggle');
+            var expandBtn = document.getElementById('sidebarExpand');
+            var layout = document.querySelector('.calendar-with-detail');
+            var pageCal = document.getElementById('page-calendar');
+
+            if (toggleBtn && layout && pageCal) {
+                toggleBtn.addEventListener('click', function() {
+                    layout.classList.add('sidebar-collapsed');
+                    pageCal.classList.add('sidebar-collapsed');
+                    localStorage.setItem('calendarSidebarCollapsed', 'true');
+                });
+            }
+            if (expandBtn && layout && pageCal) {
+                expandBtn.addEventListener('click', function() {
+                    layout.classList.remove('sidebar-collapsed');
+                    pageCal.classList.remove('sidebar-collapsed');
+                    localStorage.setItem('calendarSidebarCollapsed', 'false');
+                });
+            }
+
+            // 恢复上次状态
+            if (layout && pageCal && localStorage.getItem('calendarSidebarCollapsed') === 'true') {
+                layout.classList.add('sidebar-collapsed');
+                pageCal.classList.add('sidebar-collapsed');
+            }
+
+            // 显示/隐藏已取消日程
+            var cancelledToggle = document.getElementById('showCancelledToggle');
+            if (cancelledToggle) {
+                cancelledToggle.checked = localStorage.getItem('showCancelled') === 'true';
+                cancelledToggle.addEventListener('change', function() {
+                    localStorage.setItem('showCancelled', this.checked ? 'true' : 'false');
+                    renderCalendar();
+                });
+            }
+
+            renderDetailEmptyState();
+        }
+
+        // ===== 导出提醒面板 =====
+        // 打开导出面板：默认"全部"日期、四种状态全选（HTML 已默认 checked）、格式默认 Excel
+        function openExportPanel() {
+            var panel = document.getElementById('exportPanel');
+            if (!panel) return;
+            bindExportPanelListeners();
+            panel.classList.add('show');
+        }
+
+        // 关闭导出面板
+        function closeExportPanel() {
+            var panel = document.getElementById('exportPanel');
+            if (panel) panel.classList.remove('show');
+        }
+
+        // 面板内部事件绑定（只绑一次）：预设按钮、手动日期联动、遮罩点击、Esc 关闭
+        function bindExportPanelListeners() {
+            if (bindExportPanelListeners._bound) return;
+            bindExportPanelListeners._bound = true;
+
+            var panel = document.getElementById('exportPanel');
+            if (!panel) return;
+
+            // 预设按钮：最近7天 / 最近30天 / 全部，点击后高亮并自动填充/清空日期
+            panel.querySelectorAll('.export-preset-btn').forEach(function(btn) {
+                btn.addEventListener('click', function() {
+                    panel.querySelectorAll('.export-preset-btn').forEach(function(b) { b.classList.remove('active'); });
+                    this.classList.add('active');
+                    applyExportDatePreset(this.getAttribute('data-preset'));
+                });
+            });
+
+            // 手动改日期：取消预设高亮，以手动值为准
+            ['exportStartDate', 'exportEndDate'].forEach(function(id) {
+                var input = document.getElementById(id);
+                if (input) {
+                    input.addEventListener('input', function() {
+                        panel.querySelectorAll('.export-preset-btn').forEach(function(b) { b.classList.remove('active'); });
+                    });
+                }
+            });
+
+            // 点遮罩空白处关闭
+            panel.addEventListener('click', function(e) {
+                if (e.target === panel) closeExportPanel();
+            });
+
+            // Esc 关闭
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && panel.classList.contains('show')) closeExportPanel();
+            });
+        }
+
+        // 应用日期预设：7=最近7天，30=最近30天，all=全部（清空手动选择器，确认时不传日期参数）
+        function applyExportDatePreset(preset) {
+            var startInput = document.getElementById('exportStartDate');
+            var endInput = document.getElementById('exportEndDate');
+            if (preset === 'all') {
+                startInput.value = '';
+                endInput.value = '';
+                return;
+            }
+            var days = parseInt(preset, 10);
+            var today = new Date();
+            var start = new Date();
+            start.setDate(today.getDate() - (days - 1));
+            startInput.value = formatExportDate(start);
+            endInput.value = formatExportDate(today);
+        }
+
+        // 本地日期转 yyyy-MM-dd（不用 toISOString，避免时区偏移导致日期差一天）
+        function formatExportDate(d) {
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        }
+
+        // 确认导出：组装参数调后端 /api/reminders/export；
+        // 本阶段只把数据打印到 console 并 toast 条数，Excel/PNG 文件生成放后续阶段
+        async function confirmExport() {
+            var userId = localStorage.getItem('userId');
+            if (!userId) {
+                window.location.href = '/login';
+                return;
+            }
+
+            var startDate = document.getElementById('exportStartDate').value;
+            var endDate = document.getElementById('exportEndDate').value;
+
+            // 起止日期必须成对填写，避免用户误解范围
+            if ((startDate && !endDate) || (!startDate && endDate)) {
+                showToast('请同时选择开始和结束日期，或点"全部"', false);
+                return;
+            }
+            if (startDate && endDate && startDate > endDate) {
+                showToast('开始日期不能晚于结束日期', false);
+                return;
+            }
+
+            var statuses = [];
+            document.querySelectorAll('#exportPanel .export-status-item input[type="checkbox"]:checked').forEach(function(cb) {
+                statuses.push(cb.value);
+            });
+            if (statuses.length === 0) {
+                showToast('请至少勾选一个提醒状态', false);
+                return;
+            }
+
+            var formatRadio = document.querySelector('#exportPanel input[name="exportFormat"]:checked');
+            var formatValue = formatRadio ? formatRadio.value : 'excel';
+
+            // 防连点：请求期间禁用确认按钮
+            var confirmBtn = document.getElementById('exportConfirmBtn');
+            if (confirmBtn.disabled) return;
+            confirmBtn.disabled = true;
+
+            try {
+                var params = new URLSearchParams({ userId: userId, statuses: statuses.join(',') });
+                if (startDate) params.append('startDate', startDate);
+                if (endDate) params.append('endDate', endDate);
+
+                var res = await fetch('/api/reminders/export?' + params.toString(), {
+                    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+                });
+                if (!res.ok) {
+                    throw new Error('HTTP ' + res.status);
+                }
+                var data = await res.json();
+                console.log('[导出提醒] 格式=%s, 条数=%d, 数据=', formatValue, data.length, data);
+
+                // 空结果：提示后保留面板，方便用户调整筛选条件
+                if (data.length === 0) {
+                    showToast('当前筛选条件下没有提醒数据', false);
+                    return;
+                }
+
+                if (formatValue === 'excel') {
+                    // Excel：SheetJS 生成 .xlsx 并直接触发下载
+                    exportRemindersToExcel(data);
+                    showToast('已导出 ' + data.length + ' 条提醒到 Excel', true);
+                    closeExportPanel();
+                } else {
+                    // PNG：渲染隐藏清单视图 → html2canvas 截图 → 下载
+                    var pngOk = await exportRemindersToPng(data);
+                    if (pngOk) {
+                        showToast('已导出 ' + data.length + ' 条提醒到 PNG 图片', true);
+                        closeExportPanel();
+                    }
+                }
+            } catch (e) {
+                console.error('[导出提醒] 获取数据失败:', e);
+                showToast('获取导出数据失败，请稍后再试', false);
+            } finally {
+                confirmBtn.disabled = false;
+            }
+        }
+
+        // 提醒导出：状态英文枚举 → 中文展示名（与 ReminderStatus.displayName 对齐）
+        function mapExportStatus(status) {
+            var map = {
+                'PENDING': '待推送',
+                'REMINDED': '已推送待确认',
+                'SENT': '已推送',
+                'COMPLETED': '已完成',
+                'CANCELLED': '已取消',
+                'EXPIRED': '已过期'
+            };
+            return map[status] || status || '';
+        }
+
+        // 提醒导出：优先级英文枚举 → 中文展示名
+        function mapExportPriority(priority) {
+            var map = { 'LOW': '低', 'NORMAL': '普通', 'HIGH': '高' };
+            return map[priority] || priority || '';
+        }
+
+        // 用 SheetJS（全局 XLSX，index.html 已引入 CDN）把提醒数组生成 .xlsx 并触发下载
+        // 列顺序固定：序号 / 标题 / 提醒时间 / 结束时间 / 地点 / 备注 / 优先级 / 状态 / 创建时间
+        function exportRemindersToExcel(data) {
+            if (typeof XLSX === 'undefined') {
+                showToast('Excel 组件未加载，请刷新页面后重试', false);
+                return;
+            }
+
+            // 中文字段映射：对象 key 即表头，json_to_sheet 按 key 插入顺序生成列
+            var rows = data.map(function(r, i) {
+                return {
+                    '序号': i + 1,
+                    '标题': r.title || '',
+                    '提醒时间': r.remindTime || '',
+                    '结束时间': r.endTime || '',
+                    '地点': r.location || '',
+                    '备注': r.note || '',
+                    '优先级': mapExportPriority(r.priority),
+                    '状态': mapExportStatus(r.status),
+                    '创建时间': r.createdAt || ''
+                };
+            });
+
+            var worksheet = XLSX.utils.json_to_sheet(rows);
+            // 列宽：按内容性质设可读宽度，避免打开后挤在一起
+            worksheet['!cols'] = [
+                { wch: 6 },   // 序号
+                { wch: 24 },  // 标题
+                { wch: 20 },  // 提醒时间
+                { wch: 20 },  // 结束时间
+                { wch: 14 },  // 地点
+                { wch: 20 },  // 备注
+                { wch: 8 },   // 优先级
+                { wch: 12 },  // 状态
+                { wch: 20 }   // 创建时间
+            ];
+
+            var workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, '提醒导出');
+
+            // 文件名：提醒导出_yyyyMMdd.xlsx（导出当天，复用本地日期格式化避免时区偏移）
+            var dateStr = formatExportDate(new Date()).replace(/-/g, '');
+            XLSX.writeFile(workbook, '提醒导出_' + dateStr + '.xlsx');
+        }
+
+        // 用 html2canvas 把隐藏清单视图渲染成 PNG 并触发下载，返回是否成功
+        async function exportRemindersToPng(data) {
+            if (typeof html2canvas === 'undefined') {
+                showToast('图片组件未加载，请刷新页面后重试', false);
+                return false;
+            }
+
+            var container = document.getElementById('exportListView');
+            if (!container) return false;
+
+            // 渲染清单内容：标题 + 生成时间 + 表格（标题/地点走转义，防内容里的 HTML 字符破坏结构）
+            var now = new Date();
+            var rowsHtml = data.map(function(r, i) {
+                return '<tr>' +
+                    '<td>' + (i + 1) + '</td>' +
+                    '<td>' + escapeExportHtml(r.title) + '</td>' +
+                    '<td>' + (r.remindTime || '') + '</td>' +
+                    '<td>' + escapeExportHtml(r.location) + '</td>' +
+                    '<td>' + mapExportPriority(r.priority) + '</td>' +
+                    '<td>' + mapExportStatus(r.status) + '</td>' +
+                    '</tr>';
+            }).join('');
+
+            container.innerHTML =
+                '<div class="export-list-title">提醒清单</div>' +
+                '<div class="export-list-subtitle">生成时间：' + formatExportDateTime(now) + ' · 共 ' + data.length + ' 条</div>' +
+                '<table class="export-list-table"><thead><tr>' +
+                '<th>序号</th><th>标题</th><th>提醒时间</th><th>地点</th><th>优先级</th><th>状态</th>' +
+                '</tr></thead><tbody>' + rowsHtml + '</tbody></table>' +
+                '<div class="export-list-footer">RemindMe 导出</div>';
+
+            try {
+                // scale: 2 保证图片清晰；白底避免透明背景
+                var canvas = await html2canvas(container, { backgroundColor: '#ffffff', scale: 2 });
+                var blob = await new Promise(function(resolve) { canvas.toBlob(resolve, 'image/png'); });
+                if (!blob) return false;
+
+                // Blob + a[download] 触发下载（与 memory.js 导出同一模式）
+                var url = URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = '提醒导出_' + formatExportDate(now).replace(/-/g, '') + '.png';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                return true;
+            } catch (e) {
+                console.error('[导出提醒] PNG 生成失败:', e);
+                showToast('PNG 生成失败，请稍后再试', false);
+                return false;
+            } finally {
+                container.innerHTML = '';  // 截完清空，避免残留内容影响下次截图
+            }
+        }
+
+        // 本地日期时间转 yyyy-MM-dd HH:mm（用于清单视图副标题）
+        function formatExportDateTime(d) {
+            return formatExportDate(d) + ' ' +
+                String(d.getHours()).padStart(2, '0') + ':' +
+                String(d.getMinutes()).padStart(2, '0');
+        }
+
+        // 导出内容转义：防标题/地点里的 <>&" 字符破坏清单 HTML 结构
+        function escapeExportHtml(text) {
+            if (!text) return '';
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        // ===== AI 对话触发导出 =====
+        // 识别 Agent 响应 toolResult 中的 export_reminders 信号，触发二次取数 + 文件下载。
+        // 采用"信号 + 二次取数"模式：工具只回传筛选条件和条数（明细不进 LLM 上下文），
+        // 前端据此重新调 /api/reminders/export 拿数据，复用面板导出的生成函数。
+        function handleAgentExportResult(toolResult) {
+            if (!toolResult) return;
+            var info = toolResult;
+            if (typeof toolResult === 'string') {
+                try { info = JSON.parse(toolResult); } catch (e) { return; }
+            }
+            if (!info || info.action !== 'export_reminders' || info.success !== true) return;
+            exportRemindersBySignal(info.startDate, info.endDate, info.downloadHint);
+        }
+
+        // 按 AI 给出的范围调导出接口拿数据并生成文件；状态固定四种，与面板"全选"语义一致
+        async function exportRemindersBySignal(startDate, endDate, downloadHint) {
+            var userId = localStorage.getItem('userId');
+            if (!userId) return;
+            try {
+                var params = new URLSearchParams({
+                    userId: userId,
+                    statuses: 'PENDING,COMPLETED,CANCELLED,EXPIRED'
+                });
+                if (startDate) params.append('startDate', startDate);
+                if (endDate) params.append('endDate', endDate);
+
+                var res = await fetch('/api/reminders/export?' + params.toString(), {
+                    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                var data = await res.json();
+
+                if (data.length === 0) {
+                    showToast('该范围内没有提醒数据', false);
+                    return;
+                }
+                if (downloadHint === 'png') {
+                    await exportRemindersToPng(data);
+                } else {
+                    exportRemindersToExcel(data);
+                }
+                showToast('已导出 ' + data.length + ' 条提醒', true);
+            } catch (e) {
+                console.error('[AI导出提醒] 失败:', e);
+                showToast('导出失败，请稍后再试', false);
+            }
+        }
+
+        // ===== 日程详情面板 =====
+        async function showScheduleDetail(id) {
+            if (!id) return;
+            currentDetailReminderId = id;
+
+            document.querySelectorAll('.schedule-block.selected').forEach(function(el) {
+                el.classList.remove('selected');
+            });
+            document.querySelectorAll('.schedule-block[data-id="' + id + '"]').forEach(function(el) {
+                el.classList.add('selected');
+            });
+
+            var panel = document.getElementById('scheduleDetailPanel');
+            if (!panel) return;
+
+            panel.innerHTML = '<button class="schedule-detail-toggle" id="sidebarToggle">‹</button>'
+                + '<div class="schedule-detail-empty">加载中...</div>';
+            rebindSidebarToggle();
+
+            try {
+                var userId = localStorage.getItem('userId');
+                var res = await fetch('/api/reminders/' + id + '?userId=' + userId, {
+                    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+                });
+                if (!res.ok) throw new Error('加载失败');
+                var data = await res.json();
+                renderScheduleDetailPanel(data);
+            } catch (e) {
+                panel.innerHTML = '<button class="schedule-detail-toggle" id="sidebarToggle">‹</button>'
+                    + '<div class="schedule-detail-empty">加载失败，请重试</div>';
+                rebindSidebarToggle();
+            }
+        }
+
+        // ===== 日程详情字段映射 =====
+        function mapPriority(v) {
+            var map = { LOW: '低', NORMAL: '普通', HIGH: '高' };
+            return map[v] || v || '-';
+        }
+
+        function mapStatus(v) {
+            var map = {
+                PENDING: '待提醒', SENT: '已发送', CANCELLED: '已取消',
+                EXPIRED: '已过期', COMPLETED: '已完成', REMINDED: '已提醒'
+            };
+            return map[v] || v || '-';
+        }
+
+        function mapConfirmStatus(v) {
+            var map = {
+                PENDING: '待确认', CONFIRMED: '已确认',
+                CANCELLED: '已取消', DEFAULTED: '默认确认'
+            };
+            return map[v] || v || '-';
+        }
+
+        function mapSource(v) {
+            var map = {
+                USER_INPUT: '手动创建', WEATHER_LINK: '天气联动',
+                EXCEL_IMPORT: '表格导入', PERIOD_REMINDER: '经期提醒'
+            };
+            return map[v] || v || '-';
+        }
+
+        function mapRepeatType(v) {
+            var map = { DAILY: '每天', WEEKLY: '每周', MONTHLY: '每月' };
+            return map[v] || v || '-';
+        }
+
+        function formatDetailTime(v) {
+            if (!v) return '-';
+            var m = String(v).match(/(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+            if (!m) return v;
+            return parseInt(m[2]) + '月' + parseInt(m[3]) + '日 ' + m[4] + ':' + m[5];
+        }
+
+        function renderScheduleDetailPanel(data) {
+            var panel = document.getElementById('scheduleDetailPanel');
+            if (!panel) return;
+            currentDetailData = data;
+            currentDetailMode = 'view';
+            currentEditSource = null;
+            currentEditTemplateData = null;
+
+            var html = '<button class="schedule-detail-toggle" id="sidebarToggle">‹</button>'
+                + '<button class="schedule-detail-close" onclick="closeScheduleDetail()">×</button>'
+                + '<div class="schedule-detail-content">'
+                + '<h3>' + (data.title || '无标题') + '</h3>';
+
+            var timeText = formatDetailTime(data.remindTime);
+            if (data.endTime) {
+                timeText += ' - ' + formatDetailTime(data.endTime);
+            }
+            html += '<div class="detail-row"><span class="label">时间</span><span>' + timeText + '</span></div>';
+
+            if (data.location) {
+                html += '<div class="detail-row"><span class="label">地点</span><span>' + data.location + '</span></div>';
+            }
+
+            if (data.note) {
+                html += '<div class="detail-row"><span class="label">备注</span><span>' + data.note + '</span></div>';
+            }
+
+            html += '<div class="detail-row"><span class="label">优先级</span><span>' + mapPriority(data.priority) + '</span></div>';
+            html += '<div class="detail-row"><span class="label">推送状态</span><span>' + mapStatus(data.status) + '</span></div>';
+            html += '<div class="detail-row"><span class="label">确认状态</span><span>' + mapConfirmStatus(data.confirmStatus) + '</span></div>';
+            html += '<div class="detail-row"><span class="label">来源</span><span>' + mapSource(data.source) + '</span></div>';
+
+            if (data.isRecurring) {
+                html += '<div class="detail-row"><span class="label">重复</span><span>⟳ ' + mapRepeatType(data.repeatType);
+                if (data.recurringRange) {
+                    html += ' · ' + data.recurringRange;
+                }
+                html += '</span></div>';
+            }
+
+            html += '<div class="detail-actions">'
+                + '<button class="detail-btn edit" id="detailEditBtn">✏️ 修改</button>'
+                + '<button class="detail-btn delete" id="detailDeleteBtn">🗑️ 删除</button>'
+                + '</div>';
+            html += '</div>';
+            panel.innerHTML = html;
+            rebindSidebarToggle();
+            bindDetailDeleteButton();
+        }
+
+        function closeScheduleDetail() {
+            currentDetailReminderId = null;
+            currentDetailData = null;
+            document.querySelectorAll('.schedule-block.selected').forEach(function(el) {
+                el.classList.remove('selected');
+            });
+            renderDetailEmptyState();
+        }
+
+        function renderDetailEmptyState() {
+            var panel = document.getElementById('scheduleDetailPanel');
+            if (!panel) return;
+            panel.innerHTML = '<button class="schedule-detail-toggle" id="sidebarToggle">‹</button>'
+                + '<div class="schedule-detail-empty">点击日程查看详情</div>';
+            rebindSidebarToggle();
+        }
+
+        function rebindSidebarToggle() {
+            var btn = document.getElementById('sidebarToggle');
+            if (!btn) return;
+            btn.addEventListener('click', function() {
+                var layout = document.querySelector('.calendar-with-detail');
+                var pageCal = document.getElementById('page-calendar');
+                layout.classList.add('sidebar-collapsed');
+                pageCal.classList.add('sidebar-collapsed');
+                localStorage.setItem('calendarSidebarCollapsed', 'true');
+            });
+        }
+
+        // ===== 详情面板删除/修改 =====
+        function bindDetailDeleteButton() {
+            var btn = document.getElementById('detailDeleteBtn');
+            if (btn) {
+                btn.dataset.confirming = '0';
+                btn.addEventListener('click', onDeleteClick);
+            }
+            var editBtn = document.getElementById('detailEditBtn');
+            if (editBtn) editBtn.addEventListener('click', onEditClick);
+        }
+
+        function onDeleteClick() {
+            if (!currentDetailData) return;
+            if (currentDetailData.parentRecurringId) {
+                showRecurringDeleteModal();
+            } else {
+                handleNormalDelete();
+            }
+        }
+
+        function handleNormalDelete() {
+            var btn = document.getElementById('detailDeleteBtn');
+            if (!btn) return;
+            if (btn.dataset.confirming === '1') {
+                doDeleteReminder(currentDetailData.id);
+            } else {
+                btn.dataset.confirming = '1';
+                btn.textContent = '⚠️ 确定删除？';
+                btn.classList.add('confirming');
+                setTimeout(function() {
+                    if (btn && btn.dataset.confirming === '1') {
+                        btn.dataset.confirming = '0';
+                        btn.textContent = '🗑️ 删除';
+                        btn.classList.remove('confirming');
+                    }
+                }, 3000);
+            }
+        }
+
+        function doDeleteReminder(id) {
+            fetch('/api/reminders/' + id + '?userId=' + localStorage.getItem('userId'), {
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+            })
+            .then(function(res) {
+                if (!res.ok) throw new Error('删除失败');
+                renderCalendar();
+                closeScheduleDetail();
+            })
+            .catch(function() {
+                showDetailError('删除失败，请重试');
+            });
+        }
+
+        function doDeleteRecurring(recurringId) {
+            fetch('/api/recurring-reminders/' + recurringId + '/cancel?userId=' + localStorage.getItem('userId'), {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+            })
+            .then(function(res) {
+                if (!res.ok) throw new Error('删除失败');
+                renderCalendar();
+                closeScheduleDetail();
+            })
+            .catch(function() {
+                showDetailError('删除失败，请重试');
+            });
+        }
+
+        function showDetailError(msg) {
+            var panel = document.querySelector('.schedule-detail-content');
+            if (!panel) return;
+            var err = document.createElement('div');
+            err.className = 'detail-error';
+            err.textContent = msg;
+            panel.appendChild(err);
+            setTimeout(function() { if (err.parentNode) err.parentNode.removeChild(err); }, 3000);
+        }
+
+        function showRecurringDeleteModal() {
+            var modal = document.getElementById('recurringDeleteModal');
+            if (modal) modal.classList.add('show');
+        }
+
+        function hideRecurringDeleteModal() {
+            var modal = document.getElementById('recurringDeleteModal');
+            if (modal) modal.classList.remove('show');
+        }
+
+        function handleRecurringDeleteChoice(choice) {
+            hideRecurringDeleteModal();
+            if (!currentDetailData) return;
+            if (choice === 'today') {
+                doDeleteReminder(currentDetailData.id);
+            } else if (choice === 'all') {
+                doDeleteRecurring(currentDetailData.parentRecurringId);
+            }
+        }
+
+        // ===== 详情面板修改 =====
+        function onEditClick() {
+            if (!currentDetailData) return;
+            if (currentDetailData.parentRecurringId) {
+                showRecurringEditModal();
+            } else {
+                enterEditMode('reminder');
+            }
+        }
+
+        function showRecurringEditModal() {
+            var modal = document.getElementById('recurringEditModal');
+            if (modal) modal.classList.add('show');
+        }
+
+        function hideRecurringEditModal() {
+            var modal = document.getElementById('recurringEditModal');
+            if (modal) modal.classList.remove('show');
+        }
+
+        function handleRecurringEditChoice(choice) {
+            hideRecurringEditModal();
+            if (!currentDetailData) return;
+            if (choice === 'today') {
+                enterEditMode('reminder');
+            } else if (choice === 'all') {
+                enterEditMode('recurring');
+            }
+        }
+
+        function enterEditMode(source) {
+            currentDetailMode = 'edit';
+            currentEditSource = source;
+            var panel = document.getElementById('scheduleDetailPanel');
+            if (!panel) return;
+
+            if (source === 'recurring') {
+                // 周期字段（起止日期/重复类型）不在 ReminderResponse 中，需取模板详情
+                panel.innerHTML = '<button class="schedule-detail-toggle" id="sidebarToggle">‹</button>'
+                    + '<div class="schedule-detail-empty">加载中...</div>';
+                rebindSidebarToggle();
+                var userId = localStorage.getItem('userId');
+                fetch('/api/recurring-reminders/' + currentDetailData.parentRecurringId + '?userId=' + userId, {
+                    headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+                })
+                .then(function(res) {
+                    if (!res.ok) throw new Error('加载失败');
+                    return res.json();
+                })
+                .then(function(json) {
+                    if (!json || !json.data) throw new Error('模板不存在');
+                    currentEditTemplateData = json.data;
+                    renderEditForm(json.data);
+                })
+                .catch(function() {
+                    currentDetailMode = 'view';
+                    currentEditSource = null;
+                    panel.innerHTML = '<button class="schedule-detail-toggle" id="sidebarToggle">‹</button>'
+                        + '<div class="schedule-detail-empty">加载失败，请重试</div>';
+                    rebindSidebarToggle();
+                });
+            } else {
+                renderEditForm(currentDetailData);
+            }
+        }
+
+        // HTML 属性值转义，防止标题/地点/备注中的引号破坏表单
+        function escAttr(v) {
+            if (v === null || v === undefined) return '';
+            return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        // "yyyy-MM-dd HH:mm:ss" → datetime-local 需要的 "yyyy-MM-ddTHH:mm"
+        function toDatetimeLocal(v) {
+            if (!v) return '';
+            var m = String(v).match(/(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/);
+            return m ? (m[1] + 'T' + m[2]) : '';
+        }
+
+        // "HH:mm:ss" → time 输入需要的 "HH:mm"
+        function toTimeInput(v) {
+            if (!v) return '';
+            var m = String(v).match(/(\d{2}:\d{2})/);
+            return m ? m[1] : '';
+        }
+
+        function priorityOptions(selected) {
+            var opts = [['LOW', '低'], ['NORMAL', '普通'], ['HIGH', '高']];
+            return opts.map(function(o) {
+                return '<option value="' + o[0] + '"' + (o[0] === selected ? ' selected' : '') + '>' + o[1] + '</option>';
+            }).join('');
+        }
+
+        function renderEditForm(d) {
+            var panel = document.getElementById('scheduleDetailPanel');
+            if (!panel) return;
+            var recurring = currentEditSource === 'recurring';
+
+            var timeField = recurring
+                ? '<input type="time" id="editRemindTime" value="' + escAttr(toTimeInput(d.remindTime)) + '">'
+                : '<input type="datetime-local" id="editRemindTime" value="' + escAttr(toDatetimeLocal(d.remindTime)) + '">';
+
+            var html = '<button class="schedule-detail-toggle" id="sidebarToggle">‹</button>'
+                + '<button class="schedule-detail-close" onclick="cancelEdit()">×</button>'
+                + '<div class="schedule-detail-content">'
+                + '<h3>' + (recurring ? '修改整个周期' : '修改提醒') + '</h3>'
+                + '<div class="edit-field"><label>标题</label>'
+                + '<input type="text" id="editTitle" value="' + escAttr(d.title) + '"></div>'
+                + '<div class="edit-field"><label>' + (recurring ? '每日提醒时间' : '提醒时间') + '</label>' + timeField + '</div>'
+                + '<div class="edit-field"><label>地点</label>'
+                + '<input type="text" id="editLocation" value="' + escAttr(d.location) + '"></div>'
+                + '<div class="edit-field"><label>备注</label>'
+                + '<textarea id="editNote" rows="3">' + escAttr(d.note) + '</textarea></div>'
+                + '<div class="edit-field"><label>优先级</label>'
+                + '<select id="editPriority">' + priorityOptions(d.priority || 'NORMAL') + '</select></div>';
+
+            if (recurring) {
+                html += '<div class="edit-field"><label>开始日期</label>'
+                    + '<input type="date" id="editStartDate" value="' + escAttr(d.startDate) + '"></div>'
+                    + '<div class="edit-field"><label>结束日期</label>'
+                    + '<input type="date" id="editEndDate" value="' + escAttr(d.endDate) + '"></div>'
+                    + '<div class="edit-field"><label>重复类型</label>'
+                    + '<select id="editRepeatType">'
+                    + '<option value="DAILY"' + (d.repeatType === 'DAILY' ? ' selected' : '') + '>每天</option>'
+                    + '<option value="WEEKLY"' + (d.repeatType === 'WEEKLY' ? ' selected' : '') + '>每周</option>'
+                    + '<option value="MONTHLY"' + (d.repeatType === 'MONTHLY' ? ' selected' : '') + '>每月</option>'
+                    + '</select></div>';
+            }
+
+            html += '<div class="detail-actions">'
+                + '<button class="detail-btn save" id="editSaveBtn">💾 保存</button>'
+                + '<button class="detail-btn cancel" id="editCancelBtn">取消</button>'
+                + '</div>'
+                + '</div>';
+
+            panel.innerHTML = html;
+            rebindSidebarToggle();
+            document.getElementById('editSaveBtn').addEventListener('click', saveEdit);
+            document.getElementById('editCancelBtn').addEventListener('click', cancelEdit);
+        }
+
+        function saveEdit() {
+            if (!currentDetailData) return;
+            var saveBtn = document.getElementById('editSaveBtn');
+            if (saveBtn) saveBtn.disabled = true;
+
+            var title = document.getElementById('editTitle').value.trim();
+            var timeVal = document.getElementById('editRemindTime').value;
+            var location = document.getElementById('editLocation').value.trim();
+            var note = document.getElementById('editNote').value.trim();
+            var priority = document.getElementById('editPriority').value;
+            var userId = localStorage.getItem('userId');
+
+            if (!title) {
+                showDetailError('标题不能为空');
+                if (saveBtn) saveBtn.disabled = false;
+                return;
+            }
+            if (!timeVal) {
+                showDetailError('时间不能为空');
+                if (saveBtn) saveBtn.disabled = false;
+                return;
+            }
+
+            var url, body;
+            if (currentEditSource === 'recurring') {
+                url = '/api/recurring-reminders/' + currentDetailData.parentRecurringId + '?userId=' + userId;
+                body = {
+                    title: title,
+                    remindTime: timeVal.length === 5 ? timeVal + ':00' : timeVal,
+                    startDate: document.getElementById('editStartDate').value,
+                    endDate: document.getElementById('editEndDate').value,
+                    repeatType: document.getElementById('editRepeatType').value,
+                    location: location,
+                    note: note,
+                    priority: priority
+                };
+                // 保留原有 repeatDays（WEEKLY 规则），PUT 语义为 null 不修改
+                if (currentEditTemplateData && currentEditTemplateData.repeatDays) {
+                    body.repeatDays = currentEditTemplateData.repeatDays;
+                }
+                if (!body.startDate || !body.endDate) {
+                    showDetailError('起止日期不能为空');
+                    if (saveBtn) saveBtn.disabled = false;
+                    return;
+                }
+            } else {
+                url = '/api/reminders/' + currentDetailData.id + '?userId=' + userId;
+                body = {
+                    title: title,
+                    remindTime: timeVal.replace('T', ' ') + ':00',
+                    location: location,
+                    note: note,
+                    priority: priority
+                };
+            }
+
+            fetch(url, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + localStorage.getItem('token')
+                },
+                body: JSON.stringify(body)
+            })
+            .then(function(res) {
+                if (!res.ok) throw new Error('保存失败');
+                currentDetailMode = 'view';
+                currentEditSource = null;
+                renderCalendar();
+                return showScheduleDetail(currentDetailData.id);
+            })
+            .catch(function() {
+                showDetailError('保存失败，请重试');
+                if (saveBtn) saveBtn.disabled = false;
+            });
+        }
+
+        function cancelEdit() {
+            currentDetailMode = 'view';
+            currentEditSource = null;
+            if (currentDetailData) {
+                renderScheduleDetailPanel(currentDetailData);
+            } else {
+                renderDetailEmptyState();
+            }
         }
 
         var currentEditField = '';

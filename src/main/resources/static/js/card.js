@@ -208,10 +208,77 @@ var CardSystem = (function() {
                 // 否则会向 /api/confirmations/{sessionId}/edit 发送无 body 的 POST，导致后端报 Required request body is missing
                 toggleEditMode(sessionId);
                 break;
+            case 'mark_read':
+                // 执行结果卡片确认无误：仅移除卡片，不发请求
+                handleMarkRead(sessionId);
+                break;
+            case 'undo':
+                // 执行结果卡片撤销：调用取消提醒 API 删除已创建的提醒
+                handleUndo(sessionId, userId);
+                break;
             default:
                 handleCustomAction(actionId, sessionId, userId);
                 break;
         }
+    }
+
+    /**
+     * 执行结果卡片 - 确认无误：仅移除卡片，显示提示消息
+     */
+    function handleMarkRead(sessionId) {
+        var cardEntry = cards[sessionId];
+        if (!cardEntry) return;
+
+        if (typeof window.removeTempMessages === 'function') {
+            window.removeTempMessages();
+        }
+        if (typeof window.addMessage === 'function') {
+            window.addMessage('bot', '好的，提醒已记录～', { skipSave: false });
+        }
+        removeCard(sessionId);
+    }
+
+    /**
+     * 执行结果卡片 - 撤销：调用取消提醒 API 删除已创建的提醒
+     */
+    function handleUndo(sessionId, userId) {
+        var cardEntry = cards[sessionId];
+        if (!cardEntry) return;
+
+        var card = cardEntry.card;
+        var reminderId = card.data && card.data.reminderId;
+        if (!reminderId) {
+            showError('未找到提醒ID，无法撤销');
+            return;
+        }
+
+        var cardEl = document.getElementById('card-' + sessionId);
+        setCardButtonsLoading(cardEl);
+
+        fetch('/api/reminders/' + reminderId + '?userId=' + userId, {
+            method: 'DELETE',
+            headers: getHeaders()
+        }).then(function(res) { return res.json(); })
+        .then(function(result) {
+            if (result.success) {
+                if (typeof window.removeTempMessages === 'function') {
+                    window.removeTempMessages();
+                }
+                if (typeof window.addMessage === 'function') {
+                    window.addMessage('bot', result.message || '已撤销提醒', { skipSave: false });
+                }
+                removeCard(sessionId);
+                if (typeof window.renderCalendar === 'function') {
+                    window.renderCalendar();
+                }
+            } else {
+                restoreCardButtons(cardEl);
+                showError(result.message || '撤销失败');
+            }
+        }).catch(function(err) {
+            restoreCardButtons(cardEl);
+            showError('请求失败: ' + err.message);
+        });
     }
 
     /**

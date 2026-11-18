@@ -2,6 +2,7 @@ package com.dormrepair.remindme.agent.event;
 
 import com.dormrepair.remindme.entity.AgentStatusFlow;
 import com.dormrepair.remindme.repository.AgentStatusFlowRepository;
+import com.dormrepair.remindme.utils.TimeUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -71,7 +72,7 @@ public class AgentStatusFlowPersistListener {
         }
 
         FlowBuffer buffer = buffers.computeIfAbsent(flowId, k -> new FlowBuffer(event.getUserId()));
-        buffer.lastUpdateMs = System.currentTimeMillis();
+        buffer.lastUpdateMs = TimeUtils.toTimestamp(TimeUtils.now());
 
         // 单步明细：结构对齐前端 buildStepRow 的入参，刷新后可直接复用同一渲染逻辑
         Map<String, Object> step = new LinkedHashMap<>();
@@ -132,7 +133,7 @@ public class AgentStatusFlowPersistListener {
         if (buffers.isEmpty()) {
             return;
         }
-        long now = System.currentTimeMillis();
+        long now = TimeUtils.toTimestamp(TimeUtils.now());
         buffers.entrySet().removeIf(e -> now - e.getValue().lastUpdateMs > BUFFER_TTL_MS);
         while (buffers.size() > MAX_BUFFERS) {
             String oldest = null;
@@ -154,10 +155,11 @@ public class AgentStatusFlowPersistListener {
     private static class FlowBuffer {
         final Long userId;
         final List<Map<String, Object>> steps = new ArrayList<>();
-        volatile long lastUpdateMs = System.currentTimeMillis();
+        volatile long lastUpdateMs = TimeUtils.toTimestamp(TimeUtils.now());
 
         FlowBuffer(Long userId) {
             this.userId = userId;
         }
     }
 }
+

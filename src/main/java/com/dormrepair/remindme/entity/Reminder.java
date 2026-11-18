@@ -64,6 +64,14 @@ public class Reminder {
     @Column(name = "note_template", columnDefinition = "TEXT")
     private String noteTemplate;
 
+    // 父周期模板ID：周期实例（由周期模板批量生成的单条提醒）指向其所属的 recurring_reminders.id；普通提醒为 null
+    @Column(name = "parent_recurring_id")
+    private Long parentRecurringId;
+
+    // 是否为周期实例：true 表示该提醒是由周期模板生成的实例，false 表示用户手动创建的普通提醒
+    @Column(name = "is_recurring_instance", nullable = false, columnDefinition = "TINYINT(1) DEFAULT 0")
+    private Boolean isRecurringInstance = false;
+
     // 优先级：LOW / NORMAL / HIGH，默认 NORMAL；影响推送顺序与失败重试策略
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)

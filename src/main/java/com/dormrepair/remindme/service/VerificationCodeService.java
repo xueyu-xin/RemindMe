@@ -2,6 +2,7 @@ package com.dormrepair.remindme.service;
 
 import com.dormrepair.remindme.entity.VerificationCode;
 import com.dormrepair.remindme.repository.VerificationCodeRepository;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -30,7 +31,7 @@ public class VerificationCodeService {
     public String sendCode(String phone) {
         // 取近 60 分钟内已发送的记录，存在则判定为频繁
         List<VerificationCode> recentCodes = verificationCodeRepository
-                .findByPhoneAndCreatedAtAfter(phone, LocalDateTime.now().minusMinutes(SEND_INTERVAL_MINUTES));
+                .findByPhoneAndCreatedAtAfter(phone, TimeUtils.now().minusMinutes(SEND_INTERVAL_MINUTES));
 
         if (!recentCodes.isEmpty()) {
             throw new IllegalArgumentException("发送过于频繁，请稍后再试");
@@ -42,7 +43,7 @@ public class VerificationCodeService {
         VerificationCode verificationCode = new VerificationCode();
         verificationCode.setPhone(phone);
         verificationCode.setCode(code);
-        verificationCode.setExpiresAt(LocalDateTime.now().plusMinutes(EXPIRATION_MINUTES));
+        verificationCode.setExpiresAt(TimeUtils.now().plusMinutes(EXPIRATION_MINUTES));
         verificationCode.setUsed(false);
 
         verificationCodeRepository.save(verificationCode);
@@ -60,7 +61,7 @@ public class VerificationCodeService {
                 .orElseThrow(() -> new IllegalArgumentException("验证码错误"));
 
         // 命中后还要再校一次过期时间，防止临界态
-        if (verificationCode.getExpiresAt().isBefore(LocalDateTime.now())) {
+        if (verificationCode.getExpiresAt().isBefore(TimeUtils.now())) {
             throw new IllegalArgumentException("验证码已过期");
         }
 
@@ -72,7 +73,7 @@ public class VerificationCodeService {
     @Transactional
     @Scheduled(fixedRate = 3600000)
     public void cleanExpiredCodes() {
-        verificationCodeRepository.deleteByExpiresAtBefore(LocalDateTime.now());
+        verificationCodeRepository.deleteByExpiresAtBefore(TimeUtils.now());
         log.info("已清理过期验证码");
     }
 

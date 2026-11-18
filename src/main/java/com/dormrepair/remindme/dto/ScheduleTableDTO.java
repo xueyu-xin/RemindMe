@@ -61,6 +61,12 @@ public class ScheduleTableDTO {
 
         // 是否仅双周上课：true 则 weeks 里只在偶数周生效
         private Boolean evenWeek;
+
+        // 课程在表格中的列索引（0-6，周一=0，周日=6），用于后端校验列位置与 dayOfWeek 是否一致
+        private Integer columnIndex;
+
+        // 单课程识别置信度（0.0-1.0），用于标记哪些课程可能识别错误
+        private Double confidence;
     }
 
     // 单节次的时间区段

@@ -6,8 +6,9 @@
     <title>校园生活提醒助手</title>
     <link rel="stylesheet" href="/css/main.css?v=20260829b">
     <link rel="stylesheet" href="/css/notification.css?v=20260829b">
-    <link rel="stylesheet" href="/css/card.css?v=20260829b">
+    <link rel="stylesheet" href="/css/card.css?v=20261005e">
     <link rel="stylesheet" href="/css/memory.css?v=20260829d">
+    <link rel="stylesheet" href="/css/calendar-detail.css?v=20261004i">
     <!-- 以下内联样式保留作为兼容回退，核心样式已迁移到外部 CSS 文件 -->
     <style>
         /* ===== 字体定义 ===== */
@@ -1274,6 +1275,23 @@
             flex-wrap: wrap;
             gap: 8px;
         }
+        /* 日期 + 周数强制同一行：不换行，日期框可收缩，标签不压缩 */
+        .time-config-card .config-head-row {
+            flex-wrap: nowrap;
+            gap: 6px;
+            margin-bottom: 12px;
+        }
+        .time-config-card .config-head-row .info-label {
+            flex: 0 0 auto;
+        }
+        .time-config-card .config-head-row .date-input {
+            flex: 0 1 145px;
+            min-width: 0;
+            width: 145px;
+        }
+        .time-config-card .config-head-row #configTotalWeeks {
+            flex: 0 0 auto;
+        }
         .time-config-card .date-input {
             padding: 6px 10px;
             border: 2px solid var(--peach-pale);
@@ -1284,17 +1302,23 @@
             color: var(--brown-deep);
         }
         .time-config-card .link-mode-group {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
             margin-bottom: 14px;
         }
         .time-config-card .link-mode-label {
             font-size: 13px;
             color: var(--brown-mid);
-            margin-bottom: 8px;
+            white-space: nowrap;
+            flex: 0 0 auto;
         }
         .time-config-card .link-mode-buttons {
             display: flex;
             flex-wrap: wrap;
             gap: 6px;
+            align-items: center;
         }
         .time-config-card .link-mode-btn {
             padding: 6px 12px;
@@ -1315,10 +1339,53 @@
             color: #FFFFFF;
             border-color: var(--peach);
         }
+        .time-config-card .lock-duration {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 12px;
+            color: var(--brown-mid);
+            white-space: nowrap;
+        }
+        .time-config-card .lock-duration input[type='number'] {
+            width: 48px;
+            padding: 2px 4px;
+            border: 1px solid var(--peach-pale);
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 12px;
+            text-align: center;
+            background: var(--cream-bg);
+            color: var(--brown-deep);
+        }
+        .time-config-card .lock-duration input[type='number']:disabled {
+            opacity: 0.55;
+        }
+        .time-config-card .add-slot-row {
+            padding: 4px 10px 2px;
+        }
+        .time-config-card .add-slot-btn {
+            width: 100%;
+            padding: 4px;
+            border: 1px dashed var(--peach);
+            border-radius: 6px;
+            background: transparent;
+            font-family: inherit;
+            font-size: 12px;
+            color: var(--brown-mid);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .time-config-card .add-slot-btn:hover {
+            background: var(--peach-pale);
+            color: var(--brown-deep);
+        }
         .time-config-card .time-slots-header {
             display: flex;
             align-items: center;
-            padding: 8px 10px;
+            gap: 8px;
+            padding: 5px 10px;
             background: var(--peach-pale);
             border-radius: 8px 8px 0 0;
             font-size: 12px;
@@ -1327,6 +1394,7 @@
         }
         .time-config-card .time-slots-header span:first-child {
             width: 60px;
+            flex: none;
         }
         .time-config-card .time-slots-header span {
             flex: 1;
@@ -1336,7 +1404,7 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 6px 10px;
+            padding: 3px 10px;
             border-bottom: 1px solid var(--peach-pale);
             font-size: 13px;
             color: var(--brown-deep);
@@ -1346,13 +1414,14 @@
         }
         .time-config-card .slot-index {
             width: 60px;
+            flex: none;
             color: var(--brown-mid);
             font-size: 12px;
         }
         .time-config-card .slot-start,
         .time-config-card .slot-end {
             flex: 1;
-            padding: 4px 8px;
+            padding: 2px 6px;
             border: 1px solid var(--peach-pale);
             border-radius: 6px;
             font-family: inherit;
@@ -1366,14 +1435,6 @@
         .time-config-card .slot-end::-webkit-calendar-picker-indicator {
             cursor: pointer;
             opacity: 0.7;
-        }
-        .time-config-card .inference-result {
-            margin-top: 12px;
-            padding: 10px;
-            background: var(--cream-bg);
-            border-radius: 8px;
-            font-size: 13px;
-            color: var(--brown-mid);
         }
 
         /* ===== 手动创建卡片 ===== */
@@ -1713,10 +1774,8 @@
             border-radius: 6px;
             white-space: normal;
             word-break: break-all;
-            overflow: hidden;
             max-width: 100%;
             min-height: 40px;
-            max-height: 40px;
             line-height: 16px;
             box-sizing: border-box;
         }
@@ -1768,6 +1827,7 @@
         </div>
 
         <div id="page-calendar" class="tab-page">
+            <div class="calendar-with-detail">
             <div class="rm-card">
                 <div class="calendar-header">
                     <div class="calendar-title-wrap">
@@ -1794,9 +1854,24 @@
                     <div class="weekday">六</div>
                 </div>
                 <div id="calendarDays" class="calendar-grid"></div>
+                <div class="schedule-toolbar">
+                    <button class="export-toolbar-btn" onclick="openExportPanel()">📤 导出</button>
+                    <label class="cancel-toggle">
+                        <input type="checkbox" id="showCancelledToggle">
+                        <span>显示已取消</span>
+                    </label>
+                </div>
                 <div id="scheduleList">
                     <div id="scheduleItems"></div>
                 </div>
+            </div>
+            <aside class="schedule-detail" id="scheduleDetailPanel">
+                <button class="schedule-detail-toggle" id="sidebarToggle" title="收起侧栏">‹</button>
+                <!-- 详情内容由后续 JS 渲染 -->
+            </aside>
+            <div class="expand-anchor">
+                <button class="schedule-detail-expand" id="sidebarExpand" title="展开侧栏">›</button>
+            </div>
             </div>
         </div>
 
@@ -1926,6 +2001,86 @@
             </div>
         </div>
 
+        <!-- 课表单条课程编辑弹窗 -->
+        <div id="courseEditModal" class="modal-overlay" style="display:none;">
+            <div class="modal-content course-edit-content">
+                <div class="modal-title">编辑课程</div>
+                <div class="course-edit-form">
+                    <div class="ce-field">
+                        <label>课程名</label>
+                        <input type="text" id="ceTitle" placeholder="如 高等数学">
+                    </div>
+                    <div class="ce-field">
+                        <label>星期</label>
+                        <select id="ceDayOfWeek">
+                            <option value="星期一">星期一</option>
+                            <option value="星期二">星期二</option>
+                            <option value="星期三">星期三</option>
+                            <option value="星期四">星期四</option>
+                            <option value="星期五">星期五</option>
+                            <option value="星期六">星期六</option>
+                            <option value="星期日">星期日</option>
+                        </select>
+                    </div>
+                    <div class="ce-field">
+                        <label>节次</label>
+                        <div class="ce-range">
+                            <select id="ceSectionStart">
+                                <option value="1">第1节</option><option value="2">第2节</option><option value="3">第3节</option>
+                                <option value="4">第4节</option><option value="5">第5节</option><option value="6">第6节</option>
+                                <option value="7">第7节</option><option value="8">第8节</option><option value="9">第9节</option>
+                                <option value="10">第10节</option><option value="11">第11节</option><option value="12">第12节</option>
+                            </select>
+                            <span>至</span>
+                            <select id="ceSectionEnd">
+                                <option value="1">第1节</option><option value="2">第2节</option><option value="3">第3节</option>
+                                <option value="4">第4节</option><option value="5">第5节</option><option value="6">第6节</option>
+                                <option value="7">第7节</option><option value="8">第8节</option><option value="9">第9节</option>
+                                <option value="10">第10节</option><option value="11">第11节</option><option value="12">第12节</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="ce-field">
+                        <label>周次</label>
+                        <input type="text" id="ceWeeks" placeholder="如 1-16">
+                    </div>
+                    <div class="ce-field">
+                        <label>单双周</label>
+                        <select id="ceOddEven">
+                            <option value="">每周</option>
+                            <option value="odd">单周</option>
+                            <option value="even">双周</option>
+                        </select>
+                    </div>
+                    <div class="ce-field">
+                        <label>地点</label>
+                        <input type="text" id="ceLocation" placeholder="如 教1-302">
+                    </div>
+                    <div class="ce-field">
+                        <label>教师</label>
+                        <input type="text" id="ceTeacher" placeholder="如 张老师">
+                    </div>
+                </div>
+                <div class="modal-buttons">
+                    <button class="modal-btn cancel" onclick="closeCourseEditModal()">取消</button>
+                    <button class="modal-btn delete" onclick="deleteCourseFromModal()">删除</button>
+                    <button class="modal-btn confirm" onclick="saveCourseFromModal()">保存</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 课表原文件悬浮预览框 -->
+        <div id="filePreviewPanel" class="file-preview-panel" style="display:none;">
+            <div class="fpp-header" id="fppHeader">
+                <span class="fpp-title">📎 原文件预览</span>
+                <button class="fpp-close" onclick="closeFilePreview()">×</button>
+            </div>
+            <div class="fpp-body" id="filePreviewBody">
+                <!-- 动态填充 img 或 iframe -->
+            </div>
+            <div class="fpp-resize" id="fppResize"></div>
+        </div>
+
         <div id="modalOverlay" class="modal-overlay">
             <div class="modal-content">
                 <div class="modal-title" id="modalTitle">编辑</div>
@@ -1948,6 +2103,56 @@
             </div>
         </div>
 
+        <div id="exportPanel" class="modal-overlay">
+            <div class="modal-content export-panel">
+                <div class="modal-title">📤 导出提醒</div>
+
+                <!-- 日期范围 -->
+                <div class="export-section">
+                    <div class="export-section-label">📅 日期范围</div>
+                    <div class="export-presets">
+                        <button type="button" class="export-preset-btn" data-preset="7">最近7天</button>
+                        <button type="button" class="export-preset-btn" data-preset="30">最近30天</button>
+                        <button type="button" class="export-preset-btn" data-preset="all">全部</button>
+                    </div>
+                    <div class="export-date-row">
+                        <input type="date" class="modal-input export-date-input" id="exportStartDate" title="开始日期">
+                        <span class="export-date-sep">至</span>
+                        <input type="date" class="modal-input export-date-input" id="exportEndDate" title="结束日期">
+                    </div>
+                </div>
+
+                <!-- 状态多选 -->
+                <div class="export-section">
+                    <div class="export-section-label">🏷️ 提醒状态</div>
+                    <div class="export-status-grid">
+                        <label class="export-status-item"><input type="checkbox" value="PENDING" checked><span>待推送</span></label>
+                        <label class="export-status-item"><input type="checkbox" value="COMPLETED" checked><span>已完成</span></label>
+                        <label class="export-status-item"><input type="checkbox" value="CANCELLED" checked><span>已取消</span></label>
+                        <label class="export-status-item"><input type="checkbox" value="EXPIRED" checked><span>已过期</span></label>
+                    </div>
+                </div>
+
+                <!-- 导出格式 -->
+                <div class="export-section">
+                    <div class="export-section-label">📦 导出格式</div>
+                    <div class="export-format-row">
+                        <label class="export-format-item"><input type="radio" name="exportFormat" value="excel" checked><span>Excel (.xlsx)</span></label>
+                        <label class="export-format-item"><input type="radio" name="exportFormat" value="png"><span>PNG (图片)</span></label>
+                    </div>
+                </div>
+
+                <div class="modal-buttons">
+                    <button class="modal-btn cancel" onclick="closeExportPanel()">取消</button>
+                    <button class="modal-btn confirm" id="exportConfirmBtn" onclick="confirmExport()">确认</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- 导出 PNG 用的隐藏清单视图：内容在导出时由 JS 渲染，截完即清空。
+             不能用 display:none（html2canvas 截不到），用 fixed 移出视口 -->
+        <div id="exportListView" aria-hidden="true"></div>
+
         <div id="logoutModal" class="modal-overlay">
             <div class="modal-content">
                 <div class="modal-title">确认退出</div>
@@ -1966,6 +2171,30 @@
                 <div class="modal-buttons">
                     <button class="modal-btn cancel" onclick="MemoryPage.hideConfirm()">取消</button>
                     <button class="modal-btn confirm" style="background:#e74c3c;" onclick="MemoryPage.confirmAction()">删除</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="recurringDeleteModal" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-title">删除周期提醒</div>
+                <div class="modal-desc">这是周期提醒，请选择删除方式</div>
+                <div class="modal-buttons" style="flex-direction: column; gap: 10px;">
+                    <button class="modal-btn recurring-choice-today" onclick="handleRecurringDeleteChoice('today')">仅删除当天</button>
+                    <button class="modal-btn recurring-choice-all" onclick="handleRecurringDeleteChoice('all')">删除整个周期</button>
+                    <button class="modal-btn cancel" onclick="hideRecurringDeleteModal()">取消</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="recurringEditModal" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-title">修改周期提醒</div>
+                <div class="modal-desc">请选择修改范围</div>
+                <div class="modal-buttons" style="flex-direction: column; gap: 10px;">
+                    <button class="modal-btn recurring-choice-today" onclick="handleRecurringEditChoice('today')">仅修改当天</button>
+                    <button class="modal-btn recurring-choice-all" onclick="handleRecurringEditChoice('all')">修改整个周期</button>
+                    <button class="modal-btn cancel" onclick="hideRecurringEditModal()">取消</button>
                 </div>
             </div>
         </div>
@@ -2018,6 +2247,9 @@
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/sockjs-client/1.6.1/sockjs.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <!-- html2canvas：导出提醒 PNG 时把清单视图渲染成图片 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.12/cropper.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.5.12/cropper.min.js"></script>
 
@@ -2025,7 +2257,7 @@
     <script src="/js/sound.js?v=20260829b"></script>
     <script src="/js/notification.js?v=20260829b"></script>
     <script src="/js/card.js?v=20260829b"></script>
-    <script src="/js/main.js?v=20260831a"></script>
+    <script src="/js/main.js?v=20261005l"></script>
     <script src="/js/memory.js?v=20260829f"></script>
 
     

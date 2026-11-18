@@ -1,5 +1,6 @@
 package com.dormrepair.remindme.entity;
 
+import com.dormrepair.remindme.utils.TimeUtils;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -113,14 +114,14 @@ public class ConfirmationSession {
     // 插入前钩子：自动写入 createdAt、updatedAt
     @PrePersist
     protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
+        createdAt = TimeUtils.now();
+        updatedAt = TimeUtils.now();
     }
 
     // 更新前钩子：自动刷新 updatedAt
     @PreUpdate
     protected void onUpdate() {
-        updatedAt = LocalDateTime.now();
+        updatedAt = TimeUtils.now();
     }
 
     // 会话状态内部枚举：PENDING-待用户操作、CONFIRMED-用户已确认、CANCELLED-用户已取消、EXPIRED-超时未操作

@@ -85,6 +85,10 @@ public class ChatController {
                             response.put("success", true);
                             response.put("message", agentResponse.getContent());
                             response.put("type", "text");
+                            // 透传工具执行结果（JSON 字符串），供前端识别导出等动作标记
+                            if (agentResponse.getToolResult() != null) {
+                                response.put("toolResult", agentResponse.getToolResult());
+                            }
                             break;
                         case TOOL_CALL:
                             response.put("success", true);
@@ -109,6 +113,25 @@ public class ChatController {
                             }
                             log.info("Agent返回CONFIRMATION: sessionId={}, 卡片数据通过WebSocket推送",
                                     agentResponse.getSessionId());
+                            break;
+                        case EXECUTION_RESULT:
+                            // 工具直接执行完成（提醒已创建），返回执行结果，无需用户确认
+                            response.put("success", true);
+                            response.put("executed", true);
+                            response.put("type", "execution_result");
+                            response.put("message", agentResponse.getLeadMessage() != null
+                                    ? agentResponse.getLeadMessage() : agentResponse.getContent());
+                            response.put("leadMessage", agentResponse.getLeadMessage());
+                            response.put("reminderId", agentResponse.getReminderId());
+                            response.put("status", "done");
+                            Map<String, Object> execData = agentResponse.getConfirmationData();
+                            if (execData != null) {
+                                response.put("title", execData.get("title"));
+                                response.put("remindTime", execData.get("remindTime"));
+                                response.put("location", execData.get("location"));
+                            }
+                            log.info("Agent返回EXECUTION_RESULT: reminderId={}, title={}",
+                                    agentResponse.getReminderId(), execData != null ? execData.get("title") : null);
                             break;
                         default:
                             response.put("success", true);
@@ -265,7 +288,7 @@ public class ChatController {
                 advance = 0;
             } else {
                 // 兜底也失败，使用当前时间
-                remindTime = LocalDateTime.now();
+                remindTime = TimeUtils.now();
                 log.info("时间兜底解析失败，使用当前时间 → {}", remindTime);
             }
         }
@@ -325,8 +348,8 @@ public class ChatController {
         Matcher minuteMatcher = minutePattern.matcher(input);
         if (minuteMatcher.find()) {
             int minutes = Integer.parseInt(minuteMatcher.group(1));
-            log.info("相对时间解析：匹配到 {}分钟后，计算结果为 {}", minutes, LocalDateTime.now().plusMinutes(minutes));
-            return LocalDateTime.now().plusMinutes(minutes);
+            log.info("相对时间解析：匹配到 {}分钟后，计算结果为 {}", minutes, TimeUtils.now().plusMinutes(minutes));
+            return TimeUtils.now().plusMinutes(minutes);
         }
 
         // 匹配 "X小时后"
@@ -334,8 +357,8 @@ public class ChatController {
         Matcher hourMatcher = hourPattern.matcher(input);
         if (hourMatcher.find()) {
             int hours = Integer.parseInt(hourMatcher.group(1));
-            log.info("相对时间解析：匹配到 {}小时后，计算结果为 {}", hours, LocalDateTime.now().plusHours(hours));
-            return LocalDateTime.now().plusHours(hours);
+            log.info("相对时间解析：匹配到 {}小时后，计算结果为 {}", hours, TimeUtils.now().plusHours(hours));
+            return TimeUtils.now().plusHours(hours);
         }
 
         // 匹配 "X天后"
@@ -343,8 +366,8 @@ public class ChatController {
         Matcher dayMatcher = dayPattern.matcher(input);
         if (dayMatcher.find()) {
             int days = Integer.parseInt(dayMatcher.group(1));
-            log.info("相对时间解析：匹配到 {}天后，计算结果为 {}", days, LocalDateTime.now().plusDays(days));
-            return LocalDateTime.now().plusDays(days);
+            log.info("相对时间解析：匹配到 {}天后，计算结果为 {}", days, TimeUtils.now().plusDays(days));
+            return TimeUtils.now().plusDays(days);
         }
 
         // 匹配 "X秒后"（用于"马上"、"立刻"等场景的精确表达）
@@ -352,8 +375,8 @@ public class ChatController {
         Matcher secondMatcher = secondPattern.matcher(input);
         if (secondMatcher.find()) {
             int seconds = Integer.parseInt(secondMatcher.group(1));
-            log.info("相对时间解析：匹配到 {}秒后，计算结果为 {}", seconds, LocalDateTime.now().plusSeconds(seconds));
-            return LocalDateTime.now().plusSeconds(seconds);
+            log.info("相对时间解析：匹配到 {}秒后，计算结果为 {}", seconds, TimeUtils.now().plusSeconds(seconds));
+            return TimeUtils.now().plusSeconds(seconds);
         }
 
         return null;

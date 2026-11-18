@@ -191,6 +191,11 @@ public class ToolRegistry implements SmartInitializingSingleton {
                 "endDate", "结束日期，格式 yyyy-MM-dd（可选）。用户说\"本周/这周/X到Y/这几天\"等范围时必填，传范围最后一天；单日取消不传",
                 "keyword", "关键词，用于过滤要取消的提醒（可选）。传\"课程\"或\"课\"时按课程提醒（来源=COURSE）过滤，匹配所有课程；其他关键词按标题包含过滤"
         ));
+        paramDescriptions.put("exportRemindersForAgent", Map.of(
+                "userId", "用户ID（系统自动填充）",
+                "startDate", "导出范围开始日期，格式 yyyy-MM-dd（可选，按提醒创建时间筛选）。用户说\"全部\"时不传",
+                "endDate", "导出范围结束日期，格式 yyyy-MM-dd（可选，含当天）。与 startDate 成对使用"
+        ));
         paramDescriptions.put("queryWeatherNowForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",
                 "location", "标准城市名（必填），从search_city选定候选的displayName，例如\"北京市-北京-朝阳\"。用于状态流显示，不用于查询。",
@@ -246,7 +251,9 @@ public class ToolRegistry implements SmartInitializingSingleton {
                 "startDate", "开始日期，格式为 yyyy-MM-dd（必填）",
                 "endDate", "结束日期，格式为 yyyy-MM-dd（必填）",
                 "repeatType", "周期类型，可选值 DAILY/WEEKLY/MONTHLY（默认DAILY）",
-                "repeatDays", "WEEKLY 时必填，指定每周哪几天生成，逗号分隔的数字字符串，1=周一…7=周日，如 \"1\" 表示每周一、\"1,3,5\" 表示周一三五。DAILY/MONTHLY 时传 null"
+                "repeatDays", "WEEKLY 时必填，指定每周哪几天生成，逗号分隔的数字字符串，1=周一…7=周日，如 \"1\" 表示每周一、\"1,3,5\" 表示周一三五。DAILY/MONTHLY 时传 null",
+                "location", "地点（可选）",
+                "note", "备注（可选），用户对提醒的补充说明，如\"记得带笔\"、\"带雨伞\""
         ));
         paramDescriptions.put("createMultiRemindersForAgent", Map.of(
                 "userId", "用户ID（系统自动填充）",

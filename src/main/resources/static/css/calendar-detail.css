@@ -1,0 +1,571 @@
+/* ============================================================
+   日历页：日程列表 + 日程详情 左右分栏样式
+   日历卡片保持原宽 812px，侧栏占右侧留白，可收缩
+   ============================================================ */
+
+/* 让日历页突破 860px 容器限制，占满视口宽度（同 #page-memory 写法） */
+#page-calendar {
+    align-self: center;
+    width: calc(100vw - 48px);
+    max-width: 1440px;
+}
+
+.calendar-with-detail {
+    display: grid;
+    grid-template-columns: 812px 340px;
+    gap: 16px;
+    justify-content: center;
+    align-items: stretch;
+    transition: grid-template-columns 0.3s ease;
+}
+
+/* 收缩状态：只留日历，侧栏与锚点列宽度均归零（锚点承载吸附卡片右缘的展开键） */
+.calendar-with-detail.sidebar-collapsed {
+    grid-template-columns: 812px 0 0;
+    gap: 0;
+}
+
+.calendar-with-detail.sidebar-collapsed .schedule-detail {
+    display: none;
+}
+
+/* 侧栏：grid stretch 下自动与日历卡片等高；margin 与 .rm-card 的 8px 上下边距一致，保证顶底真正对齐 */
+.schedule-detail {
+    background: #FFFDFD;
+    border: 2px solid var(--peach);
+    border-radius: 18px;
+    padding: 20px;
+    margin: 8px 0;
+    min-height: 300px;
+    overflow-y: auto;
+    position: relative;
+}
+
+.schedule-detail-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 260px;
+    color: #999;
+    font-size: 14px;
+    text-align: center;
+}
+
+/* 收缩按钮：12×56 细长条，吸附侧栏左缘，与周查询按钮同轴。
+   注意 absolute 包含块是侧栏 padding box（比 border box 顶低 2px 边框），
+   故 top 取 25px：139(周查询中心Y) - 86(padding box 顶) - 28(半高) = 25 */
+.schedule-detail-toggle {
+    position: absolute;
+    left: -6px;
+    top: 25px;
+    width: 12px;
+    height: 56px;
+    border-radius: 6px;
+    border: 2px solid var(--peach);
+    border-right: none;
+    background: white;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: var(--peach);
+    z-index: 10;
+    padding: 0;
+}
+
+.schedule-detail-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 1px solid var(--peach);
+    background: white;
+    color: var(--peach);
+    font-size: 18px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.schedule-detail-close:hover {
+    transform: scale(1.08);
+}
+
+/* 详情内容区 */
+.schedule-detail-content {
+    padding: 8px 4px;
+}
+
+.schedule-detail-content h3 {
+    margin: 0 0 16px 0;
+    color: var(--peach);
+    font-size: 18px;
+}
+
+.detail-row {
+    display: flex;
+    margin-bottom: 10px;
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+.detail-row .label {
+    color: #999;
+    min-width: 60px;
+    flex-shrink: 0;
+}
+
+/* 日程块选中高亮 */
+.schedule-block.selected {
+    border: 2px solid var(--peach) !important;
+    box-shadow: 0 4px 14px var(--peach-glow);
+}
+
+/* 展开键锚点：展开态完全不参与 grid 布局（避免多出轨道/gap 把日历卡片挤偏）；
+   收缩态作为 0 宽 grid item 落在卡片右侧（此时侧栏 display:none 空出第二列，gap:0，锚点左缘即卡片右缘） */
+.expand-anchor {
+    display: none;
+    position: relative;
+    width: 0;
+    margin: 8px 0;
+}
+
+.calendar-with-detail.sidebar-collapsed .expand-anchor {
+    display: block;
+}
+
+/* 展开键：absolute 挂锚点左缘，嵌入卡片右缘 12px，垂直与收缩键/周查询同轴。
+   锚点无 border，包含块顶=84，故 top 取 27px：139 - 84 - 28 = 27（与侧栏内收缩键的 25px 相差 2px 边框厚度） */
+.schedule-detail-expand {
+    position: absolute;
+    left: -12px;
+    top: 27px;
+    width: 12px;
+    height: 56px;
+    border-radius: 6px;
+    border: 2px solid var(--peach);
+    border-left: none;   /* 吸附卡片右缘，去掉左边框 */
+    background: white;
+    cursor: pointer;
+    display: none;   /* 默认隐藏，收缩时显示 */
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: var(--peach);
+    padding: 0;
+    z-index: 100;
+}
+
+/* 收缩态：显示展开键 */
+#page-calendar.sidebar-collapsed .schedule-detail-expand {
+    display: flex;
+}
+
+/* ===== 日程列表工具栏（显示已取消开关） ===== */
+.schedule-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px 0;
+}
+
+.cancel-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--brown-light);
+    cursor: pointer;
+}
+
+.cancel-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--peach);
+    cursor: pointer;
+}
+
+/* ===== 日程工具栏导出按钮 ===== */
+.schedule-toolbar {
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+}
+
+.export-toolbar-btn {
+    padding: 5px 14px;
+    border: 1.5px solid var(--peach-pale);
+    border-radius: 10px;
+    background: var(--cream-card);
+    color: var(--brown-mid);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.export-toolbar-btn:hover {
+    background: var(--peach-pale);
+    color: var(--brown-deep);
+    transform: translateY(-1px);
+}
+
+/* ===== 导出面板（复用 .modal-overlay / .modal-content 风格） ===== */
+.export-panel {
+    max-width: 420px;
+}
+
+/* 覆盖全局按钮的上浮/回弹效果：面板内只保留颜色过渡，去掉位移弹跳 */
+.export-panel button {
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.export-panel button:hover:not(:disabled),
+.export-panel button:active:not(:disabled) {
+    transform: none;
+}
+
+.export-section {
+    margin-bottom: 18px;
+}
+
+.export-section-label {
+    font-size: 14px;
+    color: var(--brown-deep);
+    font-weight: 600;
+    margin-bottom: 8px;
+}
+
+.export-presets {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.export-preset-btn {
+    flex: 1;
+    padding: 8px 0;
+    border: 2px solid var(--peach-pale);
+    border-radius: 12px;
+    background: var(--cream-card);
+    color: var(--brown-deep);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.export-preset-btn:hover {
+    background: var(--peach-pale);
+}
+
+.export-preset-btn.active {
+    background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+    color: #FFFFFF;
+    border-color: transparent;
+    box-shadow: 0 4px 14px rgba(255, 181, 167, 0.4);
+}
+
+.export-date-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.export-date-input {
+    flex: 1;
+    min-width: 0;
+    margin-bottom: 0;
+    height: 34px;
+    padding: 4px 8px;
+    font-size: 12px;
+    border-radius: 10px;
+}
+
+.export-date-sep {
+    color: var(--brown-light);
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.export-status-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+}
+
+.export-status-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--brown-deep);
+    cursor: pointer;
+    padding: 6px 10px;
+    border-radius: 10px;
+    background: var(--cream-bg);
+    transition: background 0.15s ease;
+}
+
+.export-status-item:hover {
+    background: var(--peach-pale);
+}
+
+.export-status-item input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--peach);
+    cursor: pointer;
+}
+
+.export-format-row {
+    display: flex;
+    gap: 10px;
+}
+
+.export-format-item {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 0;
+    border: 2px solid var(--peach-pale);
+    border-radius: 12px;
+    font-size: 13px;
+    color: var(--brown-deep);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.export-format-item:has(input:checked) {
+    background: linear-gradient(135deg, var(--peach) 0%, var(--peach-light) 100%);
+    color: #FFFFFF;
+    border-color: transparent;
+    box-shadow: 0 4px 14px rgba(255, 181, 167, 0.4);
+}
+
+/* 覆盖全局 input 样式（padding/height/border 会把原生 radio 撑成大圆环），恢复标准小圆点 */
+.export-format-item input[type="radio"] {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    border-radius: 0;
+    background: none;
+    box-shadow: none;
+    accent-color: var(--peach);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+/* ===== 导出 PNG 清单视图（隐藏容器，仅供 html2canvas 截图） ===== */
+/* 不能用 display:none，用 fixed 移出视口；固定宽度保证图片比例稳定 */
+#exportListView {
+    position: fixed;
+    left: -9999px;
+    top: 0;
+    width: 700px;
+    background: #FFFFFF;
+    padding: 28px 32px;
+    box-sizing: border-box;
+    font-family: inherit;
+    color: #333333;
+}
+
+.export-list-title {
+    font-size: 22px;
+    font-weight: 700;
+    color: #5c4033;
+    text-align: center;
+    margin-bottom: 6px;
+}
+
+.export-list-subtitle {
+    font-size: 12px;
+    color: #999999;
+    text-align: center;
+    margin-bottom: 18px;
+}
+
+.export-list-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.export-list-table th,
+.export-list-table td {
+    border: 1px solid #e8e0da;
+    padding: 8px 10px;
+    text-align: left;
+    word-break: break-all;
+}
+
+.export-list-table th {
+    background: #fdf3f0;
+    color: #5c4033;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.export-list-table tr:nth-child(even) td {
+    background: #fbf8f6;
+}
+
+.export-list-footer {
+    margin-top: 14px;
+    font-size: 11px;
+    color: #bbbbbb;
+    text-align: right;
+}
+
+/* ===== 详情面板操作按钮与错误提示 ===== */
+.detail-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid #f0e6e0;
+}
+
+.detail-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1.5px solid var(--peach);
+    background: white;
+    color: var(--peach);
+    cursor: pointer;
+    font-size: 13px;
+    transition: all 0.2s;
+}
+
+.detail-btn:hover {
+    background: var(--peach-glow);
+}
+
+.detail-btn.delete.confirming {
+    background: var(--peach);
+    color: white;
+    border-color: var(--peach);
+}
+
+/* ===== 内联编辑表单 ===== */
+.edit-field {
+    margin-bottom: 12px;
+}
+
+.edit-field label {
+    display: block;
+    font-size: 12px;
+    color: #999;
+    margin-bottom: 4px;
+}
+
+.edit-field input,
+.edit-field textarea,
+.edit-field select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1.5px solid var(--peach-glow);
+    border-radius: 8px;
+    background: #FFFDFD;
+    font-size: 13px;
+    box-sizing: border-box;
+    font-family: inherit;
+    color: #5a4a42;
+}
+
+.edit-field input:focus,
+.edit-field textarea:focus,
+.edit-field select:focus {
+    outline: none;
+    border-color: var(--peach);
+}
+
+.edit-field textarea {
+    resize: vertical;
+    min-height: 56px;
+}
+
+.detail-btn.save {
+    background: var(--peach);
+    color: white;
+    border-color: var(--peach);
+}
+
+.detail-btn.save:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.detail-btn.cancel {
+    background: white;
+}
+
+.detail-error {
+    margin-top: 10px;
+    padding: 8px;
+    border-radius: 8px;
+    background: var(--peach-glow);
+    color: var(--peach);
+    font-size: 13px;
+    text-align: center;
+}
+
+/* 周期删除/修改弹窗描述文字 */
+.modal-desc {
+    font-size: 14px;
+    color: #8a7a70;
+    text-align: center;
+    margin: -8px 0 20px 0;
+}
+
+/* 周期删除弹窗选项按钮 —— 蜜桃色系 */
+.modal-btn.recurring-choice-today {
+    background: var(--peach-glow);
+    color: var(--peach);
+    border: 1.5px solid var(--peach);
+}
+
+.modal-btn.recurring-choice-all {
+    background: var(--peach);
+    color: white;
+    border: 1.5px solid var(--peach);
+}
+
+.modal-btn.recurring-choice-today:hover,
+.modal-btn.recurring-choice-all:hover {
+    opacity: 0.9;
+}
+
+/* 响应式：<1216px 侧栏及收缩交互全部隐藏（含持久化的收缩态展开键）；
+   收缩态显示规则特异性更高，这里必须用同等完整前缀并靠源顺序在后覆盖 */
+@media (max-width: 1215px) {
+    .calendar-with-detail,
+    .calendar-with-detail.sidebar-collapsed {
+        grid-template-columns: 812px;
+        justify-content: center;
+        gap: 16px;
+    }
+    .schedule-detail,
+    .schedule-detail-toggle,
+    .calendar-with-detail.sidebar-collapsed .expand-anchor,
+    #page-calendar.sidebar-collapsed .schedule-detail-expand {
+        display: none;
+    }
+}
+
+/* 更窄屏幕：日历也自适应（含收缩态，需同等特异性覆盖固定列宽） */
+@media (max-width: 900px) {
+    .calendar-with-detail,
+    .calendar-with-detail.sidebar-collapsed {
+        grid-template-columns: 1fr;
+    }
+}

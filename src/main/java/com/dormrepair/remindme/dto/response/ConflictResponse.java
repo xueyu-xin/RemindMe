@@ -39,5 +39,9 @@ public class ConflictResponse {
         private LocalDateTime endTime;
         // 冲突提醒的地点（可选）
         private String location;
+        // 是否为周期实例：true 表示冲突项是由周期模板生成的实例，false 表示普通提醒
+        private Boolean isRecurringInstance = false;
+        // 父周期模板ID：冲突项为周期实例时指向其所属模板，普通提醒为 null
+        private Long parentRecurringId;
     }
 }

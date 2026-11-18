@@ -62,6 +62,10 @@ public class RecurringReminder {
     // 地点（可选），生成实例时原样复制
     private String location;
 
+    // 备注（可选，最长500字），生成实例时原样复制
+    @Column(name = "note", length = 500)
+    private String note;
+
     // 优先级字符串：LOW / NORMAL / HIGH，默认 NORMAL
     @Column(nullable = false)
     private String priority = Priority.NORMAL.name();

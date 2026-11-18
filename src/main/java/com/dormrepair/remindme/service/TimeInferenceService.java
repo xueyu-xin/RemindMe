@@ -2,6 +2,7 @@ package com.dormrepair.remindme.service;
 
 import com.dormrepair.remindme.entity.Reminder;
 import com.dormrepair.remindme.repository.ReminderRepository;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -101,7 +102,7 @@ public class TimeInferenceService {
         // 今天该时间点已过则顺延到明天
         LocalDate today = LocalDate.now();
 
-        if (LocalDateTime.now().isAfter(today.atTime(mostCommonTime))) {
+        if (TimeUtils.now().isAfter(today.atTime(mostCommonTime))) {
             today = today.plusDays(1);
         }
 
@@ -113,7 +114,7 @@ public class TimeInferenceService {
         for (Map.Entry<String, LocalTime> entry : TYPE_DEFAULT_TIMES.entrySet()) {
             if (title.contains(entry.getKey())) {
                 LocalDate today = LocalDate.now();
-                if (LocalDateTime.now().isAfter(today.atTime(entry.getValue()))) {
+                if (TimeUtils.now().isAfter(today.atTime(entry.getValue()))) {
                     today = today.plusDays(1);
                 }
                 return today.atTime(entry.getValue());

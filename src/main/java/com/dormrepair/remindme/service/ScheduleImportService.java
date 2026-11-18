@@ -691,6 +691,27 @@ public class ScheduleImportService {
                     map.put("oddWeek", course.getOddWeek());
                     map.put("evenWeek", course.getEvenWeek());
                     map.put("location", course.getLocation());
+                    map.put("columnIndex", course.getColumnIndex());
+                    map.put("confidence", course.getConfidence());
+                    // 校验：列索引与星期是否一致（0=周一 ... 6=周日）
+                    if (course.getColumnIndex() != null) {
+                        if (course.getColumnIndex() < 0 || course.getColumnIndex() > 6) {
+                            map.put("suspicious", true);
+                            map.put("suspiciousReason", "列索引超出有效范围(0-6)");
+                        } else {
+                            java.time.DayOfWeek dow = parseDayOfWeek(course.getDayOfWeek());
+                            if (dow != null && course.getColumnIndex() != dow.getValue() - 1) {
+                                map.put("suspicious", true);
+                                map.put("suspiciousReason", "列索引与星期不一致");
+                            }
+                        }
+                    }
+                    // 校验：单课程置信度
+                    if (course.getConfidence() != null && course.getConfidence() < 0.7) {
+                        map.put("suspicious", true);
+                        map.put("suspiciousReason", map.containsKey("suspiciousReason")
+                                ? map.get("suspiciousReason") + "；识别置信度较低" : "识别置信度较低");
+                    }
                     courseList.add(map);
                 }
             }
@@ -716,6 +737,27 @@ public class ScheduleImportService {
                     map.put("oddWeek", course.getOddWeek());
                     map.put("evenWeek", course.getEvenWeek());
                     map.put("location", course.getLocation());
+                    map.put("columnIndex", course.getColumnIndex());
+                    map.put("confidence", course.getConfidence());
+                    // 校验：列索引与星期是否一致（0=周一 ... 6=周日）
+                    if (course.getColumnIndex() != null) {
+                        if (course.getColumnIndex() < 0 || course.getColumnIndex() > 6) {
+                            map.put("suspicious", true);
+                            map.put("suspiciousReason", "列索引超出有效范围(0-6)");
+                        } else {
+                            java.time.DayOfWeek dow = parseDayOfWeek(course.getDayOfWeek());
+                            if (dow != null && course.getColumnIndex() != dow.getValue() - 1) {
+                                map.put("suspicious", true);
+                                map.put("suspiciousReason", "列索引与星期不一致");
+                            }
+                        }
+                    }
+                    // 校验：单课程置信度
+                    if (course.getConfidence() != null && course.getConfidence() < 0.7) {
+                        map.put("suspicious", true);
+                        map.put("suspiciousReason", map.containsKey("suspiciousReason")
+                                ? map.get("suspiciousReason") + "；识别置信度较低" : "识别置信度较低");
+                    }
                     courseList.add(map);
                 }
             }
@@ -750,13 +792,15 @@ public class ScheduleImportService {
                     .type("schedule_table_confirm")
                     .message("📚 课表识别完成，请配置时间后确认")
                     .data(ConfirmationCardResponse.ConfirmationData.builder()
-                            .sessionId("schedule-table-" + System.currentTimeMillis())
+                            .sessionId("schedule-table-" + TimeUtils.toTimestamp(TimeUtils.now()))
                             .importId(String.valueOf(importId))
                             .sourceFile(fileName)
                             .isBatch(true)
                             .totalCount(totalCount)
                             .items(items)
                             .timeSections(timeSectionList)
+                            // 完整课程数据（含 sectionIndices），供前端渲染网格视图
+                            .courses(courseList)
                             .semesterStartDate(tableResult.getSemesterStartDate())
                             .suggestedWeeks(tableResult.getSuggestedWeeks() != null ? tableResult.getSuggestedWeeks() : 16)
                             .totalWeeks(tableResult.getSuggestedWeeks() != null ? tableResult.getSuggestedWeeks() : 16)
@@ -1037,6 +1081,78 @@ public class ScheduleImportService {
         result.put("conflictCount", conflictItems.size());
         result.put("totalWeeks", totalWeeks);
         return result;
+    }
+
+    // 更新缓存中的单条课程：null 字段不覆盖，字符串范围自动展开为 List<Integer>
+    public Map<String, Object> updateCourse(Long userId, Long importId, int courseIndex, Map<String, Object> courseData) {
+        ScheduleTableDTO table = scheduleTableCache.get(importId);
+        if (table == null) {
+            return Map.of("success", false, "message", "课表缓存已失效，请重新上传");
+        }
+        List<ScheduleTableDTO.CourseItem> courses = table.getCourses();
+        if (courseIndex < 0 || courseIndex >= courses.size()) {
+            return Map.of("success", false, "message", "课程索引无效");
+        }
+        ScheduleTableDTO.CourseItem course = courses.get(courseIndex);
+
+        if (courseData.get("title") != null) {
+            course.setTitle(String.valueOf(courseData.get("title")));
+        }
+        if (courseData.get("dayOfWeek") != null) {
+            course.setDayOfWeek(String.valueOf(courseData.get("dayOfWeek")));
+        }
+        if (courseData.get("location") != null) {
+            course.setLocation(String.valueOf(courseData.get("location")));
+        }
+        if (courseData.get("teacher") != null) {
+            course.setTeacher(String.valueOf(courseData.get("teacher")));
+        }
+        // 节次：兼容字符串（"1-2"/"1,3"）与 List<Integer>
+        Object sectionIndices = courseData.get("sectionIndices");
+        if (sectionIndices != null) {
+            if (sectionIndices instanceof String) {
+                course.setSectionIndices(parseWeekRange(String.valueOf(sectionIndices)));
+            } else if (sectionIndices instanceof List) {
+                @SuppressWarnings("unchecked")
+                List<Integer> list = (List<Integer>) sectionIndices;
+                course.setSectionIndices(list);
+            }
+        }
+        // 周次：兼容字符串（"1-17"/"1,3,5"）与 List<Integer>
+        Object weeks = courseData.get("weeks");
+        if (weeks != null) {
+            if (weeks instanceof String) {
+                course.setWeeks(parseWeekRange(String.valueOf(weeks)));
+            } else if (weeks instanceof List) {
+                @SuppressWarnings("unchecked")
+                List<Integer> list = (List<Integer>) weeks;
+                course.setWeeks(list);
+            }
+        }
+        if (courseData.get("oddWeek") != null) {
+            course.setOddWeek(Boolean.valueOf(String.valueOf(courseData.get("oddWeek"))));
+        }
+        if (courseData.get("evenWeek") != null) {
+            course.setEvenWeek(Boolean.valueOf(String.valueOf(courseData.get("evenWeek"))));
+        }
+
+        log.info("更新缓存课程：userId={}, importId={}, index={}, title={}", userId, importId, courseIndex, course.getTitle());
+        return Map.of("success", true, "message", "课程已更新");
+    }
+
+    // 删除缓存中的单条课程
+    public Map<String, Object> deleteCourse(Long userId, Long importId, int courseIndex) {
+        ScheduleTableDTO table = scheduleTableCache.get(importId);
+        if (table == null) {
+            return Map.of("success", false, "message", "课表缓存已失效，请重新上传");
+        }
+        List<ScheduleTableDTO.CourseItem> courses = table.getCourses();
+        if (courseIndex < 0 || courseIndex >= courses.size()) {
+            return Map.of("success", false, "message", "课程索引无效");
+        }
+        ScheduleTableDTO.CourseItem removed = courses.remove(courseIndex);
+        log.info("删除缓存课程：userId={}, importId={}, index={}, title={}", userId, importId, courseIndex, removed.getTitle());
+        return Map.of("success", true, "message", "课程已删除");
     }
 
     // 一节课的起止时间对：start=首节开始时间，end=末节结束时间（同一日期）

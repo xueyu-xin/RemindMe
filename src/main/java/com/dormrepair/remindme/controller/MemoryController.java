@@ -5,6 +5,7 @@ import com.dormrepair.remindme.dto.response.KnowledgeResult;
 import com.dormrepair.remindme.dto.response.Result;
 import com.dormrepair.remindme.enums.MemoryCategory;
 import com.dormrepair.remindme.service.RagService;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -124,7 +125,7 @@ public class MemoryController {
             if ("txt".equalsIgnoreCase(format)) {
                 StringBuilder sb = new StringBuilder();
                 sb.append("助手记忆导出（共 ").append(memories.size()).append(" 条）\n");
-                sb.append("导出时间：").append(LocalDateTime.now()
+                sb.append("导出时间：").append(TimeUtils.now()
                         .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))).append("\n\n");
                 for (KnowledgeResult memory : memories) {
                     sb.append("【").append(categoryText(memory.getCategory())).append("】");

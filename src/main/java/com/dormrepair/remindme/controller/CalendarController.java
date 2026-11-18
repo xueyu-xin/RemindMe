@@ -163,20 +163,39 @@ public class CalendarController {
         // （例如 repeatDays 为空的旧 WEEKLY 模板会兜底为每天都覆盖，若按模板覆盖标记会把整个范围都标上）
         List<RecurringReminder> userRecurringTemplates = recurringReminderRepository
                 .findByUserIdAndStatus(userId, "ACTIVE");
-        boolean hasRecurringInstance = false;
         java.util.Map<Long, RecurringReminder> recurringMap = new java.util.HashMap<>();
         java.util.Set<Long> recurringReminderIds = new java.util.HashSet<>();
+        java.util.List<Long> candidateInstanceReminderIds = new java.util.ArrayList<>();
         for (RecurringReminder t : userRecurringTemplates) {
             if (recurringReminderService.shouldGenerateForDate(t, date)) {
                 RecurringInstance inst = recurringInstanceRepository
                         .findByRecurringIdAndRemindDate(t.getId(), date).orElse(null);
                 if (inst != null && inst.getReminderId() != null) {
-                    hasRecurringInstance = true;
                     recurringReminderIds.add(inst.getReminderId());
                     recurringMap.put(inst.getReminderId(), t);
+                    candidateInstanceReminderIds.add(inst.getReminderId());
                 }
             }
         }
+
+        // ⟳/红点只计入「实例 reminder 仍存在且未取消」的情况：
+        // 实例被单独取消（reminder CANCELLED）或 reminder 行被删除时不标记。
+        // 状态优先复用当天已查出的 dayReminders，缺失的 id 用一次批量查询补齐，避免 N+1。
+        java.util.Map<Long, ReminderStatus> instanceReminderStatus = new java.util.HashMap<>();
+        for (Reminder r : dayReminders) {
+            instanceReminderStatus.put(r.getId(), r.getStatus());
+        }
+        java.util.List<Long> missingInstanceIds = candidateInstanceReminderIds.stream()
+                .distinct()
+                .filter(id -> !instanceReminderStatus.containsKey(id))
+                .collect(Collectors.toList());
+        if (!missingInstanceIds.isEmpty()) {
+            reminderRepository.findAllById(missingInstanceIds)
+                    .forEach(r -> instanceReminderStatus.put(r.getId(), r.getStatus()));
+        }
+        boolean hasRecurringInstance = candidateInstanceReminderIds.stream()
+                .anyMatch(id -> instanceReminderStatus.get(id) != null
+                        && instanceReminderStatus.get(id) != ReminderStatus.CANCELLED);
         final boolean finalHasRecurring = hasRecurringInstance;
         final java.util.Map<Long, RecurringReminder> finalRecurringMap = recurringMap;
         final java.util.Set<Long> finalRecurringReminderIds = recurringReminderIds;

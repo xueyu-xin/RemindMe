@@ -4,6 +4,7 @@ import com.dormrepair.remindme.dto.request.ReminderCreateRequest;
 import com.dormrepair.remindme.dto.request.ReminderUpdateRequest;
 import com.dormrepair.remindme.dto.response.ConfirmationCardResponse;
 import com.dormrepair.remindme.dto.response.ConflictResponse;
+import com.dormrepair.remindme.dto.response.ReminderExportDTO;
 import com.dormrepair.remindme.dto.response.ReminderResponse;
 import com.dormrepair.remindme.enums.IntentType;
 import com.dormrepair.remindme.service.ConfirmationService;
@@ -57,6 +58,28 @@ public class ReminderController {
     public ResponseEntity<List<ReminderResponse>> getPendingReminders(@RequestParam Long userId) {
         List<ReminderResponse> reminders = reminderService.getPendingReminders(userId);
         return ResponseEntity.ok(reminders);
+    }
+
+    // 导出提醒数据接口：按创建日期范围（created_at）+ 状态筛选提醒，返回 JSON 数组供前端生成 Excel/图片
+    // startDate/endDate 可选（yyyy-MM-dd，endDate 含当天）；statuses 可选（逗号分隔多状态，
+    // 不传默认 PENDING/COMPLETED/CANCELLED/EXPIRED 四种），非法状态值返回 400
+    @GetMapping("/export")
+    public ResponseEntity<List<ReminderExportDTO>> exportReminders(
+            @RequestParam Long userId,
+            @RequestParam(required = false) String startDate,
+            @RequestParam(required = false) String endDate,
+            @RequestParam(required = false) List<String> statuses) {
+        List<ReminderExportDTO> data = reminderService.exportReminders(userId, startDate, endDate, statuses);
+        return ResponseEntity.ok(data);
+    }
+
+    // 单条提醒详情接口：按提醒 id 返回完整字段；服务层校验 userId 归属，不存在或越权返回 400
+    @GetMapping("/{id}")
+    public ResponseEntity<ReminderResponse> getReminderById(
+            @PathVariable Long id,
+            @RequestParam Long userId) {
+        ReminderResponse response = reminderService.getReminderDetailById(id, userId);
+        return ResponseEntity.ok(response);
     }
 
     // 编辑提醒接口：按提醒 id 全量更新字段；会校验 userId 是否匹配，防止越权修改

@@ -6,6 +6,7 @@ import com.dormrepair.remindme.enums.Gender;
 import com.dormrepair.remindme.service.LocationService;
 import com.dormrepair.remindme.service.PeriodService;
 import com.dormrepair.remindme.service.UserService;
+import com.dormrepair.remindme.utils.TimeUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -249,7 +250,7 @@ public class UserController {
             // 4. 生成存储路径：avatars/年/月/日/时间戳_原文件名.扩展名
             String datePath = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy/MM/dd"));
             String originalFilename = file.getOriginalFilename();
-            String fileName = System.currentTimeMillis() + "_" + originalFilename;
+            String fileName = TimeUtils.toTimestamp(TimeUtils.now()) + "_" + originalFilename;
             String relativePath = AVATAR_SUB_DIR + "/" + datePath + "/" + fileName;
 
             // 5. 创建目录并保存文件
@@ -317,3 +318,4 @@ public class UserController {
         return null;
     }
 }
+

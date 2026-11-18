@@ -62,8 +62,8 @@ public class RecurringReminderController {
         }
     }
 
-    // 更新接口：修改周期提醒模板的标题、时间、起止范围、重复类型、地点、优先级；修改后已生成的后续实例会按新模板重建
-    // body 字段：title/remindTime(startDate/endDate/repeatType/location/priority 均为可选)
+    // 更新接口：修改周期提醒模板的标题、时间、起止范围、重复类型、地点、备注、优先级；修改后已生成的后续实例会按新模板重建
+    // body 字段：title/remindTime/startDate/endDate/repeatType/repeatDays/location/note/priority 均为可选
     @PutMapping("/{id}")
     public ResponseEntity<Map<String, Object>> update(
             @PathVariable Long id,
@@ -77,6 +77,7 @@ public class RecurringReminderController {
             String repeatTypeStr = (String) body.get("repeatType");
             String repeatDays = (String) body.get("repeatDays");
             String location = (String) body.get("location");
+            String note = (String) body.get("note");
             String priority = (String) body.get("priority");
 
             // 字符串转 LocalDate，空值保持 null 以便底层按"不修改该字段"处理
@@ -85,7 +86,7 @@ public class RecurringReminderController {
             RepeatType repeatType = repeatTypeStr != null ? RepeatType.valueOf(repeatTypeStr) : null;
 
             RecurringReminder updated = recurringReminderService.updateRecurringReminder(
-                    id, userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, priority);
+                    id, userId, title, remindTime, startDate, endDate, repeatType, repeatDays, location, note, priority);
 
             Map<String, Object> result = new HashMap<>();
             result.put("success", true);

@@ -130,6 +130,30 @@ public class ScheduleImportController {
         return result;
     }
 
+    // 课表场景 - 更新缓存中的单条课程：用户编辑课程信息后同步到 scheduleTableCache
+    @PostMapping("/update-course")
+    public Map<String, Object> updateCourse(
+            @RequestParam("userId") Long userId,
+            @RequestBody Map<String, Object> body) {
+        Long importId = Long.valueOf(String.valueOf(body.get("importId")));
+        int courseIndex = Integer.parseInt(String.valueOf(body.get("courseIndex")));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> courseData = (Map<String, Object>) body.get("course");
+        log.info("更新课程：userId={}, importId={}, index={}", userId, importId, courseIndex);
+        return scheduleImportService.updateCourse(userId, importId, courseIndex, courseData);
+    }
+
+    // 课表场景 - 删除缓存中的单条课程：用户删除某门课后同步到 scheduleTableCache
+    @PostMapping("/delete-course")
+    public Map<String, Object> deleteCourse(
+            @RequestParam("userId") Long userId,
+            @RequestBody Map<String, Object> body) {
+        Long importId = Long.valueOf(String.valueOf(body.get("importId")));
+        int courseIndex = Integer.parseInt(String.valueOf(body.get("courseIndex")));
+        log.info("删除课程：userId={}, importId={}, index={}", userId, importId, courseIndex);
+        return scheduleImportService.deleteCourse(userId, importId, courseIndex);
+    }
+
     // 课表场景 - 提交节次时间表配置：用户自定义每节课开始/结束时间后，按配置重新推算所有课程的真实提醒时间
     @PostMapping("/config-time")
     public Map<String, Object> configTime(

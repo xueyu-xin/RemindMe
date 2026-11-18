@@ -77,9 +77,10 @@ public class ConflictDetectionService {
 
         log.info("检测到 {} 个冲突: userId={}, remindTime={}", conflicts.size(), userId, remindTime);
 
-        // 映射为响应项，携带 endTime 以区分时间段提醒
+        // 映射为响应项，携带 endTime 以区分时间段提醒，并标记周期实例信息
         List<ConflictResponse.ConflictItem> items = conflicts.stream()
-                .map(r -> new ConflictResponse.ConflictItem(r.getId(), r.getTitle(), r.getRemindTime(), r.getEndTime(), r.getLocation()))
+                .map(r -> new ConflictResponse.ConflictItem(r.getId(), r.getTitle(), r.getRemindTime(),
+                        r.getEndTime(), r.getLocation(), r.getIsRecurringInstance(), r.getParentRecurringId()))
                 .collect(Collectors.toList());
 
         // 向后找一个空闲窗口作为建议时间

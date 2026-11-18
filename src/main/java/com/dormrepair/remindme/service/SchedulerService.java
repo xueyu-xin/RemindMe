@@ -7,6 +7,7 @@ import com.dormrepair.remindme.enums.ReminderStatus;
 import com.dormrepair.remindme.repository.RecurringReminderRepository;
 import com.dormrepair.remindme.repository.ReminderRepository;
 import com.dormrepair.remindme.repository.UserRepository;
+import com.dormrepair.remindme.utils.TimeUtils;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -52,7 +53,7 @@ public class SchedulerService {
         // - 单点提醒（endTime 为 null）和时间段提醒（endTime 不为 null）推送时机一致
         // - advanceMinutes 默认 10 分钟，可由用户设置
 
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = TimeUtils.now();
         // 使用宽泛时间窗口查询（now + 1天），覆盖最大可能的 advanceMinutes
         LocalDateTime upperBound = now.plusDays(1);
 
@@ -79,7 +80,7 @@ public class SchedulerService {
                 .filter(reminder -> {
                     if (reminder.getLastConfirmRemindAt() != null) {
                         int intervalMinutes = reminder.getAdvanceMinutes() > 0 ? reminder.getAdvanceMinutes() : 10;
-                        long minutesSinceLastPush = Duration.between(reminder.getLastConfirmRemindAt(), LocalDateTime.now()).toMinutes();
+                        long minutesSinceLastPush = Duration.between(reminder.getLastConfirmRemindAt(), TimeUtils.now()).toMinutes();
                         return minutesSinceLastPush >= intervalMinutes;
                     }
                     return true;
@@ -104,7 +105,7 @@ public class SchedulerService {
                 for (Reminder reminder : cityReminders) {
                     try {
                         confirmationService.pushExecuteCard(reminder);
-                        reminder.setLastConfirmRemindAt(LocalDateTime.now());
+                        reminder.setLastConfirmRemindAt(TimeUtils.now());
                         reminder.setStatus(ReminderStatus.REMINDED);
                         reminderRepository.save(reminder);
                         log.info("阶段二提醒已推送(不查天气): id={}, title={}", reminder.getId(), reminder.getTitle());
@@ -146,7 +147,7 @@ public class SchedulerService {
                     }
 
                     confirmationService.pushExecuteCard(reminder, weatherSuggestion);
-                    reminder.setLastConfirmRemindAt(LocalDateTime.now());
+                    reminder.setLastConfirmRemindAt(TimeUtils.now());
                     reminder.setStatus(ReminderStatus.REMINDED);
                     reminderRepository.save(reminder);
 

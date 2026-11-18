@@ -385,6 +385,136 @@
     font-size: 12px;
 }
 
+/* ===== 课表网格视图（星期 × 节次，连堂纵向合并） ===== */
+.schedule-table-card .timetable-grid {
+    display: grid;
+    grid-template-columns: 88px repeat(7, 1fr);
+    grid-auto-rows: minmax(48px, auto);
+    gap: 2px;
+    background: #f0e6e0;
+    border-radius: 12px;
+    overflow: hidden;
+    font-size: 12px;
+    margin-bottom: 14px;
+}
+
+.schedule-table-card .tt-cell {
+    background: #fff;
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.schedule-table-card .tt-day,
+.schedule-table-card .tt-section,
+.schedule-table-card .tt-corner {
+    background: var(--peach-glow);
+    color: var(--brown-deep);
+    font-weight: 600;
+    text-align: center;
+}
+
+.schedule-table-card .tt-section-time {
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--brown-mid);
+    text-align: center;
+    white-space: nowrap;
+}
+
+.schedule-table-card .tt-course {
+    background: var(--peach-pale);
+    border-radius: 6px;
+    cursor: pointer;
+}
+
+.schedule-table-card .tt-course-title {
+    font-weight: 600;
+    text-align: center;
+    color: var(--brown-deep);
+    word-break: break-all;
+}
+
+.schedule-table-card .tt-course-loc {
+    font-size: 11px;
+    color: var(--brown-mid);
+    text-align: center;
+    word-break: break-all;
+}
+
+/* ===== 课表单条课程编辑弹窗 ===== */
+.course-edit-content {
+    max-width: 420px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.course-edit-content .modal-title {
+    flex-shrink: 0;
+}
+
+.course-edit-form {
+    padding: 8px 0;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.course-edit-content .modal-buttons {
+    flex-shrink: 0;  /* 按钮固定，不被压缩 */
+}
+
+.ce-field {
+    margin-bottom: 12px;
+}
+
+.ce-field label {
+    display: block;
+    font-size: 12px;
+    color: var(--brown-mid);
+    margin-bottom: 4px;
+}
+
+.ce-field input,
+.ce-field select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1.5px solid var(--peach-glow);
+    border-radius: 8px;
+    font-size: 13px;
+    box-sizing: border-box;
+    background: #fff;
+    color: var(--brown-deep);
+}
+
+.ce-field input:focus,
+.ce-field select:focus {
+    outline: none;
+    border-color: var(--peach);
+}
+
+.ce-range {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.ce-range span {
+    color: var(--brown-mid);
+    font-size: 13px;
+}
+
+.modal-btn.delete {
+    background: var(--peach-pale);
+    color: var(--brown-deep);
+}
+
 /* ===== 时间配置卡片 ===== */
 .time-config-card .info-item {
     flex-wrap: wrap;
@@ -497,15 +627,6 @@
 .time-config-card .slot-end::-webkit-calendar-picker-indicator {
     cursor: pointer;
     opacity: 0.7;
-}
-
-.time-config-card .inference-result {
-    margin-top: 12px;
-    padding: 10px;
-    background: var(--cream-bg);
-    border-radius: 8px;
-    font-size: 13px;
-    color: var(--brown-mid);
 }
 
 /* ===== 手动创建卡片 ===== */
@@ -1093,4 +1214,131 @@
     .conflict-detail-content {
         padding: 18px 16px;
     }
+}
+
+/* ===== 课表确认卡片核对提示 ===== */
+.tt-check-hint {
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    background: var(--peach-pale);
+    border-left: 3px solid var(--peach);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--brown-mid);
+    line-height: 1.5;
+}
+
+/* ===== 课表原文件悬浮预览框 ===== */
+.file-preview-panel {
+    position: fixed;
+    left: 24px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 340px;
+    max-height: 70vh;
+    background: #FFFDFD;
+    border: 2px solid var(--peach);
+    border-radius: 18px;
+    box-shadow: 0 4px 20px var(--peach-glow);
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.fpp-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--peach-glow);
+    flex-shrink: 0;
+    cursor: move;
+    user-select: none;
+}
+
+.fpp-title {
+    font-size: 13px;
+    color: var(--brown-deep);
+    font-weight: 600;
+}
+
+.fpp-close {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 1px solid var(--peach);
+    background: white;
+    color: var(--peach);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+}
+
+.fpp-body {
+    flex: 1;
+    overflow: auto;
+    padding: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.fpp-body img {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 8px;
+}
+
+.fpp-body iframe {
+    width: 100%;
+    height: 60vh;
+    border: none;
+    border-radius: 8px;
+}
+
+.fpp-empty {
+    color: var(--brown-light);
+    font-size: 13px;
+    text-align: center;
+    padding: 20px;
+}
+
+.fpp-resize {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 16px;
+    height: 16px;
+    cursor: nwse-resize;
+    background: linear-gradient(135deg, transparent 50%, var(--peach) 50%);
+    border-bottom-right-radius: 18px;
+}
+
+/* Excel 预览表格 */
+.fpp-excel {
+    width: 100%;
+    overflow: auto;
+    font-size: 11px;
+    align-self: flex-start;
+}
+.fpp-excel table {
+    border-collapse: collapse;
+    width: 100%;
+}
+.fpp-excel td,
+.fpp-excel th {
+    border: 1px solid #eee;
+    padding: 4px 6px;
+    white-space: nowrap;
+}
+.fpp-excel .fpp-sheet-name {
+    font-weight: 600;
+    color: var(--brown-deep);
+    margin: 8px 0 4px;
+    font-size: 12px;
+}
+
+/* 响应式：小屏隐藏 */
+@media (max-width: 1100px) {
+    .file-preview-panel { display: none !important; }
 }
